@@ -119,7 +119,7 @@ describe("provider update launch notification logic", () => {
           instanceId: instanceId("codex"),
           latestVersion: "1.1.0",
         }),
-        provider({ driver: driver("cursor"), latestVersion: "0.3.0" }),
+        provider({ driver: driver("claudeAgent"), latestVersion: "0.3.0" }),
       ]),
     ).toHaveLength(2);
   });
@@ -205,13 +205,13 @@ describe("provider update launch notification logic", () => {
       version: "1.0.0",
       latestVersion: "1.1.0",
     });
-    const cursor = updateCandidate({
-      driver: driver("cursor"),
+    const claude = updateCandidate({
+      driver: driver("claudeAgent"),
       version: "0.2.0",
       latestVersion: "0.3.0",
     });
 
-    expect(providerUpdateNotificationKey([codex, cursor])).toBe("codex:1.1.0|cursor:0.3.0");
+    expect(providerUpdateNotificationKey([codex, claude])).toBe("claudeAgent:0.3.0|codex:1.1.0");
     expect(providerUpdateNotificationKey([])).toBeNull();
   });
 
@@ -294,12 +294,12 @@ describe("provider update launch notification logic", () => {
     const view = getProviderUpdateInitialToastView({
       updateProviders: [
         updateCandidate({ driver: driver("codex"), canUpdate: false }),
-        updateCandidate({ driver: driver("cursor"), canUpdate: false }),
+        updateCandidate({ driver: driver("claudeAgent"), canUpdate: false }),
       ],
       oneClickProviders: [],
     });
 
-    expect(view.description).toBe("Codex and Cursor can be updated from provider settings.");
+    expect(view.description).toBe("Codex and Claude can be updated from provider settings.");
   });
 
   it("uses server update state for running progress", () => {
@@ -377,7 +377,7 @@ describe("provider update launch notification logic", () => {
     const view = getProviderUpdateProgressToastView({
       providers: [
         provider({
-          driver: driver("cursor"),
+          driver: driver("claudeAgent"),
           updateState: {
             status: "unchanged",
             startedAt: checkedAt,
@@ -394,7 +394,7 @@ describe("provider update launch notification logic", () => {
       phase: "unchanged",
       type: "warning",
       title: "Provider still needs an update",
-      description: "Cursor still appears outdated. Check provider settings for details.",
+      description: "Claude still appears outdated. Check provider settings for details.",
     });
   });
 
@@ -465,15 +465,15 @@ describe("provider update launch notification logic", () => {
 
   it("collects only attempted provider snapshots from update responses", () => {
     const codex = provider({ driver: driver("codex") });
-    const cursor = provider({ driver: driver("cursor") });
-    const results = [AsyncResult.success({ providers: [codex, cursor] })];
+    const claude = provider({ driver: driver("claudeAgent") });
+    const results = [AsyncResult.success({ providers: [codex, claude] })];
 
     expect(
       collectUpdatedProviderSnapshots({
         results,
-        providerInstanceIds: new Set([cursor.instanceId]),
+        providerInstanceIds: new Set([claude.instanceId]),
       }),
-    ).toEqual([cursor]);
+    ).toEqual([claude]);
   });
 
   it("summarizes active provider updates for the sidebar pill", () => {
@@ -489,7 +489,7 @@ describe("provider update launch notification logic", () => {
         },
       }),
       provider({
-        driver: driver("cursor"),
+        driver: driver("claudeAgent"),
         updateState: {
           status: "queued",
           startedAt: null,
@@ -503,7 +503,7 @@ describe("provider update launch notification logic", () => {
     expect(view).toMatchObject({
       tone: "loading",
       title: "Updating 2 providers",
-      description: "Codex and Cursor updates are in progress.",
+      description: "Codex and Claude updates are in progress.",
     });
   });
 
@@ -588,7 +588,7 @@ describe("provider update launch notification logic", () => {
     const view = getProviderUpdateSidebarPillView(
       [
         provider({
-          driver: driver("cursor"),
+          driver: driver("claudeAgent"),
           updateState: {
             status: "unchanged",
             startedAt: checkedAt,
@@ -602,9 +602,9 @@ describe("provider update launch notification logic", () => {
     );
 
     expect(view).toMatchObject({
-      key: "unchanged:cursor:2026-04-23T10:00:00.000Z:still old",
+      key: "unchanged:claudeAgent:2026-04-23T10:00:00.000Z:still old",
       tone: "warning",
-      title: "Cursor still needs an update",
+      title: "Claude still needs an update",
       dismissible: true,
     });
   });
@@ -680,7 +680,7 @@ describe("provider update launch notification logic", () => {
     expect(
       getProviderUpdateSidebarPillView([
         provider({ driver: driver("codex"), canUpdate: true }),
-        provider({ driver: driver("cursor"), canUpdate: false }),
+        provider({ driver: driver("claudeAgent"), canUpdate: false }),
       ]),
     ).toBeNull();
   });

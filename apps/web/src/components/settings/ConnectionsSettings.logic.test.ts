@@ -1,5 +1,5 @@
 import type { AdvertisedEndpoint } from "@t3tools/contracts";
-import { describe, expect, it, vi } from "vite-plus/test";
+import { describe, expect, it } from "vite-plus/test";
 import { isQrShareableEndpoint, selectQrEndpointOption } from "./ConnectionsSettings.logic";
 
 function makeEndpoint(overrides: Partial<AdvertisedEndpoint>): AdvertisedEndpoint {

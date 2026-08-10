@@ -1,108 +1,61 @@
-# T3 Code
+# T3 Code (personal fork)
 
-T3 Code is an "agent harness control surface". It enables control of the agents on your machine with a best-in-class mobile app ([iOS](https://apps.apple.com/us/app/t3-code-remote-claude-more/id6787819824), [Android](https://play.google.com/store/apps/details?id=com.t3tools.t3code)), [web app](https://app.t3.codes) and [Electron-based desktop app](https://t3.codes).
+A stripped-down, macOS-only fork of [T3 Code](https://github.com/pingdotgg/t3code) — an "agent
+harness control surface" that wraps provider CLIs behind a desktop GUI.
 
-Works with your subscriptions on Claude Code, Codex, Cursor, Grok Build, and OpenCode. If they're set up on your computer, T3 Code can control them.
+This fork exists to be customized, not distributed. Relative to upstream it drops everything that
+served other platforms or the hosted product:
 
-## "Wait, what are you selling me?"
+- **No T3 Connect.** No Clerk sign-in, relay, managed tunnel, or hosted web app. Connecting to an
+  environment is local pairing only.
+- **No self-update or background service.** Both installed `t3@<version>` from npm, which would
+  replace this fork with upstream. Build and run this repo instead.
+- **macOS only.** The WSL backend and Linux password-store integration are gone, as are the mobile
+  app, the marketing site, and the release/CI pipeline.
+- **Two providers**: Codex and Claude Code. Cursor, Grok, and OpenCode adapters are removed.
 
-Nothing. We built T3 Code because we wanted the best possible development experience with agents. We were inspired by existing solutions like the Codex desktop app, Conductor, Claude Desktop and Cursor Glass, but none met our bar.
+What's kept: the server, the web UI, the Electron desktop shell, local pairing auth, SSH-managed
+remote environments, and Tailscale Serve.
 
-We wanted something performant, remote-ready, and truly open. If we ever go the wrong direction, we want you to have everything you need to fork and build the editor that you want.
+## Requirements
 
-## Installation
+- macOS
+- Node.js `^24.13.1` (the version the workspace pins)
+- [Vite+](https://viteplus.dev/guide/) (`vp`): `curl -fsSL https://vite.plus | bash`
+- At least one provider CLI installed and authenticated:
+  - Codex: [Codex CLI](https://developers.openai.com/codex/cli), then `codex login`
+  - Claude: [Claude Code](https://claude.com/product/claude-code), then `claude auth login`
 
-> [!WARNING]
-> T3 Code currently supports Codex, Claude, Cursor, Grok Build and OpenCode. Install and authenticate at least one provider before use:
->
-> - Codex: install [Codex CLI](https://developers.openai.com/codex/cli) and run `codex login`
-> - Claude: install [Claude Code](https://claude.com/product/claude-code) and run `claude auth login`
-> - Cursor: install [Cursor CLI](https://cursor.com/cli) and run `agent login`
-> - Grok Build: install [Grok Build CLI](https://x.ai/cli) and run `grok login`
-> - OpenCode: install [OpenCode](https://opencode.ai) and run `opencode auth login`
-
-### Try it out (install-free)
-
-The easiest way to test T3 Code is to run the server in your terminal (requires Node.js 22.16+, 23.11+, or 24.10+):
-
-```bash
-npx t3@latest
-```
-
-This will launch T3 Code's backend on your machine as well as the local web app to control your agents.
-
-Tip: Use `npx t3@latest --help` for the full CLI reference.
-
-### Desktop app
-
-Install the latest version of the desktop app from [GitHub Releases](https://github.com/pingdotgg/t3code/releases), or from your favorite package registry:
-
-#### Windows (`winget`)
+## Running it
 
 ```bash
-winget install T3Tools.T3Code
+vp i          # install dependencies
+vp run dev    # server + web, with a local pairing URL printed on startup
 ```
 
-#### macOS (Homebrew)
+Other useful targets:
 
 ```bash
-brew install --cask t3-code
+vp run dev:desktop        # Electron shell against the dev server
+vp run typecheck          # tsgo across every workspace
+vp run test               # full test suite
+vp run dist:desktop:dmg   # build a signed-less macOS .dmg
 ```
-
-#### Arch Linux (AUR)
-
-```bash
-yay -S t3code-bin
-```
-
-## Some notes
-
-We are very very early in this project. Expect bugs.
-
-We are (mostly) not accepting contributions yet. Small fixes may be considered. Big features will not be.
 
 ## Documentation
 
-Full docs live in [docs/](./docs). There's no docs site yet.
+Docs live in [docs/](./docs).
 
-- [Install and first run](./docs/user/install.md)
 - [Permission modes](./docs/user/permission-modes.md)
 - [Keyboard shortcuts](./docs/user/keybindings.md)
 - [Customize a project icon](./docs/user/project-settings.md)
-- [Remote access from a phone or another machine](./docs/user/remote-access.md)
-- [Keeping app and server in sync](./docs/user/updating.md)
+- [Remote access from another machine](./docs/user/remote-access.md)
 - [Source control integrations](./docs/user/source-control.md)
-- Multiple accounts: [Codex](./docs/user/providers-codex.md) · [Claude](./docs/user/providers-claude.md)
-- Linux: [run T3 Code as a background service](./docs/user/background-service.md)
+- Multiple accounts: [Codex](./docs/user/providers-codex.md) ·
+  [Claude](./docs/user/providers-claude.md)
 
-Building from source? Start at [docs/internals/overview.md](./docs/internals/overview.md).
+Architecture starts at [docs/internals/overview.md](./docs/internals/overview.md).
 
-## If you REALLY want to contribute still.... read this first
+## License
 
-### Install `vp`
-
-T3 Code uses Vite+ so you'll need to install the global `vp` command-line tool.
-
-#### macOS / Linux
-
-```bash
-curl -fsSL https://vite.plus | bash
-```
-
-#### Windows
-
-```bash
-irm https://vite.plus/ps1 | iex
-```
-
-Checkout their getting started guide for more information: https://viteplus.dev/guide/
-
-### Install dependencies
-
-```bash
-vp i
-```
-
-Read [CONTRIBUTING.md](./CONTRIBUTING.md) before opening an issue or PR.
-
-Need support? Join the [Discord](https://discord.gg/jn4EGJjrvv).
+Upstream's license applies; see [LICENSE](./LICENSE).
