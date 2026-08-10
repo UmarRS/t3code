@@ -143,6 +143,7 @@ import {
 } from "./Sidebar.logic";
 import { resolveLocalCheckoutBranchMismatch } from "./BranchToolbar.logic";
 import {
+  ThreadWorktreeIndicator,
   prStatusIndicator,
   resolveThreadPr,
   settledPrHoverColorClass,
@@ -1452,7 +1453,10 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
                 </span>
               ) : null}
               {thread.branch ? (
-                <span className="min-w-0 flex-1 truncate whitespace-nowrap">{thread.branch}</span>
+                <>
+                  <ThreadWorktreeIndicator thread={thread} />
+                  <span className="min-w-0 flex-1 truncate whitespace-nowrap">{thread.branch}</span>
+                </>
               ) : (
                 <span className="flex-1" />
               )}
