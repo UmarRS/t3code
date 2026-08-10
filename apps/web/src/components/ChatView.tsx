@@ -5091,6 +5091,12 @@ function ChatViewContent(props: ChatViewProps) {
                       interactionMode,
                       branch: activeThreadBranch,
                       worktreePath: activeThread.worktreePath,
+                      // Scope paths are workspace-relative, so they survive
+                      // the draft landing in a fresh worktree.
+                      ...(activeThread.focusPath ? { focusPath: activeThread.focusPath } : {}),
+                      ...(activeThread.linkedPaths && activeThread.linkedPaths.length > 0
+                        ? { linkedPaths: activeThread.linkedPaths }
+                        : {}),
                       createdAt: activeThread.createdAt,
                     },
                   }

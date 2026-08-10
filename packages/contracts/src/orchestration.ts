@@ -22,6 +22,7 @@ import {
   TurnId,
 } from "./baseSchemas.ts";
 import { ProviderInstanceId } from "./providerInstance.ts";
+import { ThreadScopeFields } from "./threadScope.ts";
 
 export const ORCHESTRATION_WS_METHODS = {
   dispatchCommand: "orchestration.dispatchCommand",
@@ -372,6 +373,9 @@ export const OrchestrationThread = Schema.Struct({
   ),
   branch: Schema.NullOr(TrimmedNonEmptyString),
   worktreePath: Schema.NullOr(TrimmedNonEmptyString),
+  // Where inside the workspace this thread works, and which neighbors it may
+  // still read. See threadScope.ts.
+  ...ThreadScopeFields,
   latestTurn: Schema.NullOr(OrchestrationLatestTurn),
   createdAt: IsoDateTime,
   updatedAt: IsoDateTime,
@@ -442,6 +446,9 @@ export const OrchestrationThreadShell = Schema.Struct({
   ),
   branch: Schema.NullOr(TrimmedNonEmptyString),
   worktreePath: Schema.NullOr(TrimmedNonEmptyString),
+  // Carried on the shell so sidebar rows can render the scope chip without
+  // loading thread detail.
+  ...ThreadScopeFields,
   latestTurn: Schema.NullOr(OrchestrationLatestTurn),
   createdAt: IsoDateTime,
   updatedAt: IsoDateTime,
@@ -663,6 +670,9 @@ const ThreadCreateCommand = Schema.Struct({
   ),
   branch: Schema.NullOr(TrimmedNonEmptyString),
   worktreePath: Schema.NullOr(TrimmedNonEmptyString),
+  // Optional here (unlike on the thread itself) so every caller that does not
+  // care about scope can keep constructing the command as it always did.
+  ...ThreadScopeFields,
   createdAt: IsoDateTime,
 });
 
@@ -758,6 +768,7 @@ const ThreadMetaUpdateCommand = Schema.Struct({
   branch: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
   expectedBranch: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
   worktreePath: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
+  ...ThreadScopeFields,
 }).check(
   Schema.makeFilter(
     (input) =>
@@ -790,6 +801,7 @@ const ThreadTurnStartBootstrapCreateThread = Schema.Struct({
   interactionMode: ProviderInteractionMode,
   branch: Schema.NullOr(TrimmedNonEmptyString),
   worktreePath: Schema.NullOr(TrimmedNonEmptyString),
+  ...ThreadScopeFields,
   createdAt: IsoDateTime,
 });
 
@@ -1119,6 +1131,7 @@ export const ThreadCreatedPayload = Schema.Struct({
   ),
   branch: Schema.NullOr(TrimmedNonEmptyString),
   worktreePath: Schema.NullOr(TrimmedNonEmptyString),
+  ...ThreadScopeFields,
   createdAt: IsoDateTime,
   updatedAt: IsoDateTime,
 });
@@ -1201,6 +1214,9 @@ export const ThreadMetaUpdatedPayload = Schema.Struct({
   modelSelection: Schema.optional(ModelSelection),
   branch: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
   worktreePath: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
+  // Absent = scope unchanged; null focusPath clears it; a linkedPaths array
+  // replaces the list.
+  ...ThreadScopeFields,
   updatedAt: IsoDateTime,
 });
 

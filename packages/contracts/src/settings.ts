@@ -26,6 +26,24 @@ export const SidebarThreadSortOrder = Schema.Literals(["updated_at", "created_at
 export type SidebarThreadSortOrder = typeof SidebarThreadSortOrder.Type;
 export const DEFAULT_SIDEBAR_THREAD_SORT_ORDER: SidebarThreadSortOrder = "updated_at";
 
+/**
+ * Palette for scope chips on sidebar thread rows. A named set rather than free
+ * hex so the chip stays legible in both themes, and so a color means the same
+ * thing everywhere it appears.
+ */
+export const ThreadScopeColor = Schema.Literals([
+  "blue",
+  "green",
+  "purple",
+  "orange",
+  "pink",
+  "teal",
+  "amber",
+  "rose",
+]);
+export type ThreadScopeColor = typeof ThreadScopeColor.Type;
+export const THREAD_SCOPE_COLORS: ReadonlyArray<ThreadScopeColor> = ThreadScopeColor.literals;
+
 export const SidebarProjectGroupingMode = Schema.Literals([
   "repository",
   "repository_path",
@@ -187,6 +205,12 @@ export const ClientSettingsSchema = Schema.Struct({
     TrimmedNonEmptyString,
     SidebarProjectGroupingMode,
   ).pipe(Schema.withDecodingDefault(Effect.succeed({}))),
+  // Keyed by scope path ("apps/web"), not by project: a folder name that means
+  // the same thing across repositories should read the same in the sidebar.
+  // Unset paths fall back to a color derived from the path itself.
+  threadScopeColors: Schema.Record(TrimmedNonEmptyString, ThreadScopeColor).pipe(
+    Schema.withDecodingDefault(Effect.succeed({})),
+  ),
   sidebarProjectSortOrder: SidebarProjectSortOrder.pipe(
     Schema.withDecodingDefault(Effect.succeed(DEFAULT_SIDEBAR_PROJECT_SORT_ORDER)),
   ),
@@ -661,6 +685,7 @@ export const ClientSettingsPatch = Schema.Struct({
   sidebarProjectGroupingOverrides: Schema.optionalKey(
     Schema.Record(TrimmedNonEmptyString, SidebarProjectGroupingMode),
   ),
+  threadScopeColors: Schema.optionalKey(Schema.Record(TrimmedNonEmptyString, ThreadScopeColor)),
   sidebarProjectSortOrder: Schema.optionalKey(SidebarProjectSortOrder),
   sidebarThreadSortOrder: Schema.optionalKey(SidebarThreadSortOrder),
   sidebarThreadPreviewCount: Schema.optionalKey(SidebarThreadPreviewCount),

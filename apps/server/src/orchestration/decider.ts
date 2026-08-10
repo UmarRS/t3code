@@ -1,5 +1,6 @@
 import {
   EventId,
+  normalizeThreadScopeLinkedPaths,
   type OrchestrationCommand,
   type OrchestrationEvent,
   type OrchestrationReadModel,
@@ -377,6 +378,10 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           interactionMode: command.interactionMode,
           branch: command.branch,
           worktreePath: command.worktreePath,
+          focusPath: command.focusPath ?? null,
+          linkedPaths: normalizeThreadScopeLinkedPaths(command.linkedPaths, {
+            focusPath: command.focusPath,
+          }),
           createdAt: command.createdAt,
           updatedAt: command.createdAt,
         },
@@ -805,6 +810,21 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         thread.branch !== command.expectedBranch
           ? thread.branch
           : command.branch;
+      // Touching either half of the scope re-normalizes the linked list
+      // against the focus that will be in effect, so a folder promoted to
+      // focus never lingers as a redundant link.
+      const effectiveFocusPath =
+        command.focusPath !== undefined ? command.focusPath : thread.focusPath;
+      const nextLinkedPaths =
+        command.linkedPaths !== undefined
+          ? normalizeThreadScopeLinkedPaths(command.linkedPaths, {
+              focusPath: effectiveFocusPath,
+            })
+          : command.focusPath !== undefined
+            ? normalizeThreadScopeLinkedPaths(thread.linkedPaths, {
+                focusPath: effectiveFocusPath,
+              })
+            : undefined;
       const occurredAt = yield* nowIso;
       return {
         ...(yield* withEventBase({
@@ -835,6 +855,8 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
             : {}),
           ...(branch !== undefined ? { branch } : {}),
           ...(command.worktreePath !== undefined ? { worktreePath: command.worktreePath } : {}),
+          ...(command.focusPath !== undefined ? { focusPath: command.focusPath } : {}),
+          ...(nextLinkedPaths !== undefined ? { linkedPaths: nextLinkedPaths } : {}),
           updatedAt: occurredAt,
         },
       };

@@ -28,6 +28,12 @@ The root filesystem path for a project. In [the orchestration model][1], it is t
 
 A Git worktree used as an isolated workspace for a thread. If a thread has a `worktreePath` in [the contracts][1], it runs there instead of in the main working tree. Git operations live behind the VCS driver contract in `apps/server/src/vcs/VcsDriver.ts`, implemented by [GitVcsDriverCore.ts][3].
 
+#### Scope
+
+The narrowing of a thread to part of its workspace, so an agent in a large repository does not carry areas it has no business reading. A thread's `focusPath` is the workspace-relative folder the provider process runs in, and `linkedPaths` are the neighbors it may still read and edit. Both are defined in `packages/contracts/src/threadScope.ts` and resolved to absolute paths by `apps/server/src/orchestration/threadScopeResolution.ts`.
+
+Scope moves the agent's cwd only. `resolveThreadWorkspaceCwd` stays at the workspace root, so worktrees, checkpoints, and diffs keep covering the whole repository — restore and review must not narrow with the agent. Changing either half restarts the provider session on its resume cursor, since both adapters fix their directory grants at session start.
+
 ### Thread timeline
 
 #### Thread

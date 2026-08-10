@@ -4094,8 +4094,11 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
       // the paths ProviderService injects into the turn text, without an
       // approval prompt. It is a leaf directory holding only attachment
       // files; siblings like secrets/ and state.sqlite stay ungranted.
+      // The thread's linked scope paths ride alongside: a thread focused on
+      // one area still needs to read the neighbors it explicitly linked.
       const additionalDirectories = [
         ...(input.cwd ? [input.cwd] : []),
+        ...(input.contextDirectories ?? []),
         serverConfig.attachmentsDir,
       ];
       const queryOptions: ClaudeQueryOptions = {
@@ -4185,6 +4188,9 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
         status: "ready",
         runtimeMode: input.runtimeMode,
         ...(input.cwd ? { cwd: input.cwd } : {}),
+        ...(input.contextDirectories && input.contextDirectories.length > 0
+          ? { contextDirectories: input.contextDirectories }
+          : {}),
         ...(modelSelection?.model ? { model: modelSelection.model } : {}),
         ...(threadId ? { threadId } : {}),
         resumeCursor: {

@@ -94,6 +94,11 @@ import {
 } from "../sidebarProjectGrouping";
 import { legacyProjectCwdPreferenceKey, useUiStateStore } from "../uiStateStore";
 import { useThreadSelectionStore } from "../threadSelectionStore";
+import {
+  selectThreadScopeColors,
+  summarizeThreadScope,
+  THREAD_SCOPE_COLOR_CLASSES,
+} from "../threadScopePresentation";
 import { useThreadActions } from "../hooks/useThreadActions";
 import { useHandleNewThread } from "../hooks/useHandleNewThread";
 import { openCommandPalette } from "../commandPaletteBus";
@@ -432,6 +437,11 @@ const SidebarDraftRow = memo(function SidebarDraftRow(props: {
   onDiscard: (draftId: DraftId) => void;
 }) {
   const { composer, draftId, onDiscard, onNavigate, session } = props;
+  const scopeColors = useClientSettings(selectThreadScopeColors);
+  const scopeSummary = useMemo(
+    () => summarizeThreadScope(session, scopeColors),
+    [scopeColors, session],
+  );
   const promptPreview = composer.prompt.trim().split("\n", 1)[0] ?? "";
   // images mirrors persistedAttachments once rehydration finishes; before
   // that only the persisted list is populated, hence max not sum.
@@ -497,6 +507,18 @@ const SidebarDraftRow = memo(function SidebarDraftRow(props: {
             <span className="min-w-0 flex-1 truncate text-xs font-medium text-secondary-label">
               {props.projectTitle}
             </span>
+            {scopeSummary ? (
+              <span
+                title={scopeSummary.title}
+                className={cn(
+                  "inline-flex shrink-0 items-center gap-0.5 rounded px-1 py-px text-[10px] font-medium",
+                  THREAD_SCOPE_COLOR_CLASSES[scopeSummary.color],
+                )}
+              >
+                {scopeSummary.label}
+                {scopeSummary.linkedCount > 0 ? `+${scopeSummary.linkedCount}` : ""}
+              </span>
+            ) : null}
             <span className="ml-auto flex h-5 min-w-5 shrink-0 items-center justify-end">
               <button
                 type="button"
@@ -731,6 +753,11 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
   });
   const terminalStatus = terminalStatusFromRunningIds(runningTerminalIds);
   const terminalProcessCount = runningTerminalIds.length;
+  const scopeColors = useClientSettings(selectThreadScopeColors);
+  const scopeSummary = useMemo(
+    () => summarizeThreadScope(thread, scopeColors),
+    [scopeColors, thread],
+  );
 
   const gitCwd = thread.worktreePath ?? props.projectCwd;
   const gitStatus = useEnvironmentQuery(
@@ -1411,6 +1438,18 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
               {/* Always the branch. The plan step used to take this slot while
                   working, but it truncated to a half-sentence and dropped the
                   branch, so the row lost its most stable identifier. */}
+              {scopeSummary ? (
+                <span
+                  title={scopeSummary.title}
+                  className={cn(
+                    "inline-flex shrink-0 items-center gap-0.5 rounded px-1 py-px text-[10px] font-medium",
+                    THREAD_SCOPE_COLOR_CLASSES[scopeSummary.color],
+                  )}
+                >
+                  {scopeSummary.label}
+                  {scopeSummary.linkedCount > 0 ? `+${scopeSummary.linkedCount}` : ""}
+                </span>
+              ) : null}
               {thread.branch ? (
                 <span className="min-w-0 flex-1 truncate whitespace-nowrap">{thread.branch}</span>
               ) : (

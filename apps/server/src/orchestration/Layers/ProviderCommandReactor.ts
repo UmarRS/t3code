@@ -26,6 +26,10 @@ import * as Stream from "effect/Stream";
 import { makeDrainableWorker } from "@t3tools/shared/DrainableWorker";
 
 import { resolveThreadWorkspaceCwd } from "../../checkpointing/Utils.ts";
+import {
+  resolveThreadAgentCwd,
+  resolveThreadContextDirectories,
+} from "../threadScopeResolution.ts";
 import { increment, orchestrationEventsProcessedTotal } from "../../observability/Metrics.ts";
 import { ProviderAdapterRequestError } from "../../provider/Errors.ts";
 import type { ProviderServiceError } from "../../provider/Errors.ts";
@@ -612,10 +616,10 @@ const make = Effect.gen(function* () {
       }
     }
     const project = yield* resolveProject(thread.projectId);
-    const effectiveCwd = resolveThreadWorkspaceCwd({
-      thread,
-      projects: project ? [project] : [],
-    });
+    // The agent runs inside the thread's focus, not at the workspace root.
+    const scopeInput = { thread, projects: project ? [project] : [] };
+    const effectiveCwd = resolveThreadAgentCwd(scopeInput);
+    const contextDirectories = resolveThreadContextDirectories(scopeInput);
 
     const startProviderSession = (input?: {
       readonly resumeCursor?: unknown;
@@ -626,6 +630,7 @@ const make = Effect.gen(function* () {
         ...(preferredProvider ? { provider: preferredProvider } : {}),
         providerInstanceId: desiredInstanceId,
         ...(effectiveCwd ? { cwd: effectiveCwd } : {}),
+        ...(contextDirectories.length > 0 ? { contextDirectories } : {}),
         modelSelection: desiredModelSelection,
         ...(input?.resumeCursor !== undefined ? { resumeCursor: input.resumeCursor } : {}),
         runtimeMode: desiredRuntimeMode,
@@ -665,6 +670,15 @@ const make = Effect.gen(function* () {
     if (existingSessionThreadId) {
       const runtimeModeChanged = thread.runtimeMode !== thread.session?.runtimeMode;
       const cwdChanged = effectiveCwd !== activeSession?.cwd;
+      // Linking a folder mid-thread has to reach the running agent, and a
+      // grant is fixed at session start for both adapters — so the session
+      // restarts on its resume cursor, exactly as a cwd change does.
+      const activeContextDirectories = activeSession?.contextDirectories ?? [];
+      const contextDirectoriesChanged =
+        contextDirectories.length !== activeContextDirectories.length ||
+        contextDirectories.some(
+          (directory, index) => directory !== activeContextDirectories[index],
+        );
       const sessionModelSwitch = (yield* providerService.getCapabilities(desiredInstanceId))
         .sessionModelSwitch;
       const modelChanged =
@@ -683,6 +697,7 @@ const make = Effect.gen(function* () {
       if (
         !runtimeModeChanged &&
         !cwdChanged &&
+        !contextDirectoriesChanged &&
         !instanceChanged &&
         !shouldRestartForModelChange &&
         !shouldRestartForModelSelectionChange

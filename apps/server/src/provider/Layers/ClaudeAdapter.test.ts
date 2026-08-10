@@ -361,6 +361,30 @@ describe("ClaudeAdapterLive", () => {
     );
   });
 
+  it.effect("grants the thread's linked scope folders alongside its cwd", () => {
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+      yield* adapter.startSession({
+        threadId: THREAD_ID,
+        provider: ProviderDriverKind.make("claudeAgent"),
+        runtimeMode: "full-access",
+        cwd: "/repos/acme/apps/web",
+        contextDirectories: ["/repos/acme/apps/server"],
+      });
+
+      const createInput = harness.getLastCreateQueryInput();
+      assert.equal(createInput?.options.cwd, "/repos/acme/apps/web");
+      assert.deepEqual(createInput?.options.additionalDirectories?.slice(0, 2), [
+        "/repos/acme/apps/web",
+        "/repos/acme/apps/server",
+      ]);
+    }).pipe(
+      Effect.provideService(Random.Random, makeDeterministicRandomService()),
+      Effect.provide(harness.layer),
+    );
+  });
+
   it.effect("derives auto permission mode from auto runtime policy without skip flag", () => {
     const harness = makeHarness();
     return Effect.gen(function* () {
