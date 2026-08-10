@@ -26,7 +26,6 @@ import * as DesktopAppSettings from "../settings/DesktopAppSettings.ts";
 import * as DesktopShellEnvironment from "../shell/DesktopShellEnvironment.ts";
 import * as DesktopState from "./DesktopState.ts";
 import * as DesktopUpdates from "../updates/DesktopUpdates.ts";
-import * as DesktopWslBackend from "../wsl/DesktopWslBackend.ts";
 
 const DEFAULT_DESKTOP_BACKEND_PORT = 3773;
 const MAX_TCP_PORT = 65_535;
@@ -145,7 +144,6 @@ const bootstrap = Effect.gen(function* () {
   const environment = yield* DesktopEnvironment.DesktopEnvironment;
   const desktopSettings = yield* DesktopAppSettings.DesktopAppSettings;
   const serverExposure = yield* DesktopServerExposure.DesktopServerExposure;
-  const wslBackend = yield* DesktopWslBackend.DesktopWslBackend;
   const desktopWindow = yield* DesktopWindow.DesktopWindow;
   yield* logBootstrapInfo("bootstrap start");
 
@@ -199,20 +197,8 @@ const bootstrap = Effect.gen(function* () {
   yield* logBootstrapInfo("bootstrap ipc handlers registered");
 
   if (!(yield* Ref.get(state.quitting))) {
-    // In wsl-only mode the renderer is served by the WSL backend, which can be
-    // slow to cold-boot — show a "Connecting to WSL" splash immediately so the
-    // app feels responsive instead of presenting no window until WSL is ready.
-    // (Dual mode opens fast off the Windows primary, so no splash there.)
-    if (settings.wslOnly === true && settings.wslBackendEnabled === true) {
-      yield* desktopWindow.showConnectingSplash;
-    }
     yield* primaryBackend.start;
     yield* logBootstrapInfo("bootstrap backend start requested");
-    // Bring up the WSL backend if the user previously enabled it. The
-    // primary is already starting; reconcile fires off the WSL register
-    // in parallel rather than blocking primary readiness on a possibly
-    // slow first wsl.exe spawn.
-    yield* Effect.forkScoped(wslBackend.reconcile);
   }
 }).pipe(Effect.withSpan("desktop.bootstrap"));
 
@@ -224,46 +210,15 @@ const startup = Effect.gen(function* () {
   const linuxUrlHandler = yield* DesktopLinuxUrlHandler.DesktopLinuxUrlHandler;
   const shellEnvironment = yield* DesktopShellEnvironment.DesktopShellEnvironment;
   const desktopSettings = yield* DesktopAppSettings.DesktopAppSettings;
-  const preReadyElectronOptions = yield* DesktopPreReadyPlatform.DesktopPreReadyElectronOptions;
   const safeStorage = yield* ElectronSafeStorage.ElectronSafeStorage;
   const updates = yield* DesktopUpdates.DesktopUpdates;
   const environment = yield* DesktopEnvironment.DesktopEnvironment;
 
   yield* shellEnvironment.installIntoProcess;
-  const hasCommandLinePasswordStore =
-    preReadyElectronOptions.linuxPasswordStoreCommandLine !== null;
-  const linuxElectronOptions =
-    environment.platform === "linux" && !hasCommandLinePasswordStore
-      ? DesktopPreReadyPlatform.resolveEarlyLinuxElectronOptionsFromProcess()
-      : preReadyElectronOptions.linux;
-  if (linuxElectronOptions !== null && !hasCommandLinePasswordStore) {
-    if (
-      linuxElectronOptions.passwordStore !== null ||
-      preReadyElectronOptions.linux?.passwordStore !== null
-    ) {
-      yield* electronApp.removeCommandLineSwitch("password-store");
-    }
-    if (linuxElectronOptions.passwordStore !== null) {
-      yield* electronApp.appendCommandLineSwitch(
-        "password-store",
-        linuxElectronOptions.passwordStore,
-      );
-    }
-  }
   const userDataPath = yield* appIdentity.resolveUserDataPath;
   yield* electronApp.setPath("userData", userDataPath);
   yield* logStartupInfo("runtime logging configured", { logDir: environment.logDir });
   yield* desktopSettings.load;
-
-  if (linuxElectronOptions !== null) {
-    yield* logStartupInfo("linux password store configured", {
-      passwordStore: hasCommandLinePasswordStore
-        ? "command-line"
-        : (linuxElectronOptions.passwordStore ?? "electron-default"),
-      xdgCurrentDesktop: process.env.XDG_CURRENT_DESKTOP ?? null,
-      xdgSessionDesktop: process.env.XDG_SESSION_DESKTOP ?? null,
-    });
-  }
 
   yield* appIdentity.configure;
   yield* lifecycle.register;
@@ -299,7 +254,7 @@ const scopedProgram = Effect.scoped(
         const pool = yield* DesktopBackendPool.DesktopBackendPool;
         // Stop every backend in the pool, not just the primary. The
         // electronApp.quit() path can race ahead of the layer-scope
-        // cascade, so leaving the WSL instance for its parent scope
+        // cascade, so leaving the instance for its parent scope
         // finalizer means it gets hard-killed by the OS instead of
         // receiving SIGTERM + grace. Stops run concurrently.
         const instances = yield* pool.list;

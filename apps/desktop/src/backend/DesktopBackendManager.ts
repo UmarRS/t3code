@@ -7,13 +7,13 @@
 //
 // The pool layer (`DesktopBackendPool.ts`) calls this factory once per
 // backend it wants to run. Today that's the Windows primary; follow-up
-// commits add a second call for the WSL instance.
+// commits can add further instances.
 //
 // Singleton couplings that the legacy service held inline are now
 // parameterized via the spec:
 //   - configResolve replaces the legacy `DesktopBackendConfiguration.resolve`
 //     so each instance can resolve its own start config — the primary wires
-//     `configuration.resolvePrimary`, the WSL orchestrator wires a
+//     `configuration.resolvePrimary`; other orchestrators wire a
 //     `configuration.resolveWsl({ port, distro })` closure.
 //   - onReady / onShutdown drive UI side effects (window auto-open,
 //     readiness latch) only for instances that want them — the primary's
@@ -88,21 +88,17 @@ export interface DesktopBackendStartConfig extends BackendProcessContext {
   readonly args: ReadonlyArray<string>;
   readonly env: Record<string, string | undefined>;
   // When true the spawner merges the desktop process.env on top of `env`;
-  // when false `env` is passed verbatim. WSL mode opts out so a leaking
-  // T3CODE_HOME can't pin the WSL backend to /mnt/c/...\.t3.
+  // when false `env` is passed verbatim.
   readonly extendEnv: boolean;
   readonly bootstrap: DesktopBackendBootstrapValue;
   readonly bootstrapDelivery: DesktopBackendBootstrapDelivery;
   readonly httpBaseUrl: URL;
   readonly captureOutput: boolean;
   readonly preflightFailure: Option.Option<PreflightFailure>;
-  // Present for a WSL run after the configured/default distro has been
-  // resolved to the concrete distro passed to wsl.exe.
-  readonly runningDistro?: string;
 }
 
-// A preflight failure records whether it is fatal. Transient failures (WSL
-// cold-starting, wslpath while the VM boots) keep retrying so the backend can
+// A preflight failure records whether it is fatal. Transient failures keep
+// retrying so the backend can
 // self-heal; fatal ones (no node, wrong version, missing build tools) are
 // surfaced via onPreflightFailed and stop the restart loop after
 // MAX_PREFLIGHT_FAILURE_ATTEMPTS.
@@ -242,9 +238,8 @@ export interface DesktopBackendSnapshot {
 }
 
 // Opaque identifier for one backend process inside the pool. Today only
-// PRIMARY_INSTANCE_ID is registered. Follow-up commits add WSL distros
-// under ids derived from the distro name (e.g. "wsl:ubuntu"). Eventually
-// these map 1:1 with environment ids on the frontend; keeping them
+// PRIMARY_INSTANCE_ID is registered. Follow-up commits can add more.
+// Eventually these map 1:1 with environment ids on the frontend; keeping them
 // desktop-local for now avoids leaking the contracts dependency.
 export type BackendInstanceId = string & Brand.Brand<"BackendInstanceId">;
 export const BackendInstanceId = Brand.nominal<BackendInstanceId>();
@@ -265,8 +260,7 @@ export interface DesktopBackendInstance {
   readonly snapshot: Effect.Effect<DesktopBackendSnapshot>;
   // Polls desiredRunning + the instance's own ready flag until the
   // backend reports ready, or the timeout elapses. Returns true on
-  // ready, false on timeout. Used by the WSL backend swap to drive its
-  // rollback path.
+  // ready, false on timeout.
   readonly waitForReady: (timeout: Duration.Duration) => Effect.Effect<boolean>;
 }
 
@@ -285,8 +279,7 @@ export interface BackendInstanceSpec {
   readonly configResolve: Effect.Effect<DesktopBackendStartConfig, PlatformError.PlatformError>;
   // Receives the *resolved* httpBaseUrl of the run that just became
   // ready. The window service uses this to decide what URL to load
-  // (the WSL backend reports its distro IP, the Windows backend reports
-  // 127.0.0.1). Splitting this off from configResolve avoids races
+  // Splitting this off from configResolve avoids races
   // between "fired onReady" and "currentConfig already advanced".
   readonly onReady?: (httpBaseUrl: URL) => Effect.Effect<void>;
   readonly onShutdown?: () => Effect.Effect<void>;
@@ -479,9 +472,8 @@ export const runBackendProcess = Effect.fn("runBackendProcess")(function* (
     stderr: options.captureOutput ? "pipe" : "inherit",
     killSignal: "SIGTERM",
     forceKillAfter: DEFAULT_BACKEND_TERMINATE_GRACE,
-    // wsl.exe drops additional file descriptors when forwarding to the Linux
-    // side, so the WSL spawn path delivers the bootstrap envelope via stdin
-    // (`--bootstrap-fd 0`) instead.
+    // A spawn path that cannot carry extra file descriptors delivers the
+    // bootstrap envelope via stdin (`--bootstrap-fd 0`) instead.
     ...(options.bootstrapDelivery === "fd3" ? { additionalFds } : {}),
   });
 
@@ -723,8 +715,7 @@ export const makeBackendInstance = Effect.fn("makeBackendInstance")(function* (
         if (Option.isSome(preflightFailure)) {
           const { reason, fatal, retryLimit } = preflightFailure.value;
           if (!fatal && retryLimit === undefined) {
-            // Transient (WSL cold-starting, wslpath while the VM boots). Keep
-            // retrying so the backend self-heals once WSL is ready. Reset a
+            // Transient. Keep retrying so the backend self-heals. Reset a
             // prior bounded/fatal streak because this is a different failure.
             yield* Ref.update(state, (latest) =>
               latest.preflightFailureAttempt === 0
@@ -740,9 +731,8 @@ export const makeBackendInstance = Effect.fn("makeBackendInstance")(function* (
             return [next, { ...latest, preflightFailureAttempt: next }] as const;
           });
           if (attempt > attemptLimit) {
-            // We already surfaced and asked for the Windows fallback, yet we're
-            // still resolving the WSL primary — the fallback didn't take (e.g.
-            // the settings write failed). Stop rather than loop forever.
+            // Preflight keeps failing past its retry budget. Stop rather than
+            // loop forever.
             yield* logInstanceError("backend preflight still failing after fallback; stopping", {
               reason,
               attempt,

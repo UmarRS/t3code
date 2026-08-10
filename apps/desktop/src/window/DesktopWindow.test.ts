@@ -214,11 +214,6 @@ function makeTestLayer(input: {
     setServerExposureMode: () => Effect.die("unexpected server exposure update"),
     setTailscaleServe: () => Effect.die("unexpected Tailscale Serve update"),
     setUpdateChannel: () => Effect.die("unexpected update channel change"),
-    setWslBackendEnabled: () => Effect.die("unexpected WSL backend toggle"),
-    setWslDistro: () => Effect.die("unexpected WSL distro change"),
-    setWslOnly: () => Effect.die("unexpected WSL-only toggle"),
-    applyWslWindowsFallback: Effect.die("unexpected WSL Windows fallback"),
-    applyWslWindowsFallbackInMemory: Effect.die("unexpected WSL Windows fallback"),
   } satisfies DesktopAppSettings.DesktopAppSettings["Service"]);
 
   const electronWindowLayer = Layer.succeed(ElectronWindow.ElectronWindow, {
