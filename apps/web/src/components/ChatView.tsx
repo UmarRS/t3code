@@ -323,13 +323,11 @@ import {
   AlertDialogTitle,
 } from "./ui/alert-dialog";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "./ui/tooltip";
-import { ServerUpdateAction, ServerUpdateProgress } from "./ServerUpdateAction";
 import {
   buildVersionMismatchDismissalKey,
   dismissVersionMismatch,
   isVersionMismatchDismissed,
   resolveServerConfigVersionMismatch,
-  resolveServerSelfUpdateCapability,
   serverUpdateGuidance,
 } from "../versionSkew";
 import { useAssetUrls } from "../assets/assetUrls";
@@ -1962,13 +1960,8 @@ function ChatViewContent(props: ChatViewProps) {
       ? `${environmentById.get(activeThread.environmentId)?.label ?? serverConfig?.environment.label ?? activeThread.environmentId} server`
       : "server";
   const serverUpdateEnvironmentId = activeThread?.environmentId ?? null;
-  const versionMismatchSelfUpdate = resolveServerSelfUpdateCapability(serverConfig);
-  const serverUpdateState = useAtomValue(
-    serverEnvironment.updateStateAtom(serverUpdateEnvironmentId),
-  );
   const systemComposerBannerItems = useMemo<ComposerBannerStackItem[]>(() => {
     const items: ComposerBannerStackItem[] = [];
-    const updateRunning = serverUpdateState.status === "running";
     const unavailableConnection = activeEnvironmentUnavailableState?.connection ?? null;
     const environmentReconnecting =
       unavailableConnection !== null &&
@@ -1980,14 +1973,9 @@ function ChatViewContent(props: ChatViewProps) {
     // into one calm line instead of stacking "Failed to connect" on
     // "versions differ". A failed update never folds: its error and retry
     // action must stay visible.
-    const reconnectingThroughVersionSkew =
-      serverUpdateState.status === "idle" && environmentReconnecting && versionMismatch !== null;
-    // While an update runs, transient connect blips are expected (the server
-    // restarts) and the update banner already shows progress. Hard failure
-    // phases still surface so the Reconnect action stays reachable.
+    const reconnectingThroughVersionSkew = environmentReconnecting && versionMismatch !== null;
     const suppressUnavailableBanner =
-      environmentReconnecting &&
-      (updateRunning || (!reconnectingThroughVersionSkew && !reconnectWarningGraceElapsed));
+      environmentReconnecting && !reconnectingThroughVersionSkew && !reconnectWarningGraceElapsed;
     if (activeEnvironmentUnavailableState && unavailableConnection && !suppressUnavailableBanner) {
       if (reconnectingThroughVersionSkew) {
         items.push({
@@ -2041,75 +2029,42 @@ function ChatViewContent(props: ChatViewProps) {
     if (
       serverUpdateEnvironmentId &&
       !reconnectingThroughVersionSkew &&
-      (serverUpdateState.status !== "idle" ||
-        (showVersionMismatchBanner && versionMismatch && versionMismatchDismissKey))
+      showVersionMismatchBanner &&
+      versionMismatch &&
+      versionMismatchDismissKey
     ) {
-      const updateInProgress = serverUpdateState.status === "running";
-      const updateFailed = serverUpdateState.status === "failed";
       items.push({
         id: `server-version:${serverUpdateEnvironmentId}`,
-        variant: updateFailed ? "error" : "default",
-        // A running update is live progress the user is waiting on; only the
-        // idle "update available" offer is calm enough to stack behind.
-        urgent: updateInProgress,
-        // In-flight and failed states carry their own status dot inside
-        // ServerUpdateProgress; only the idle offer needs an icon.
-        icon:
-          updateInProgress || updateFailed ? null : (
-            <span
-              className="size-1.5 rounded-full border border-muted-foreground/40"
-              aria-hidden="true"
+        variant: "default",
+        // A version notice is informational: it stacks behind live status.
+        urgent: false,
+        icon: (
+          <span
+            className="size-1.5 rounded-full border border-muted-foreground/40"
+            aria-hidden="true"
+          />
+        ),
+        title: (
+          <Tooltip>
+            <TooltipTrigger
+              render={
+                <button type="button" className="cursor-help rounded-sm text-left">
+                  Server version differs
+                </button>
+              }
             />
-          ),
-        title:
-          updateInProgress || updateFailed ? (
-            `${updateFailed ? "Could not update" : "Updating"} ${versionMismatchServerLabel}`
-          ) : versionMismatch ? (
-            <Tooltip>
-              <TooltipTrigger
-                render={
-                  <button type="button" className="cursor-help rounded-sm text-left">
-                    Server update available
-                  </button>
-                }
-              />
-              <TooltipPopup side="top">
-                {versionMismatchServerLabel} {versionMismatch.serverVersion}{" "}
-                <span aria-hidden="true">→</span> {versionMismatch.clientVersion}
-              </TooltipPopup>
-            </Tooltip>
-          ) : (
-            "Server update available"
-          ),
-        description:
-          updateInProgress || updateFailed ? (
-            <ServerUpdateProgress state={serverUpdateState} />
-          ) : versionMismatchSelfUpdate === "desktop-managed" ? (
-            serverUpdateGuidance(versionMismatchSelfUpdate, versionMismatchServerLabel)
-          ) : null,
-        // The desktop-managed guidance is already the description; the action
-        // slot would only repeat it.
-        actions:
-          updateInProgress ||
-          !versionMismatch ||
-          versionMismatchSelfUpdate === "desktop-managed" ? undefined : (
-            <ServerUpdateAction
-              environmentId={serverUpdateEnvironmentId}
-              serverLabel={versionMismatchServerLabel}
-              selfUpdate={versionMismatchSelfUpdate}
-              targetVersion={versionMismatch.clientVersion}
-              label={updateFailed ? "Retry" : "Update"}
-            />
-          ),
-        ...(updateInProgress || updateFailed || !versionMismatchDismissKey
-          ? {}
-          : {
-              dismissLabel: "Dismiss update notice",
-              onDismiss: () => {
-                dismissVersionMismatch(versionMismatchDismissKey);
-                setDismissedVersionMismatchKey(versionMismatchDismissKey);
-              },
-            }),
+            <TooltipPopup side="top">
+              {versionMismatchServerLabel} {versionMismatch.serverVersion}{" "}
+              <span aria-hidden="true">→</span> {versionMismatch.clientVersion}
+            </TooltipPopup>
+          </Tooltip>
+        ),
+        description: serverUpdateGuidance(versionMismatchServerLabel),
+        dismissLabel: "Dismiss update notice",
+        onDismiss: () => {
+          dismissVersionMismatch(versionMismatchDismissKey);
+          setDismissedVersionMismatchKey(versionMismatchDismissKey);
+        },
       });
     }
     return items;
@@ -2120,11 +2075,9 @@ function ChatViewContent(props: ChatViewProps) {
     navigate,
     setDismissedVersionMismatchKey,
     showVersionMismatchBanner,
-    serverUpdateState,
     versionMismatch,
     versionMismatchDismissKey,
     serverUpdateEnvironmentId,
-    versionMismatchSelfUpdate,
     versionMismatchServerLabel,
   ]);
   const providerStatuses = serverConfig?.providers ?? EMPTY_PROVIDERS;

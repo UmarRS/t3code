@@ -1,5 +1,3 @@
-import { DEFAULT_HOSTED_APP_URL } from "@t3tools/shared/connectAuth";
-
 import { getPairingTokenFromUrl, setPairingTokenOnUrl } from "./pairingUrl";
 
 export interface HostedPairingRequest {
@@ -8,40 +6,20 @@ export interface HostedPairingRequest {
   readonly label: string;
 }
 
-export type HostedAppChannel = "latest" | "nightly";
-
+/**
+ * This build has no hosted web app, so pairing links always point back at the
+ * origin the client was served from.
+ */
 export function configuredHostedAppUrl(): string {
-  return import.meta.env.VITE_HOSTED_APP_URL?.trim() || DEFAULT_HOSTED_APP_URL;
+  return window.location.origin;
 }
 
-function configuredBackendUrl(): string {
-  return import.meta.env.VITE_HTTP_URL?.trim() || import.meta.env.VITE_WS_URL?.trim() || "";
-}
-
-function configuredHostedAppChannel(): HostedAppChannel | null {
-  const channel = import.meta.env.VITE_HOSTED_APP_CHANNEL?.trim().toLowerCase();
-  return channel === "latest" || channel === "nightly" ? channel : null;
-}
-
-function originFromUrl(value: string): string | null {
-  try {
-    return new URL(value).origin;
-  } catch {
-    return null;
-  }
-}
-
-export function isHostedStaticApp(url: URL = new URL(window.location.href)): boolean {
-  if (configuredBackendUrl()) {
-    return false;
-  }
-
-  if (configuredHostedAppChannel()) {
-    return true;
-  }
-
-  const hostedOrigin = originFromUrl(configuredHostedAppUrl());
-  return hostedOrigin !== null && url.origin === hostedOrigin;
+/**
+ * Kept as a predicate so pairing surfaces can special-case a static host. Always
+ * false here: the app is only ever served by its own environment server.
+ */
+export function isHostedStaticApp(_url: URL = new URL(window.location.href)): boolean {
+  return false;
 }
 
 export function readHostedPairingRequest(url: URL = new URL(window.location.href)) {
@@ -78,12 +56,4 @@ export function buildHostedPairingUrl(input: {
   }
 
   return setPairingTokenOnUrl(url, input.token).toString();
-}
-
-export function buildHostedChannelSelectionUrl(input: {
-  readonly channel: HostedAppChannel;
-}): string {
-  const url = new URL("/__t3code/channel", configuredHostedAppUrl());
-  url.searchParams.set("channel", input.channel);
-  return url.toString();
 }

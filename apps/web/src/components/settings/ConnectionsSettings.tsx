@@ -13,8 +13,6 @@ import {
   AuthAdministrativeScopes,
   AuthOrchestrationOperateScope,
   AuthOrchestrationReadScope,
-  AuthRelayReadScope,
-  AuthRelayWriteScope,
   AuthReviewWriteScope,
   AuthStandardClientScopes,
   AuthTerminalOperateScope,
@@ -100,12 +98,7 @@ import {
 } from "~/environments/primary";
 import { isDesktopLocalConnectionTarget } from "~/connection/desktopLocal";
 import { useUiStateStore } from "~/uiStateStore";
-import {
-  resolveServerConfigVersionMismatch,
-  resolveServerSelfUpdateCapability,
-} from "~/versionSkew";
-import { hasCloudPublicConfig } from "~/cloud/publicConfig";
-import { useCloudLinkController } from "~/cloud/useCloudLinkController";
+import { resolveServerConfigVersionMismatch } from "~/versionSkew";
 import { authEnvironment } from "~/state/auth";
 import { environmentCatalog } from "~/connection/catalog";
 import {
@@ -127,8 +120,6 @@ import {
 import { useAtomCommand } from "../../state/use-atom-command";
 import { serverEnvironment } from "~/state/server";
 import { ConnectionStatusDot } from "../ConnectionStatusDot";
-import { ServerUpdateAction, ServerUpdateProgress } from "../ServerUpdateAction";
-import { CloudEnvironmentConnectRows } from "../cloud/CloudEnvironmentConnectList";
 import { ITEM_ROW_CLASSNAME, ITEM_ROW_INNER_CLASSNAME } from "./itemRows";
 
 const DEFAULT_TAILSCALE_SERVE_PORT = 443;
@@ -188,16 +179,6 @@ const PAIRING_SCOPE_OPTIONS: ReadonlyArray<{
     scope: AuthAccessWriteScope,
     title: "Manage access",
     description: "Issue and revoke credentials for other clients.",
-  },
-  {
-    scope: AuthRelayReadScope,
-    title: "View relay",
-    description: "Inspect managed relay connectivity.",
-  },
-  {
-    scope: AuthRelayWriteScope,
-    title: "Manage relay",
-    description: "Change managed tunnel connectivity.",
   },
 ];
 
@@ -1384,19 +1365,15 @@ function SavedBackendListRow({
     [copyTraceIdToClipboard],
   );
   const versionMismatch = resolveServerConfigVersionMismatch(environment.serverConfig);
-  const serverUpdateState = useAtomValue(serverEnvironment.updateStateAtom(environmentId));
-  const resumingServerUpdate =
-    serverUpdateState.status === "running" && serverUpdateState.stage === "resuming";
   const sshTarget =
     environment.entry.target._tag === "SshConnectionTarget" &&
     Option.isSome(environment.entry.profile) &&
     environment.entry.profile.value._tag === "SshConnectionProfile"
       ? environment.entry.profile.value.target
       : null;
-  const metadataBits = [
-    sshTarget ? `SSH ${formatDesktopSshTarget(sshTarget)}` : null,
-    environment.relayManaged ? "T3 Connect" : null,
-  ].filter((value): value is string => value !== null);
+  const metadataBits = [sshTarget ? `SSH ${formatDesktopSshTarget(sshTarget)}` : null].filter(
+    (value): value is string => value !== null,
+  );
 
   // The WSL backend is a desktop-managed local backend (it surfaces as a bearer
   // environment whose connection id is prefixed "local:"), not a remote
@@ -1423,11 +1400,7 @@ function SavedBackendListRow({
           {metadataBits.length > 0 ? (
             <p className="text-xs text-muted-foreground">{metadataBits.join(" · ")}</p>
           ) : null}
-          {serverUpdateState.status !== "idle" ? (
-            <div className="max-w-md">
-              <ServerUpdateProgress state={serverUpdateState} />
-            </div>
-          ) : versionMismatch ? (
+          {versionMismatch ? (
             <Tooltip>
               <TooltipTrigger
                 render={
@@ -1445,7 +1418,7 @@ function SavedBackendListRow({
               </TooltipPopup>
             </Tooltip>
           ) : null}
-          {environment.connection.error && !resumingServerUpdate ? (
+          {environment.connection.error ? (
             <p className="flex min-w-0 items-center gap-2 text-destructive text-xs">
               <span className="truncate">{connectionStatusText(environment.connection)}</span>
               {errorTraceId ? (
@@ -1461,16 +1434,6 @@ function SavedBackendListRow({
           ) : null}
         </div>
         <div className="flex w-full shrink-0 items-center gap-2 sm:w-auto sm:justify-end">
-          {versionMismatch &&
-          (serverUpdateState.status === "idle" || serverUpdateState.status === "failed") ? (
-            <ServerUpdateAction
-              environmentId={environmentId}
-              serverLabel={`${environment.label} server`}
-              selfUpdate={resolveServerSelfUpdateCapability(environment.serverConfig)}
-              targetVersion={versionMismatch.clientVersion}
-              label={serverUpdateState.status === "failed" ? "Retry" : "Update"}
-            />
-          ) : null}
           {isWslEnvironment ? (
             <Tooltip>
               <TooltipTrigger
@@ -1591,103 +1554,6 @@ function CloudLinkSwitch({
   );
 }
 
-function ConfiguredCloudLinkRow({ canManageRelay }: { readonly canManageRelay: boolean }) {
-  const {
-    isSignedIn,
-    linkState: primaryCloudLinkState,
-    managedTunnelActive,
-    publishAgentActivity,
-    operationError,
-    reconcileCloudState,
-  } = useCloudLinkController();
-  const [isUpdating, setIsUpdating] = useState(false);
-  const [isUpdatingPreference, setIsUpdatingPreference] = useState(false);
-
-  const disabledReason = !isSignedIn
-    ? "Sign in to T3 Connect to manage this environment."
-    : !canManageRelay
-      ? "Your session does not have permission to manage T3 Connect access."
-      : null;
-  const isBusy = isUpdating || isUpdatingPreference;
-
-  const updateManagedTunnel = async (enabled: boolean) => {
-    setIsUpdating(true);
-    const ok = await reconcileCloudState({ managedTunnel: enabled, publish: publishAgentActivity });
-    if (ok) {
-      // Turning the tunnel off while publishing stays on downgrades the link
-      // rather than removing it — say so instead of claiming an unlink.
-      toastManager.add({
-        type: "success",
-        title: enabled
-          ? "T3 Connect linked"
-          : publishAgentActivity
-            ? "T3 Connect tunnel disabled"
-            : "T3 Connect unlinked",
-        description: enabled
-          ? "This environment is available through T3 Connect."
-          : publishAgentActivity
-            ? "The managed tunnel was removed. Agent activity publishing stays on."
-            : "This environment is no longer available through T3 Connect.",
-      });
-    }
-    setIsUpdating(false);
-  };
-
-  const updatePublishAgentActivity = async (enabled: boolean) => {
-    setIsUpdatingPreference(true);
-    const ok = await reconcileCloudState({ managedTunnel: managedTunnelActive, publish: enabled });
-    if (ok) {
-      toastManager.add({
-        type: "success",
-        title: enabled ? "Agent activity enabled" : "Agent activity disabled",
-        description: enabled
-          ? "This environment publishes agent activity to your mobile clients."
-          : "This environment will stop publishing agent activity.",
-      });
-    }
-    setIsUpdatingPreference(false);
-  };
-
-  return (
-    <>
-      <SettingsRow
-        title="T3 Connect"
-        description={
-          managedTunnelActive
-            ? "This environment is available to your other devices through T3 Connect."
-            : "Make this environment available to your other devices through T3 Connect."
-        }
-        status={operationError ?? primaryCloudLinkState.error}
-        control={
-          <CloudLinkSwitch
-            checked={managedTunnelActive}
-            disabled={!canManageRelay || !isSignedIn || primaryCloudLinkState.isPending || isBusy}
-            disabledReason={disabledReason}
-            onCheckedChange={(enabled) => void updateManagedTunnel(enabled)}
-          />
-        }
-      />
-      <SettingsRow
-        title="Publish agent activity"
-        description="Send activity from this environment to your mobile clients for push notifications and Live Activities. Works without a T3 Connect tunnel."
-        control={
-          <CloudLinkSwitch
-            ariaLabel="Publish agent activity to mobile clients"
-            checked={publishAgentActivity}
-            disabled={!canManageRelay || !isSignedIn || primaryCloudLinkState.isPending || isBusy}
-            disabledReason={disabledReason}
-            onCheckedChange={(enabled) => void updatePublishAgentActivity(enabled)}
-          />
-        }
-      />
-    </>
-  );
-}
-
-function CloudLinkRow({ canManageRelay }: { readonly canManageRelay: boolean }) {
-  return hasCloudPublicConfig() ? <ConfiguredCloudLinkRow canManageRelay={canManageRelay} /> : null;
-}
-
 function EmptyRemoteEnvironments({ cloudEnabled = true }: { readonly cloudEnabled?: boolean }) {
   return (
     <Empty className="min-h-52">
@@ -1696,32 +1562,18 @@ function EmptyRemoteEnvironments({ cloudEnabled = true }: { readonly cloudEnable
       </EmptyMedia>
       <EmptyHeader>
         <EmptyTitle>No saved remote environments</EmptyTitle>
-        <EmptyDescription>
-          {cloudEnabled
-            ? "Click “Add environment” to pair another environment, or connect one from T3 Connect."
-            : "Click “Add environment” to pair another environment."}
-        </EmptyDescription>
+        <EmptyDescription>Click “Add environment” to pair another environment.</EmptyDescription>
       </EmptyHeader>
     </Empty>
   );
 }
 
 function CloudRemoteEnvironmentRows({
-  primaryEnvironmentId,
   savedEnvironments,
 }: {
-  readonly primaryEnvironmentId: EnvironmentId | null;
   readonly savedEnvironments: ReadonlyArray<EnvironmentPresentation>;
 }) {
-  return hasCloudPublicConfig() ? (
-    <CloudEnvironmentConnectRows
-      primaryEnvironmentId={primaryEnvironmentId}
-      savedEnvironments={savedEnvironments}
-      empty={<EmptyRemoteEnvironments />}
-    />
-  ) : savedEnvironments.length === 0 ? (
-    <EmptyRemoteEnvironments cloudEnabled={false} />
-  ) : null;
+  return savedEnvironments.length === 0 ? <EmptyRemoteEnvironments /> : null;
 }
 
 export function ConnectionsSettings() {
@@ -1849,9 +1701,6 @@ export function ConnectionsSettings() {
   >(null);
   const primaryServerConfig = primaryEnvironment?.serverConfig ?? null;
   const primaryVersionMismatch = resolveServerConfigVersionMismatch(primaryServerConfig);
-  const primaryServerUpdateState = useAtomValue(
-    serverEnvironment.updateStateAtom(primaryEnvironmentId),
-  );
   const [isAdvertisedEndpointListExpanded, setIsAdvertisedEndpointListExpanded] = useState(false);
   const defaultAdvertisedEndpointKey = useUiStateStore(
     (state) => state.defaultAdvertisedEndpointKey,
@@ -1860,7 +1709,6 @@ export function ConnectionsSettings() {
     (state) => state.setDefaultAdvertisedEndpointKey,
   );
   const canManageLocalBackend = currentSessionScopes?.includes(AuthAccessWriteScope) ?? false;
-  const canManageRelay = currentSessionScopes?.includes(AuthRelayWriteScope) ?? false;
   const authAccessChanges = useEnvironmentQuery(
     canManageLocalBackend && primaryEnvironmentId !== null
       ? authEnvironment.accessChanges({
@@ -2998,19 +2846,11 @@ export function ConnectionsSettings() {
       {canManageLocalBackend ? (
         <>
           <SettingsSection title="This environment">
-            {primaryVersionMismatch || primaryServerUpdateState.status !== "idle" ? (
+            {primaryVersionMismatch ? (
               <SettingsRow
-                title={
-                  primaryServerUpdateState.status === "failed"
-                    ? "Update failed"
-                    : primaryServerUpdateState.status === "running"
-                      ? "Updating server"
-                      : "Server update available"
-                }
+                title="Server version differs"
                 description={
-                  primaryServerUpdateState.status !== "idle" ? (
-                    <ServerUpdateProgress state={primaryServerUpdateState} />
-                  ) : primaryVersionMismatch ? (
+                  primaryVersionMismatch ? (
                     <Tooltip>
                       <TooltipTrigger
                         render={
@@ -3026,19 +2866,6 @@ export function ConnectionsSettings() {
                     </Tooltip>
                   ) : null
                 }
-                control={
-                  primaryVersionMismatch &&
-                  primaryEnvironmentId !== null &&
-                  primaryServerUpdateState.status !== "running" ? (
-                    <ServerUpdateAction
-                      environmentId={primaryEnvironmentId}
-                      serverLabel={primaryEnvironment?.label ?? "this server"}
-                      selfUpdate={resolveServerSelfUpdateCapability(primaryServerConfig)}
-                      targetVersion={primaryVersionMismatch.clientVersion}
-                      label={primaryServerUpdateState.status === "failed" ? "Retry" : "Update"}
-                    />
-                  ) : undefined
-                }
               />
             ) : null}
             {desktopBridge ? (
@@ -3047,13 +2874,9 @@ export function ConnectionsSettings() {
                 {renderEndpointRows("endpoint-rail")}
                 {renderTailscaleRow()}
                 {renderWslRow()}
-                <CloudLinkRow canManageRelay={canManageRelay} />
               </>
             ) : (
-              <>
-                {renderDisabledNetworkAccessRow()}
-                <CloudLinkRow canManageRelay={canManageRelay} />
-              </>
+              <>{renderDisabledNetworkAccessRow()}</>
             )}
           </SettingsSection>
 
@@ -3349,7 +3172,6 @@ export function ConnectionsSettings() {
             title="Administrative access"
             description="Pairing links and client-session management require the access:write scope for this backend."
           />
-          <CloudLinkRow canManageRelay={canManageRelay} />
         </SettingsSection>
       )}
 
@@ -3426,10 +3248,7 @@ export function ConnectionsSettings() {
             onRemove={handleRemoveSavedBackend}
           />
         ))}
-        <CloudRemoteEnvironmentRows
-          primaryEnvironmentId={primaryEnvironmentId}
-          savedEnvironments={savedEnvironments}
-        />
+        <CloudRemoteEnvironmentRows savedEnvironments={savedEnvironments} />
       </SettingsSection>
     </SettingsPageContainer>
   );
