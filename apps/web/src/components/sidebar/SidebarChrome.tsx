@@ -5,7 +5,7 @@ import {
   SettingsIcon,
 } from "lucide-react";
 import { memo, useCallback } from "react";
-import { Link, useLocation, useNavigate } from "@tanstack/react-router";
+import { Link, useCanGoBack, useLocation, useNavigate } from "@tanstack/react-router";
 
 import { useProjects } from "../../state/entities";
 import { resolveAutonomousRunState } from "../issues/autonomousRun.logic";
@@ -132,6 +132,7 @@ function AtlasMark() {
 export const SidebarChromeFooter = memo(function SidebarChromeFooter() {
   const navigate = useNavigate();
   const { isMobile, setOpenMobile } = useSidebar();
+  const canGoBack = useCanGoBack();
   const currentFooterPage = useLocation({
     select: (location) => (location.pathname === "/usage" ? "usage" : null),
   });
@@ -153,8 +154,12 @@ export const SidebarChromeFooter = memo(function SidebarChromeFooter() {
 
   const handleBackClick = useCallback(() => {
     closeMobileSidebar();
+    if (canGoBack) {
+      window.history.back();
+      return;
+    }
     void navigate({ to: "/" });
-  }, [closeMobileSidebar, navigate]);
+  }, [canGoBack, closeMobileSidebar, navigate]);
 
   const projects = useProjects();
   const openIssues = useCallback(
