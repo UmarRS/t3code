@@ -24,6 +24,7 @@ import {
   serializeThemeFile,
   subscribeToThemePreview,
   subscribeToCustomThemes,
+  themeAllowsSidebarArtwork,
   T3_CHAT_THEME,
   EMBER_THEME,
   GROVE_THEME,
@@ -313,14 +314,8 @@ describe("theme files", () => {
     expect(parseThemeFile(JSON.parse(serialized)).collection).toEqual(theme.collection);
   });
 
-  it("keeps sidebar artwork opt-in through theme files", () => {
-    const withoutArtwork = parseThemeFile({
-      version: THEME_FILE_VERSION,
-      name: "Plain sidebar",
-      appearance: "light",
-      colors: { accent: "#5b6cff" },
-    });
-    const withArtwork = parseThemeFile({
+  it("keeps sidebar artwork disabled for custom theme files", () => {
+    const theme = parseThemeFile({
       version: THEME_FILE_VERSION,
       name: "Art sidebar",
       appearance: "light",
@@ -328,12 +323,11 @@ describe("theme files", () => {
       sidebarArtwork: true,
     });
 
-    expect(withoutArtwork.sidebarArtwork).toBeUndefined();
-    expect(withArtwork.sidebarArtwork).toBe(true);
-    expect(JSON.parse(serializeThemeFile(withArtwork)).sidebarArtwork).toBe(true);
+    expect(theme.sidebarArtwork).toBeUndefined();
+    expect(JSON.parse(serializeThemeFile(theme))).not.toHaveProperty("sidebarArtwork");
   });
 
-  it("publishes sidebar artwork changes from the live theme preview", () => {
+  it("suppresses sidebar artwork during a live custom-theme preview", () => {
     const listener = vi.fn();
     const unsubscribe = subscribeToThemePreview(listener);
     vi.stubGlobal("document", {
@@ -344,8 +338,8 @@ describe("theme files", () => {
       },
     });
 
-    applyThemeColorPreview(T3_CHAT_THEME.colors, "light", true);
-    expect(getThemePreviewSidebarArtwork()).toBe(true);
+    applyThemeColorPreview(T3_CHAT_THEME.colors, "light");
+    expect(getThemePreviewSidebarArtwork()).toBe(false);
     expect(listener).toHaveBeenCalledTimes(1);
 
     applyThemePalette("system");
@@ -432,6 +426,8 @@ describe("theme files", () => {
     for (const theme of [T3_CHAT_THEME, GROVE_THEME, OCEAN_THEME, EMBER_THEME, IRIS_THEME]) {
       expect(getThemeDefinition(theme.id)).toBe(theme);
       expect(getThemeModes(theme)).toEqual(["light", "dark"]);
+      expect(theme.sidebarArtwork).toBe(true);
+      expect(themeAllowsSidebarArtwork(theme.id)).toBe(true);
       expect(theme.colors.accent).toMatch(/^oklch\(/);
       expect(theme.variants?.dark?.accent).toMatch(/^oklch\(/);
 
@@ -466,6 +462,7 @@ describe("theme files", () => {
         );
       }
     }
+    expect(themeAllowsSidebarArtwork("my-custom-theme")).toBe(false);
   });
 
   it("rejects a variant that repeats the base appearance", () => {
@@ -741,7 +738,6 @@ describe("theme files", () => {
       id: "aurora",
       label: "Aurora Night",
       colors: { accent: canonical("hsl(263 70% 58%)") },
-      sidebarArtwork: true,
     });
     const storedThemes = JSON.parse(stored.get(CUSTOM_THEMES_STORAGE_KEY) ?? "[]");
     expect(storedThemes[0]).toEqual(untouchedTheme);
@@ -749,8 +745,9 @@ describe("theme files", () => {
       id: "aurora",
       label: "Aurora Night",
       colors: { accent: canonical("hsl(263 70% 58%)") },
-      sidebarArtwork: true,
     });
+    expect(storedThemes[1]).not.toHaveProperty("sidebarArtwork");
+    expect(updatedTheme).not.toHaveProperty("sidebarArtwork");
     invalidateCustomThemes();
     expect(getCustomThemes().find((theme) => theme.id === "aurora")).toMatchObject({
       id: "aurora",
@@ -952,6 +949,7 @@ describe("theme files", () => {
       label: "Aurora Night",
       colors: { accent: canonical("hsl(263 70% 58%)") },
     });
+    expect(updatedLibrary[0]).not.toHaveProperty("sidebarArtwork");
     expect(updatedLibrary[1]).toEqual(untouchedTheme);
 
     vi.unstubAllGlobals();

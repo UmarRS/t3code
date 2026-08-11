@@ -353,18 +353,6 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(t3-mobil
     );
   }
 
-  .stage-blueprint {
-    --stage-bp-top: #67c2ff;
-    --stage-bp-mid: #347ff8;
-    --stage-bp-bottom: #1538d0;
-  }
-
-  .dark .stage-blueprint {
-    --stage-bp-top: #3a7ad1;
-    --stage-bp-mid: #2050ae;
-    --stage-bp-bottom: #101f6e;
-  }
-
   /* Each maintainer palette gives the same line art its own material: rose
      vellum, forest drafting paper, marine cyanotype, copper, and violet ink.
      These colors stay deliberately deep at the top edge so the white stage
