@@ -1,11 +1,11 @@
 import {
+  ArrowLeftIcon,
   ChartNoAxesColumnIcon,
-  ChevronRightIcon,
   ListChecksIcon,
   SettingsIcon,
 } from "lucide-react";
 import { memo, useCallback } from "react";
-import { Link, useNavigate } from "@tanstack/react-router";
+import { Link, useLocation, useNavigate } from "@tanstack/react-router";
 
 import { useProjects } from "../../state/entities";
 import { resolveAutonomousRunState } from "../issues/autonomousRun.logic";
@@ -29,8 +29,9 @@ import {
   SidebarTrigger,
   useSidebar,
 } from "../ui/sidebar";
+import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { SidebarProviderUpdatePill } from "./SidebarProviderUpdatePill";
-import { SidebarUpdatePill } from "./SidebarUpdatePill";
+import { SidebarUpdateArchitectureWarning, SidebarUpdatePill } from "./SidebarUpdatePill";
 
 export const SidebarChromeHeader = memo(function SidebarChromeHeader({
   isElectron,
@@ -131,19 +132,29 @@ function AtlasMark() {
 export const SidebarChromeFooter = memo(function SidebarChromeFooter() {
   const navigate = useNavigate();
   const { isMobile, setOpenMobile } = useSidebar();
-  const handleSettingsClick = useCallback(() => {
+  const currentFooterPage = useLocation({
+    select: (location) => (location.pathname === "/usage" ? "usage" : null),
+  });
+  const closeMobileSidebar = useCallback(() => {
     if (isMobile) {
       setOpenMobile(false);
     }
+  }, [isMobile, setOpenMobile]);
+
+  const handleSettingsClick = useCallback(() => {
+    closeMobileSidebar();
     void navigate({ to: "/settings" });
-  }, [isMobile, navigate, setOpenMobile]);
+  }, [closeMobileSidebar, navigate]);
 
   const handleUsageClick = useCallback(() => {
-    if (isMobile) {
-      setOpenMobile(false);
-    }
+    closeMobileSidebar();
     void navigate({ to: "/usage" });
-  }, [isMobile, navigate, setOpenMobile]);
+  }, [closeMobileSidebar, navigate]);
+
+  const handleBackClick = useCallback(() => {
+    closeMobileSidebar();
+    void navigate({ to: "/" });
+  }, [closeMobileSidebar, navigate]);
 
   const projects = useProjects();
   const openIssues = useCallback(
@@ -151,15 +162,13 @@ export const SidebarChromeFooter = memo(function SidebarChromeFooter() {
       environmentId: (typeof projects)[number]["environmentId"],
       projectId: (typeof projects)[number]["id"],
     ) => {
-      if (isMobile) {
-        setOpenMobile(false);
-      }
+      closeMobileSidebar();
       void navigate({
         to: "/issues/$environmentId/$projectId",
         params: { environmentId, projectId },
       });
     },
-    [isMobile, navigate, setOpenMobile],
+    [closeMobileSidebar, navigate, projects],
   );
   // A static dot, never a pulse: this sits in the chrome for the whole run.
   const autonomousRunning = projects.some(
@@ -169,44 +178,78 @@ export const SidebarChromeFooter = memo(function SidebarChromeFooter() {
   return (
     <SidebarFooter className="p-[var(--sidebar-content-inset)]">
       <SidebarProviderUpdatePill />
-      <SidebarUpdatePill />
-      <SidebarMenu>
-        <SidebarMenuItem>
-          <Menu>
-            <MenuTrigger render={<SidebarMenuButton disabled={projects.length === 0} />}>
-              <ListChecksIcon />
-              <span>Issues</span>
-              {autonomousRunning ? (
-                <span
-                  aria-label="Autonomous mode is running"
-                  className="ml-auto size-1.5 shrink-0 rounded-full bg-info"
-                  title="Autonomous mode is running"
+      <SidebarUpdateArchitectureWarning />
+      <SidebarMenu className="flex-row items-center">
+        {currentFooterPage ? (
+          <SidebarMenuItem className="min-w-0 flex-1">
+            <SidebarMenuButton onClick={handleBackClick}>
+              <ArrowLeftIcon />
+              <span>Back</span>
+            </SidebarMenuButton>
+          </SidebarMenuItem>
+        ) : (
+          <>
+            <SidebarMenuItem className="shrink-0">
+              <Menu>
+                <MenuTrigger
+                  render={
+                    <SidebarMenuButton
+                      aria-label="Issues"
+                      disabled={projects.length === 0}
+                      size="icon"
+                    />
+                  }
+                >
+                  <ListChecksIcon />
+                  {autonomousRunning ? (
+                    <span
+                      aria-label="Autonomous mode is running"
+                      className="absolute top-1 right-1 size-1.5 shrink-0 rounded-full bg-info"
+                      title="Autonomous mode is running"
+                    />
+                  ) : null}
+                </MenuTrigger>
+                <MenuPopup align="end" side="right" className="w-72">
+                  <IssuesProjectMenuGroup
+                    label="Choose a project board"
+                    projects={projects}
+                    showBoardIcon
+                    onSelect={(project) => openIssues(project.environmentId, project.id)}
+                  />
+                </MenuPopup>
+              </Menu>
+            </SidebarMenuItem>
+            <SidebarMenuItem className="shrink-0">
+              <Tooltip>
+                <TooltipTrigger
+                  render={
+                    <SidebarMenuButton
+                      aria-label="Settings"
+                      onClick={handleSettingsClick}
+                      size="icon"
+                    >
+                      <SettingsIcon />
+                    </SidebarMenuButton>
+                  }
                 />
-              ) : null}
-              <ChevronRightIcon className={cn("size-4", !autonomousRunning && "ml-auto")} />
-            </MenuTrigger>
-            <MenuPopup align="end" side="right" className="w-72">
-              <IssuesProjectMenuGroup
-                label="Choose a project board"
-                projects={projects}
-                showBoardIcon
-                onSelect={(project) => openIssues(project.environmentId, project.id)}
-              />
-            </MenuPopup>
-          </Menu>
-        </SidebarMenuItem>
-        <SidebarMenuItem>
-          <SidebarMenuButton onClick={handleUsageClick}>
-            <ChartNoAxesColumnIcon />
-            <span>Usage</span>
-          </SidebarMenuButton>
-        </SidebarMenuItem>
-        <SidebarMenuItem>
-          <SidebarMenuButton onClick={handleSettingsClick}>
-            <SettingsIcon />
-            <span>Settings</span>
-          </SidebarMenuButton>
-        </SidebarMenuItem>
+                <TooltipPopup side="top">Settings</TooltipPopup>
+              </Tooltip>
+            </SidebarMenuItem>
+            <SidebarMenuItem className="shrink-0">
+              <Tooltip>
+                <TooltipTrigger
+                  render={
+                    <SidebarMenuButton aria-label="Usage" onClick={handleUsageClick} size="icon">
+                      <ChartNoAxesColumnIcon />
+                    </SidebarMenuButton>
+                  }
+                />
+                <TooltipPopup side="top">Usage</TooltipPopup>
+              </Tooltip>
+            </SidebarMenuItem>
+          </>
+        )}
+        <SidebarUpdatePill />
       </SidebarMenu>
     </SidebarFooter>
   );
