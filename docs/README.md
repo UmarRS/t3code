@@ -9,6 +9,7 @@
 - [Plan work with issues](./user/issues.md)
 - [Scope a thread to a folder](./user/thread-scope.md)
 - [Link a project to another codebase](./user/linked-projects.md)
+- [Review usage](./user/usage.md)
 - [Customize a project icon](./user/project-settings.md)
 - [Remote access](./user/remote-access.md)
 - [Source control integrations](./user/source-control.md)
