@@ -1,10 +1,11 @@
-# T3 Code docs
+# Atlas docs
 
-## Using T3 Code
+## Using Atlas
 
 - [Permission modes](./user/permission-modes.md)
 - [Keyboard shortcuts](./user/keybindings.md)
 - [Organizing threads](./user/thread-sidebar.md)
+- [Plan work with issues](./user/issues.md)
 - [Scope a thread to a folder](./user/thread-scope.md)
 - [Customize a project icon](./user/project-settings.md)
 - [Remote access](./user/remote-access.md)
@@ -13,7 +14,7 @@
 
 ---
 
-## Working on T3 Code
+## Working on Atlas
 
 - [Architecture overview](./internals/overview.md)
 - [Workspace layout](./internals/workspace-layout.md)

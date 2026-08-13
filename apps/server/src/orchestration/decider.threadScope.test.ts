@@ -33,6 +33,7 @@ function makeReadModel(scope?: {
         deletedAt: null,
       },
     ],
+    issues: [],
     threads: [
       {
         id: THREAD_ID,

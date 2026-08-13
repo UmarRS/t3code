@@ -1,4 +1,5 @@
 import type {
+  IssueId,
   OrchestrationEvent,
   OrchestrationReadModel,
   ProjectId,
@@ -57,16 +58,35 @@ interface CommandEnvelope {
 }
 
 function commandToAggregateRef(command: OrchestrationCommand): {
-  readonly aggregateKind: "project" | "thread";
-  readonly aggregateId: ProjectId | ThreadId;
+  readonly aggregateKind: "project" | "thread" | "issue";
+  readonly aggregateId: ProjectId | ThreadId | IssueId;
 } {
   switch (command.type) {
     case "project.create":
     case "project.meta.update":
     case "project.delete":
+    case "project.autonomous.enable":
+    case "project.autonomous.disable":
       return {
         aggregateKind: "project",
         aggregateId: command.projectId,
+      };
+    // `issue.pull-request.link` is keyed by thread — it is the PR surface
+    // telling us about a thread, and the issue is resolved from it — so it
+    // deliberately falls through to the thread case below.
+    case "issue.create":
+    case "issue.update":
+    case "issue.status.set":
+    case "issue.delete":
+    case "issue.start":
+    case "issue.start.failed":
+    case "issue.attention.flag":
+    case "issue.attention.clear":
+    case "issue.review.start":
+    case "issue.review.record":
+      return {
+        aggregateKind: "issue",
+        aggregateId: command.issueId,
       };
     default:
       return {

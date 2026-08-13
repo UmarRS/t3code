@@ -46,6 +46,8 @@ import * as ProcessRunner from "./processRunner.ts";
 import * as GitManager from "./git/GitManager.ts";
 import * as Keybindings from "./keybindings.ts";
 import * as ServerRuntimeStartup from "./serverRuntimeStartup.ts";
+import { AutonomousRunReactorLive } from "./orchestration/Layers/AutonomousRunReactor.ts";
+import { IssueStartCoordinatorLive } from "./orchestration/Layers/IssueStartCoordinator.ts";
 import { OrchestrationReactorLive } from "./orchestration/Layers/OrchestrationReactor.ts";
 import { RuntimeReceiptBusLive } from "./orchestration/Layers/RuntimeReceiptBus.ts";
 import { ProviderRuntimeIngestionLive } from "./orchestration/Layers/ProviderRuntimeIngestion.ts";
@@ -210,6 +212,10 @@ const PlatformServicesLive = Layer.unwrap(
 
 const ReactorLayerLive = Layer.empty.pipe(
   Layer.provideMerge(OrchestrationReactorLive),
+  Layer.provideMerge(AutonomousRunReactorLive),
+  // Provided after the reactor that consumes it, and re-exported so the RPC
+  // layer can start issues on a client's behalf too.
+  Layer.provideMerge(IssueStartCoordinatorLive),
   Layer.provideMerge(ProviderRuntimeIngestionLive),
   Layer.provideMerge(ProviderCommandReactorLive),
   Layer.provideMerge(CheckpointReactorLive),

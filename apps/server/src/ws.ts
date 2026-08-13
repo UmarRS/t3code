@@ -16,6 +16,7 @@ import {
   type AuthEnvironmentScope,
   AuthSessionId,
   CommandId,
+  IssueId,
   type DiscoveredLocalServerList,
   EventId,
   type OrchestrationCommand,
@@ -86,6 +87,7 @@ import { issueAssetUrl } from "./assets/AssetAccess.ts";
 import * as PortScanner from "./preview/PortScanner.ts";
 import * as WorkspaceEntries from "./workspace/WorkspaceEntries.ts";
 import * as WorkspaceFileSystem from "./workspace/WorkspaceFileSystem.ts";
+import * as IssueStartCoordinator from "./orchestration/Services/IssueStartCoordinator.ts";
 import { readWorkflowScript } from "./orchestration/workflowScriptQuery.ts";
 import * as WorkspacePaths from "./workspace/WorkspacePaths.ts";
 import * as VcsStatusBroadcaster from "./vcs/VcsStatusBroadcaster.ts";
@@ -370,6 +372,7 @@ const makeWsRpcLayer = (
       const workspaceEntries = yield* WorkspaceEntries.WorkspaceEntries;
       const workspaceFileSystem = yield* WorkspaceFileSystem.WorkspaceFileSystem;
       const projectSetupScriptRunner = yield* ProjectSetupScriptRunner.ProjectSetupScriptRunner;
+      const issueStartCoordinator = yield* IssueStartCoordinator.IssueStartCoordinator;
       const serverEnvironment = yield* ServerEnvironment.ServerEnvironment;
       const backgroundPolicy = yield* BackgroundPolicy.BackgroundPolicy;
       const rpcClientIds = yield* Ref.make(new Set<RpcClientId>());
@@ -557,7 +560,18 @@ const makeWsRpcLayer = (
             );
           case "thread.unarchived":
             return threadUpsertOrRemove(event.payload.threadId, event.sequence);
+          case "issue.deleted":
+            return Effect.succeed(
+              Option.some({
+                kind: "issue-removed" as const,
+                sequence: event.sequence,
+                issueId: event.payload.issueId,
+              }),
+            );
           default:
+            if (event.aggregateKind === "issue") {
+              return issueUpsertOrRemove(IssueId.make(event.aggregateId), event.sequence);
+            }
             if (event.aggregateKind !== "thread") {
               return Effect.succeed(Option.none());
             }
@@ -571,7 +585,7 @@ const makeWsRpcLayer = (
       // If both attempts fail, log and drop the stream item; treating an error as
       // a missing row would incorrectly remove a still-active aggregate.
       const retryShellProjectionRead = <A, E>(
-        aggregateKind: "project" | "thread",
+        aggregateKind: "project" | "thread" | "issue",
         aggregateId: string,
         read: Effect.Effect<A, E>,
       ): Effect.Effect<Option.Option<A>, never, never> =>
@@ -611,6 +625,38 @@ const makeWsRpcLayer = (
                     kind: "project-upserted" as const,
                     sequence,
                     project: nextProject,
+                  }),
+              }),
+            ),
+          ),
+        );
+
+      // Same coalescing contract as threads: refetch the issue summary and emit
+      // a removal when the row is gone, so a burst that collapses a delete into
+      // a later event for the same issue still tells the dashboard to drop it.
+      const issueUpsertOrRemove = (
+        issueId: IssueId,
+        sequence: number,
+      ): Effect.Effect<Option.Option<OrchestrationShellStreamEvent>, never, never> =>
+        retryShellProjectionRead(
+          "issue",
+          issueId,
+          projectionSnapshotQuery.getIssueSummaryById(issueId),
+        ).pipe(
+          Effect.map(
+            Option.flatMap((issue) =>
+              Option.match(issue, {
+                onNone: () =>
+                  Option.some<OrchestrationShellStreamEvent>({
+                    kind: "issue-removed" as const,
+                    sequence,
+                    issueId,
+                  }),
+                onSome: (nextIssue) =>
+                  Option.some<OrchestrationShellStreamEvent>({
+                    kind: "issue-upserted" as const,
+                    sequence,
+                    issue: nextIssue,
                   }),
               }),
             ),
@@ -969,13 +1015,18 @@ const makeWsRpcLayer = (
         const dispatchEffect =
           normalizedCommand.type === "thread.turn.start" && normalizedCommand.bootstrap
             ? dispatchBootstrapTurnStart(normalizedCommand)
-            : orchestrationEngine
-                .dispatch(normalizedCommand)
-                .pipe(
-                  Effect.mapError((cause) =>
-                    toDispatchCommandError(cause, "Failed to dispatch orchestration command"),
-                  ),
-                );
+            : normalizedCommand.type === "issue.start"
+              ? // Starting an issue is a composite (gate, worktree, thread,
+                // seeded turn) shared with the autonomous reactor, so it lives
+                // in a service rather than in this RPC handler.
+                issueStartCoordinator.startIssue(normalizedCommand)
+              : orchestrationEngine
+                  .dispatch(normalizedCommand)
+                  .pipe(
+                    Effect.mapError((cause) =>
+                      toDispatchCommandError(cause, "Failed to dispatch orchestration command"),
+                    ),
+                  );
 
         return startup
           .enqueueCommand(dispatchEffect)
@@ -1291,6 +1342,27 @@ const makeWsRpcLayer = (
                 (cause) =>
                   new OrchestrationGetSnapshotError({
                     message: "Failed to load archived orchestration shell snapshot",
+                    cause,
+                  }),
+              ),
+            ),
+            { "rpc.aggregate": "orchestration" },
+          ),
+        [ORCHESTRATION_WS_METHODS.getIssue]: (input) =>
+          observeRpcEffect(
+            ORCHESTRATION_WS_METHODS.getIssue,
+            projectionSnapshotQuery.getIssueDetailById(input.issueId).pipe(
+              Effect.map((issue) => ({ issue: Option.getOrNull(issue) })),
+              Effect.tapError((cause) =>
+                Effect.logError("orchestration issue detail load failed", {
+                  issueId: input.issueId,
+                  cause,
+                }),
+              ),
+              Effect.mapError(
+                (cause) =>
+                  new OrchestrationGetSnapshotError({
+                    message: "Failed to load issue",
                     cause,
                   }),
               ),

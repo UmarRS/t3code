@@ -1,4 +1,10 @@
-import type { OrchestrationEvent, OrchestrationReadModel, ThreadId } from "@t3tools/contracts";
+import type {
+  IssueId,
+  OrchestrationEvent,
+  OrchestrationIssue,
+  OrchestrationReadModel,
+  ThreadId,
+} from "@t3tools/contracts";
 import {
   OrchestrationCheckpointSummary,
   OrchestrationMessage,
@@ -33,9 +39,23 @@ import {
   ThreadRevertedPayload,
   ThreadSessionSetPayload,
   ThreadTurnDiffCompletedPayload,
+  IssueCreatedPayload,
+  IssueDeletedPayload,
+  IssuePullRequestLinkedPayload,
+  IssueStartedPayload,
+  IssueStartFailedPayload,
+  IssueStatusSetPayload,
+  IssueUpdatedPayload,
+  IssueAttentionClearedPayload,
+  IssueAttentionFlaggedPayload,
+  IssueReviewRecordedPayload,
+  IssueReviewStartedPayload,
+  ProjectAutonomousDisabledPayload,
+  ProjectAutonomousEnabledPayload,
 } from "./Schemas.ts";
 
 type ThreadPatch = Partial<Omit<OrchestrationThread, "id" | "projectId">>;
+type IssuePatch = Partial<Omit<OrchestrationIssue, "id" | "projectId">>;
 const MAX_THREAD_MESSAGES = 2_000;
 const MAX_THREAD_CHECKPOINTS = 500;
 
@@ -74,6 +94,14 @@ function updateThread(
   patch: ThreadPatch,
 ): OrchestrationThread[] {
   return threads.map((thread) => (thread.id === threadId ? { ...thread, ...patch } : thread));
+}
+
+function updateIssue(
+  issues: ReadonlyArray<OrchestrationIssue>,
+  issueId: IssueId,
+  patch: IssuePatch,
+): OrchestrationIssue[] {
+  return issues.map((issue) => (issue.id === issueId ? { ...issue, ...patch } : issue));
 }
 
 function decodeForEvent<A>(
@@ -190,6 +218,7 @@ export function createEmptyReadModel(nowIso: string): OrchestrationReadModel {
     snapshotSequence: 0,
     projects: [],
     threads: [],
+    issues: [],
     updatedAt: nowIso,
   };
 }
@@ -802,6 +831,226 @@ export function projectEvent(
             }),
           };
         }),
+      );
+
+    case "issue.created":
+      return decodeForEvent(IssueCreatedPayload, event.payload, event.type, "payload").pipe(
+        Effect.map((payload) => {
+          // The read model carries issue summaries only; the markdown body
+          // lives in the projection table and is fetched per issue.
+          const issue: OrchestrationIssue = {
+            id: payload.issueId,
+            projectId: payload.projectId,
+            title: payload.title,
+            status: payload.status,
+            priority: payload.priority,
+            modelSelection: payload.modelSelection,
+            dependsOn: payload.dependsOn,
+            threadId: null,
+            pullRequestUrl: null,
+            createdAt: payload.createdAt,
+            updatedAt: payload.updatedAt,
+            deletedAt: null,
+          };
+          const existing = nextBase.issues.find((entry) => entry.id === issue.id);
+          return {
+            ...nextBase,
+            issues: existing
+              ? nextBase.issues.map((entry) => (entry.id === issue.id ? issue : entry))
+              : [...nextBase.issues, issue],
+          };
+        }),
+      );
+
+    case "issue.updated":
+      return decodeForEvent(IssueUpdatedPayload, event.payload, event.type, "payload").pipe(
+        Effect.map((payload) => ({
+          ...nextBase,
+          issues: updateIssue(nextBase.issues, payload.issueId, {
+            ...(payload.title !== undefined ? { title: payload.title } : {}),
+            ...(payload.priority !== undefined ? { priority: payload.priority } : {}),
+            ...(payload.modelSelection !== undefined
+              ? { modelSelection: payload.modelSelection }
+              : {}),
+            ...(payload.dependsOn !== undefined ? { dependsOn: payload.dependsOn } : {}),
+            ...(payload.threadId !== undefined ? { threadId: payload.threadId } : {}),
+            updatedAt: payload.updatedAt,
+          }),
+        })),
+      );
+
+    case "issue.status-set":
+      return decodeForEvent(IssueStatusSetPayload, event.payload, event.type, "payload").pipe(
+        Effect.map((payload) => ({
+          ...nextBase,
+          issues: updateIssue(nextBase.issues, payload.issueId, {
+            status: payload.status,
+            updatedAt: payload.updatedAt,
+          }),
+        })),
+      );
+
+    case "issue.deleted":
+      return decodeForEvent(IssueDeletedPayload, event.payload, event.type, "payload").pipe(
+        Effect.map((payload) => ({
+          ...nextBase,
+          issues: updateIssue(nextBase.issues, payload.issueId, {
+            deletedAt: payload.deletedAt,
+            updatedAt: payload.deletedAt,
+          }),
+        })),
+      );
+
+    case "issue.started":
+      return decodeForEvent(IssueStartedPayload, event.payload, event.type, "payload").pipe(
+        Effect.map((payload) => ({
+          ...nextBase,
+          issues: updateIssue(nextBase.issues, payload.issueId, {
+            threadId: payload.threadId,
+            status: payload.status,
+            updatedAt: payload.updatedAt,
+          }),
+        })),
+      );
+
+    case "issue.start-failed":
+      return decodeForEvent(IssueStartFailedPayload, event.payload, event.type, "payload").pipe(
+        Effect.map((payload) => ({
+          ...nextBase,
+          issues: updateIssue(nextBase.issues, payload.issueId, {
+            // Rewind the optimistic start: the thread never came up, so the
+            // issue must be startable again.
+            threadId: null,
+            status: payload.status,
+            updatedAt: payload.updatedAt,
+          }),
+        })),
+      );
+
+    case "issue.pull-request-linked":
+      return decodeForEvent(
+        IssuePullRequestLinkedPayload,
+        event.payload,
+        event.type,
+        "payload",
+      ).pipe(
+        Effect.map((payload) => ({
+          ...nextBase,
+          issues: updateIssue(nextBase.issues, payload.issueId, {
+            pullRequestUrl: payload.pullRequestUrl,
+            ...(payload.status !== undefined ? { status: payload.status } : {}),
+            updatedAt: payload.updatedAt,
+          }),
+        })),
+      );
+
+    case "issue.attention-flagged":
+      return decodeForEvent(
+        IssueAttentionFlaggedPayload,
+        event.payload,
+        event.type,
+        "payload",
+      ).pipe(
+        Effect.map((payload) => ({
+          ...nextBase,
+          issues: updateIssue(nextBase.issues, payload.issueId, {
+            needsAttentionAt: payload.needsAttentionAt,
+            needsAttentionReason: payload.reason,
+            updatedAt: payload.updatedAt,
+          }),
+        })),
+      );
+
+    case "issue.attention-cleared":
+      return decodeForEvent(
+        IssueAttentionClearedPayload,
+        event.payload,
+        event.type,
+        "payload",
+      ).pipe(
+        Effect.map((payload) => ({
+          ...nextBase,
+          issues: updateIssue(nextBase.issues, payload.issueId, {
+            needsAttentionAt: null,
+            needsAttentionReason: null,
+            updatedAt: payload.updatedAt,
+          }),
+        })),
+      );
+
+    case "issue.review-started":
+      return decodeForEvent(IssueReviewStartedPayload, event.payload, event.type, "payload").pipe(
+        Effect.map((payload) => ({
+          ...nextBase,
+          issues: updateIssue(nextBase.issues, payload.issueId, {
+            reviewerThreadId: payload.reviewerThreadId,
+            updatedAt: payload.updatedAt,
+          }),
+        })),
+      );
+
+    case "issue.review-recorded":
+      return decodeForEvent(IssueReviewRecordedPayload, event.payload, event.type, "payload").pipe(
+        Effect.map((payload) => ({
+          ...nextBase,
+          // The notes themselves are not in the read model — like descriptions,
+          // they live in the projection table and are fetched per issue.
+          issues: updateIssue(nextBase.issues, payload.issueId, {
+            reviewVerdict: payload.verdict,
+            reviewerThreadId: payload.reviewerThreadId,
+            reviewedAt: payload.reviewedAt,
+            ...(payload.status !== undefined ? { status: payload.status } : {}),
+            updatedAt: payload.updatedAt,
+          }),
+        })),
+      );
+
+    case "project.autonomous-enabled":
+      return decodeForEvent(
+        ProjectAutonomousEnabledPayload,
+        event.payload,
+        event.type,
+        "payload",
+      ).pipe(
+        Effect.map((payload) => ({
+          ...nextBase,
+          projects: nextBase.projects.map((project) =>
+            project.id === payload.projectId
+              ? {
+                  ...project,
+                  autonomousStartedAt: payload.autonomousStartedAt,
+                  // A fresh run clears the previous run's outcome so the UI
+                  // never shows "finished" over a run that is live again.
+                  autonomousFinishedAt: null,
+                  autonomousFinishedReason: null,
+                  updatedAt: payload.updatedAt,
+                }
+              : project,
+          ),
+        })),
+      );
+
+    case "project.autonomous-disabled":
+      return decodeForEvent(
+        ProjectAutonomousDisabledPayload,
+        event.payload,
+        event.type,
+        "payload",
+      ).pipe(
+        Effect.map((payload) => ({
+          ...nextBase,
+          projects: nextBase.projects.map((project) =>
+            project.id === payload.projectId
+              ? {
+                  ...project,
+                  autonomousStartedAt: null,
+                  autonomousFinishedAt: payload.autonomousFinishedAt,
+                  autonomousFinishedReason: payload.reason,
+                  updatedAt: payload.updatedAt,
+                }
+              : project,
+          ),
+        })),
       );
 
     default:

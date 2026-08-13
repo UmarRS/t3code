@@ -43,7 +43,7 @@ export class GitHubCliAuthenticationError extends Schema.TaggedErrorClass<GitHub
   gitHubCliFailureFields,
 ) {
   get detail(): string {
-    return "GitHub CLI is not authenticated. Run `gh auth login` and retry.";
+    return "GitHub CLI could not authenticate or authorize this request. Check GitHub in Settings → Connections, then retry.";
   }
 
   override get message(): string {

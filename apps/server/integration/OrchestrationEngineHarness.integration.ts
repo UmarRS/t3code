@@ -62,6 +62,7 @@ import {
   OrchestrationEngineService,
   type OrchestrationEngineShape,
 } from "../src/orchestration/Services/OrchestrationEngine.ts";
+import { AutonomousRunReactor } from "../src/orchestration/Services/AutonomousRunReactor.ts";
 import { ThreadDeletionReactor } from "../src/orchestration/Services/ThreadDeletionReactor.ts";
 import { OrchestrationReactor } from "../src/orchestration/Services/OrchestrationReactor.ts";
 import { ProjectionSnapshotQuery } from "../src/orchestration/Services/ProjectionSnapshotQuery.ts";
@@ -370,6 +371,15 @@ export const makeOrchestrationIntegrationHarness = (
       Layer.provideMerge(checkpointReactorLayer),
       Layer.provideMerge(
         Layer.succeed(ThreadDeletionReactor, {
+          start: () => Effect.void,
+          drain: Effect.void,
+        }),
+      ),
+      // This harness exercises the provider/checkpoint flows; the autonomous
+      // run loop has its own tests and would otherwise pull the whole git and
+      // provider-registry stack into every scenario here.
+      Layer.provideMerge(
+        Layer.succeed(AutonomousRunReactor, {
           start: () => Effect.void,
           drain: Effect.void,
         }),

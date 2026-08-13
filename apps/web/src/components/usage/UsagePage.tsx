@@ -89,9 +89,14 @@ export function UsagePage() {
         <ScrollArea className="min-h-0 flex-1">
           <div className="mx-auto flex w-full max-w-6xl flex-col gap-8 px-6 py-6">
             <div className="flex flex-wrap items-center justify-between gap-4">
-              <p className="text-sm text-muted-foreground">
-                {formatDayShort(window.sinceDay)} to {formatDayShort(window.untilDay)}
-              </p>
+              <div>
+                <p className="text-sm text-muted-foreground">
+                  {formatDayShort(window.sinceDay)} to {formatDayShort(window.untilDay)}
+                </p>
+                <p className="mt-1 text-xs text-muted-foreground">
+                  Transcript usage, not subscription quota. Plan limits remain provider-controlled.
+                </p>
+              </div>
               <div className="flex items-center gap-2">
                 <div className="flex overflow-hidden rounded-md border border-border">
                   {WINDOW_OPTIONS.map((option) => (

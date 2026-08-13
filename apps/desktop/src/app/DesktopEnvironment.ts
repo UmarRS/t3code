@@ -79,7 +79,7 @@ export class DesktopEnvironment extends Context.Service<
   }
 >()("@t3tools/desktop/app/DesktopEnvironment") {}
 
-const APP_BASE_NAME = "T3 Code";
+const APP_BASE_NAME = "Atlas";
 
 function resolveDesktopAppStageLabel(input: {
   readonly isDevelopment: boolean;
@@ -89,7 +89,7 @@ function resolveDesktopAppStageLabel(input: {
     return "Dev";
   }
 
-  return isNightlyDesktopVersion(input.appVersion) ? "Nightly" : "Alpha";
+  return isNightlyDesktopVersion(input.appVersion) ? "Nightly" : "Release";
 }
 
 function resolveDesktopAppBranding(input: {
@@ -100,7 +100,8 @@ function resolveDesktopAppBranding(input: {
   return {
     baseName: APP_BASE_NAME,
     stageLabel,
-    displayName: `${APP_BASE_NAME} (${stageLabel})`,
+    // Release ships as the bare product name; Dev/Nightly stay suffixed.
+    displayName: stageLabel === "Release" ? APP_BASE_NAME : `${APP_BASE_NAME} (${stageLabel})`,
   };
 }
 
@@ -169,6 +170,8 @@ const make = Effect.fn("desktop.environment.make")(function* (
     t3Home: config.t3Home,
   });
   const userDataDirName = isDevelopment ? "t3code-dev" : "t3code";
+  // Pre-Atlas installs stored userData under the old display name. Keep these
+  // exact strings so existing desktop state still migrates.
   const legacyUserDataDirName = isDevelopment ? "T3 Code (Dev)" : "T3 Code (Alpha)";
   const linuxApplicationsDir = path.join(
     Option.getOrElse(config.xdgDataHome, () => path.join(homeDirectory, ".local", "share")),

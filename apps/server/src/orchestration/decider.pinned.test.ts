@@ -26,6 +26,7 @@ function makeReadModel(input: {
   return {
     snapshotSequence: 0,
     projects: [],
+    issues: [],
     threads: [
       {
         id: ThreadId.make("thread-1"),

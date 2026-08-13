@@ -1,12 +1,14 @@
 # Glossary
 
-> For maintainers. Using T3 Code? See [docs/user](../user/).
+> For maintainers. Using Atlas? See [docs/user](../user/).
 
-This is a living glossary for T3 Code. It explains what common terms mean in this codebase.
+This is a living glossary for Atlas. It explains what common terms mean in this codebase.
 
 ## Table of contents
 
 - [Project and workspace](#project-and-workspace)
+- [Issues](#issues)
+- [Autonomous mode](#autonomous-mode)
 - [Thread timeline](#thread-timeline)
 - [Orchestration](#orchestration)
 - [Provider runtime](#provider-runtime)
@@ -34,6 +36,135 @@ The narrowing of a thread to part of its workspace, so an agent in a large repos
 
 Scope moves the agent's cwd only. `resolveThreadWorkspaceCwd` stays at the workspace root, so worktrees, checkpoints, and diffs keep covering the whole repository — restore and review must not narrow with the agent. Changing either half restarts the provider session on its resume cursor, since both adapters fix their directory grants at session start.
 
+### Issues
+
+#### Issue
+
+A unit of planned work inside a project, event-sourced as its own aggregate
+alongside `project` and `thread`. An issue has a title, a markdown description,
+a status, an optional priority, a list of issues it depends on, and — once
+started — the thread doing the work. Shapes live in
+`packages/contracts/src/issues.ts`; the aggregate is decided in [decider.ts][8]
+and projected by [projector.ts][4] and [ProjectionPipeline.ts][11].
+
+Issue summaries ride the shell snapshot next to projects and threads. The
+markdown description is the one unbounded field and is deliberately left out of
+list payloads; `orchestration.getIssue` fetches it for a single issue, the same
+summary/detail split threads use for their messages.
+
+#### Issue status
+
+One of `backlog`, `in_progress`, `in_review`, `done`, `canceled`. It is a label
+the user owns, not a ratchet: every transition is legal in both directions, and
+`done` going back to `backlog` is a normal correction. Only two moves are
+automatic — `in_progress` when an issue is started, and `in_review` when a pull
+request is linked to the started thread. Merge detection is out of scope; `done`
+is always manual.
+
+#### Dependency
+
+An edge from one issue to another in the same project. Dependencies are
+validated in [commandInvariants.ts][9]: the target must exist in the same
+project, an issue may not depend on itself, and the edge set must leave the
+project graph acyclic (`findIssueDependencyCycle` in the contracts). They are
+also the **start gate**: `issue.start` is rejected while any dependency is not
+`done`, so an agent never gets a worktree for work whose groundwork is missing.
+
+#### Starting an issue
+
+`issue.start` opens a thread for the issue's project in an isolated worktree,
+seeds its first turn with a prompt built from the issue title, description, and
+the titles of its finished dependencies, links thread to issue, and moves the
+issue to `in_progress`. The composite lives in one service,
+`apps/server/src/orchestration/Layers/IssueStartCoordinator.ts`, shared by the
+client's `issue.start` dispatch in [ws.ts][ws] and by autonomous mode; if the
+bootstrap fails after the issue is already marked in progress,
+`issue.start-failed` rewinds it.
+
+#### Story decomposition
+
+Asking an agent to break a feature into stories. The agent ends its final
+message with one fenced ` ```t3-issues ` block of JSON, and when the turn
+completes [ProviderRuntimeIngestion.ts][5] parses it and creates the issues on
+the thread's project. The parser is pure and lives in
+`apps/server/src/orchestration/issueDecomposition.ts`; a block it cannot read
+becomes an error activity on the thread rather than a failed turn. The
+instruction that tells an agent how to emit the block is exported from the
+contracts as `ISSUE_DECOMPOSITION_PROMPT_INSTRUCTIONS` so the format lives in
+exactly one place.
+
+### Autonomous mode
+
+#### Autonomous mode
+
+A per-project run in which the server works the backlog with no human in the
+loop: it starts every startable issue, opens each one's pull request when its
+worker finishes, and reviews and merges them one at a time. Turned on with
+`project.autonomous.enable` and off with `project.autonomous.disable`; a live
+run is a non-null `autonomousStartedAt` on the project. Disabling stops future
+starts and reviews but deliberately leaves in-flight threads alone — killing an
+agent mid-edit is worse than letting it finish. The loop lives in
+`apps/server/src/orchestration/Layers/AutonomousRunReactor.ts`.
+
+Everything it spawns is forced to `runtimeMode: "full-access"` and
+`interactionMode: "default"`: a run with nobody watching cannot answer an
+approval prompt, so an interactive mode would simply hang.
+
+#### Startable
+
+An issue autonomous mode may pick up right now: status `backlog`, not flagged
+needs-attention, no thread yet, and every dependency `done`. Defined by
+`startableAutonomousIssues` in `packages/contracts/src/issues.ts` so the server
+and any UI progress indicator agree. Everything the loop decides is derived from
+projected state rather than memory, which is what makes it restart-safe: an
+issue that already has a thread is not startable, so a replayed event cannot
+double-start it.
+
+#### Run complete
+
+Nothing startable and nothing in `in_progress` or `in_review`
+(`isAutonomousRunComplete`). The server then auto-disables the run with reason
+`completed`, as opposed to `disabled` for a user stop, so a client can tell a
+finished run from a stopped one. Because flagged issues count as neither
+startable nor active, a backlog of nothing but parked work terminates instead of
+spinning.
+
+#### Merge queue
+
+The serialized half of a run. Starts fan out — independent issues have no reason
+to wait for each other — but reviews funnel through one `DrainableWorker`, so
+each reviewer rebases onto a base branch that already contains the siblings that
+landed before it. The queue holds on a reviewer until its verdict is recorded.
+
+#### Reviewer
+
+A thread the merge queue opens inside the worker's own worktree, on the
+strongest Opus the Claude adapter exposes (`reviewerModelSelection.ts` reads the
+adapter's catalog order rather than hard-coding a slug). Its brief is
+fix-then-merge: read the diff, run the touched tests, fix what it finds, rebase,
+and merge the pull request. It closes with a fenced ` ```t3-review ` block
+carrying `{ verdict, notes }`, parsed by
+`apps/server/src/orchestration/issueReview.ts` at the same turn-completion seam
+story decomposition uses. A missing or malformed block _becomes_ a
+`needs_attention` verdict — a reviewer that cannot say whether it merged has not
+established that the work is safe, and silence must never stall the queue.
+
+#### Needs attention
+
+A flag on an issue, not a sixth status: the issue keeps whatever status it
+reached and is simply excluded from autonomous work. Raised by the server when a
+worker session errors, a pull request cannot be opened, or a reviewer refuses to
+merge. Cleared by the user with `issue.attention.clear`, which makes a backlog
+issue startable again — the way out of every automatic park.
+
+#### Review notes
+
+The reviewer's markdown record of what it checked, fixed, and decided, carried
+on `issue.review-recorded` and stored on the issue. Like descriptions, notes are
+unbounded and therefore ride the detail read (`orchestration.getIssue`) rather
+than the shell snapshot; the summary carries only `reviewVerdict`,
+`reviewerThreadId`, and `reviewedAt`.
+
 ### Thread timeline
 
 #### Thread
@@ -54,7 +185,7 @@ Orchestration is the server-side domain layer that turns runtime activity into s
 
 #### Aggregate
 
-The domain object a command or event belongs to. In [the contracts][1], that is usually `project` or `thread`. See [decider.ts][8].
+The domain object a command or event belongs to. In [the contracts][1], that is `project`, `thread`, or `issue`. See [decider.ts][8].
 
 #### Command
 
@@ -185,3 +316,4 @@ The file patch and changed-file summary for one turn. It is usually computed in 
 [22]: ../../apps/server/src/checkpointing/Utils.ts
 [23]: ../../apps/server/src/checkpointing/Diffs.ts
 [24]: ./overview.md
+[ws]: ../../apps/server/src/ws.ts

@@ -22,8 +22,10 @@ import * as Option from "effect/Option";
 import { AsyncResult } from "effect/unstable/reactivity";
 import { useCallback } from "react";
 
+import { resolveIssuePullRequestLink } from "../lib/issuePullRequestLink";
 import { appAtomRegistry } from "../rpc/atomRegistry";
 import { gitEnvironment } from "./git";
+import { issueEnvironment, readIssueForThread } from "./issues";
 import { useEnvironmentQuery } from "./query";
 import { sourceControlEnvironment } from "./sourceControl";
 import { useAtomCommand } from "./use-atom-command";
@@ -198,8 +200,19 @@ export function useVcsPullAction(scope: SourceControlActionScope) {
   });
 }
 
-export function useGitStackedAction(scope: SourceControlActionScope) {
+/**
+ * Every source-control action that can open a pull request funnels through
+ * here, so the issue link is dispatched here too: pass the thread the action
+ * belongs to and an issue backed by that thread moves itself to review.
+ */
+export function useGitStackedAction(
+  scope: SourceControlActionScope,
+  options?: { readonly threadId?: ThreadId | null },
+) {
   const runStackedAction = useAtomCommand(vcsActionManager.runStackedAction(scope), {
+    reportFailure: false,
+  });
+  const linkIssuePullRequest = useAtomCommand(issueEnvironment.linkPullRequest, {
     reportFailure: false,
   });
   const status = useEnvironmentQuery(
@@ -210,6 +223,7 @@ export function useGitStackedAction(scope: SourceControlActionScope) {
         })
       : null,
   );
+  const threadId = options?.threadId ?? null;
 
   const action = useCallback(
     async (input: {
@@ -220,7 +234,8 @@ export function useGitStackedAction(scope: SourceControlActionScope) {
       filePaths?: string[];
       onProgress?: (event: GitActionProgressEvent) => void;
     }) => {
-      if (resolveScope(scope) === null) {
+      const target = resolveScope(scope);
+      if (target === null) {
         return AsyncResult.failure<never, VcsActionUnavailableError>(
           Cause.fail(
             new VcsActionUnavailableError({
@@ -231,7 +246,7 @@ export function useGitStackedAction(scope: SourceControlActionScope) {
           ),
         );
       }
-      return runStackedAction({
+      const result = await runStackedAction({
         actionId: input.actionId,
         action: input.action,
         ...(input.commitMessage ? { commitMessage: input.commitMessage } : {}),
@@ -239,8 +254,22 @@ export function useGitStackedAction(scope: SourceControlActionScope) {
         ...(input.filePaths?.length ? { filePaths: input.filePaths } : {}),
         ...(input.onProgress ? { onProgress: input.onProgress } : {}),
       });
+      if (AsyncResult.isSuccess(result)) {
+        const link = resolveIssuePullRequestLink({
+          result: result.value,
+          threadId,
+          threadHasIssue:
+            threadId !== null && readIssueForThread(target.environmentId, threadId) !== null,
+        });
+        if (link !== null) {
+          // Best effort: the pull request exists either way, and a failed link
+          // must not turn a successful action into a failed one.
+          void linkIssuePullRequest({ environmentId: target.environmentId, input: link });
+        }
+      }
+      return result;
     },
-    [runStackedAction, scope],
+    [linkIssuePullRequest, runStackedAction, scope, threadId],
   );
 
   return useAction({

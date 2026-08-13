@@ -121,6 +121,7 @@ import * as PortScanner from "./preview/PortScanner.ts";
 import * as BrowserTraceCollector from "./observability/BrowserTraceCollector.ts";
 import * as ProjectFaviconResolver from "./project/ProjectFaviconResolver.ts";
 import * as T3ProjectFileLoader from "./project/T3ProjectFileLoader.ts";
+import * as IssueStartCoordinatorService from "./orchestration/Services/IssueStartCoordinator.ts";
 import * as ProjectSetupScriptRunner from "./project/ProjectSetupScriptRunner.ts";
 import * as RepositoryIdentityResolver from "./project/RepositoryIdentityResolver.ts";
 import * as ServerEnvironment from "./environment/ServerEnvironment.ts";
@@ -197,6 +198,7 @@ const makeDefaultOrchestrationReadModel = () => {
   return {
     snapshotSequence: 0,
     updatedAt: now,
+    issues: [],
     projects: [
       {
         id: defaultProjectId,
@@ -394,6 +396,7 @@ const buildAppUnderTest = (options?: {
     projectSetupScriptRunner?: Partial<
       ProjectSetupScriptRunner.ProjectSetupScriptRunner["Service"]
     >;
+    issueStartCoordinator?: Partial<IssueStartCoordinatorService.IssueStartCoordinator["Service"]>;
     terminalManager?: Partial<TerminalManager.TerminalManager["Service"]>;
     orchestrationEngine?: Partial<OrchestrationEngine.OrchestrationEngineService["Service"]>;
     projectionSnapshotQuery?: Partial<ProjectionSnapshotQuery.ProjectionSnapshotQuery["Service"]>;
@@ -712,10 +715,17 @@ const buildAppUnderTest = (options?: {
       ),
       Layer.provideMerge(vcsStatusBroadcasterLayer),
       Layer.provide(
-        Layer.mock(ProjectSetupScriptRunner.ProjectSetupScriptRunner)({
-          runForThread: () => Effect.succeed({ status: "no-script" as const }),
-          ...options?.layers?.projectSetupScriptRunner,
-        }),
+        Layer.mergeAll(
+          Layer.mock(ProjectSetupScriptRunner.ProjectSetupScriptRunner)({
+            runForThread: () => Effect.succeed({ status: "no-script" as const }),
+            ...options?.layers?.projectSetupScriptRunner,
+          }),
+          Layer.mock(IssueStartCoordinatorService.IssueStartCoordinator)({
+            startIssue: () => Effect.succeed({ sequence: 0 }),
+            startIssueReview: () => Effect.succeed({ sequence: 0 }),
+            ...options?.layers?.issueStartCoordinator,
+          }),
+        ),
       ),
       Layer.provide(
         Layer.mock(TerminalManager.TerminalManager)({
@@ -764,6 +774,7 @@ const buildAppUnderTest = (options?: {
               snapshotSequence: 0,
               projects: [],
               threads: [],
+              issues: [],
               updatedAt: "1970-01-01T00:00:00.000Z",
             }),
           getArchivedShellSnapshot: () =>
@@ -771,6 +782,7 @@ const buildAppUnderTest = (options?: {
               snapshotSequence: 0,
               projects: [],
               threads: [],
+              issues: [],
               updatedAt: "1970-01-01T00:00:00.000Z",
             }),
           searchThreads: () => Effect.succeed({ matches: [] }),
@@ -1534,7 +1546,7 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
         },
         scope: "orchestration:read orchestration:operate terminal:operate review:write",
         clientMetadata: {
-          label: "T3 Code Mobile",
+          label: "Atlas Mobile",
           deviceType: "mobile",
           os: "iOS",
         },
@@ -1561,7 +1573,7 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
       assert.equal(response.status, 200);
       assert.equal(clientsResponse.status, 200);
       assert.deepInclude(mobileClient?.client, {
-        label: "T3 Code Mobile",
+        label: "Atlas Mobile",
         deviceType: "mobile",
         os: "iOS",
         ipAddress: "127.0.0.1",
@@ -4269,6 +4281,7 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
       const snapshot = {
         snapshotSequence: 1,
         updatedAt: now,
+        issues: [],
         projects: [
           {
             id: ProjectId.make("project-a"),
@@ -4512,6 +4525,7 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
                   snapshotSequence: 1,
                   projects: [],
                   threads: [makeDefaultOrchestrationThreadShell()],
+                  issues: [],
                   updatedAt: "2026-01-01T00:00:00.000Z",
                 };
               }),
@@ -4770,6 +4784,7 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
                 snapshotSequence: 100_000,
                 projects: [],
                 threads: [makeDefaultOrchestrationThreadShell({ id: snapshotThreadId })],
+                issues: [],
                 updatedAt: now,
               }),
           },
@@ -4817,6 +4832,7 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
                 snapshotSequence: 5,
                 projects: [],
                 threads: [],
+                issues: [],
                 updatedAt: "2026-01-01T00:00:00.000Z",
               }),
           },

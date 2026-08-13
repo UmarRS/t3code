@@ -1,7 +1,7 @@
-# T3 Code (personal fork)
+# Atlas (personal fork)
 
 A stripped-down, macOS-only fork of [T3 Code](https://github.com/pingdotgg/t3code) — an "agent
-harness control surface" that wraps provider CLIs behind a desktop GUI.
+harness control surface" that wraps provider CLIs behind a desktop GUI. This fork ships as **Atlas**.
 
 This fork exists to be customized, not distributed. Relative to upstream it drops everything that
 served other platforms or the hosted product:

@@ -16,6 +16,10 @@ import * as SqlClient from "effect/unstable/sql/SqlClient";
 import { toPersistenceSqlError, type ProjectionRepositoryError } from "../../persistence/Errors.ts";
 import { OrchestrationEventStore } from "../../persistence/Services/OrchestrationEventStore.ts";
 import { ProjectionPendingApprovalRepository } from "../../persistence/Services/ProjectionPendingApprovals.ts";
+import {
+  type ProjectionIssue,
+  ProjectionIssueRepository,
+} from "../../persistence/Services/ProjectionIssues.ts";
 import { ProjectionProjectRepository } from "../../persistence/Services/ProjectionProjects.ts";
 import { ProjectionStateRepository } from "../../persistence/Services/ProjectionState.ts";
 import { ProjectionThreadActivityRepository } from "../../persistence/Services/ProjectionThreadActivities.ts";
@@ -35,6 +39,7 @@ import {
 } from "../../persistence/Services/ProjectionTurns.ts";
 import { ProjectionThreadRepository } from "../../persistence/Services/ProjectionThreads.ts";
 import { ProjectionPendingApprovalRepositoryLive } from "../../persistence/Layers/ProjectionPendingApprovals.ts";
+import { ProjectionIssueRepositoryLive } from "../../persistence/Layers/ProjectionIssues.ts";
 import { ProjectionProjectRepositoryLive } from "../../persistence/Layers/ProjectionProjects.ts";
 import { ProjectionStateRepositoryLive } from "../../persistence/Layers/ProjectionState.ts";
 import { ProjectionThreadActivityRepositoryLive } from "../../persistence/Layers/ProjectionThreadActivities.ts";
@@ -57,6 +62,7 @@ import {
 
 export const ORCHESTRATION_PROJECTOR_NAMES = {
   projects: "projection.projects",
+  issues: "projection.issues",
   threads: "projection.threads",
   threadMessages: "projection.thread-messages",
   threadProposedPlans: "projection.thread-proposed-plans",
@@ -473,6 +479,7 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
     const eventStore = yield* OrchestrationEventStore;
     const projectionStateRepository = yield* ProjectionStateRepository;
     const projectionProjectRepository = yield* ProjectionProjectRepository;
+    const projectionIssueRepository = yield* ProjectionIssueRepository;
     const projectionThreadRepository = yield* ProjectionThreadRepository;
     const projectionThreadMessageRepository = yield* ProjectionThreadMessageRepository;
     const projectionThreadProposedPlanRepository = yield* ProjectionThreadProposedPlanRepository;
@@ -547,10 +554,185 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
           return;
         }
 
+        case "project.autonomous-enabled": {
+          const existingRow = yield* projectionProjectRepository.getById({
+            projectId: event.payload.projectId,
+          });
+          if (Option.isNone(existingRow)) {
+            return;
+          }
+          yield* projectionProjectRepository.upsert({
+            ...existingRow.value,
+            autonomousStartedAt: event.payload.autonomousStartedAt,
+            // A fresh run clears the previous run's outcome, so a live run is
+            // never rendered as finished.
+            autonomousFinishedAt: null,
+            autonomousFinishedReason: null,
+            updatedAt: event.payload.updatedAt,
+          });
+          return;
+        }
+
+        case "project.autonomous-disabled": {
+          const existingRow = yield* projectionProjectRepository.getById({
+            projectId: event.payload.projectId,
+          });
+          if (Option.isNone(existingRow)) {
+            return;
+          }
+          yield* projectionProjectRepository.upsert({
+            ...existingRow.value,
+            autonomousStartedAt: null,
+            autonomousFinishedAt: event.payload.autonomousFinishedAt,
+            autonomousFinishedReason: event.payload.reason,
+            updatedAt: event.payload.updatedAt,
+          });
+          return;
+        }
+
         default:
           return;
       }
     });
+
+    const applyIssuesProjection: ProjectorDefinition["apply"] = Effect.fn("applyIssuesProjection")(
+      function* (event, _attachmentSideEffects) {
+        // Every issue event but `issue.created` is a patch over the stored row,
+        // so each one re-reads first and skips silently when the row is gone —
+        // a projector must never resurrect a deleted aggregate.
+        const patchIssueRow = Effect.fn("patchIssueRow")(function* (
+          issueId: Parameters<typeof projectionIssueRepository.getById>[0]["issueId"],
+          patch: Partial<Omit<ProjectionIssue, "issueId" | "projectId">>,
+        ) {
+          const existingRow = yield* projectionIssueRepository.getById({ issueId });
+          if (Option.isNone(existingRow)) {
+            return;
+          }
+          yield* projectionIssueRepository.upsert({ ...existingRow.value, ...patch });
+        });
+
+        switch (event.type) {
+          case "issue.created":
+            yield* projectionIssueRepository.upsert({
+              issueId: event.payload.issueId,
+              projectId: event.payload.projectId,
+              title: event.payload.title,
+              description: event.payload.description,
+              status: event.payload.status,
+              priority: event.payload.priority,
+              modelSelection: event.payload.modelSelection,
+              dependsOn: event.payload.dependsOn,
+              threadId: null,
+              pullRequestUrl: null,
+              needsAttentionAt: null,
+              needsAttentionReason: null,
+              reviewVerdict: null,
+              reviewerThreadId: null,
+              reviewedAt: null,
+              reviewNotes: "",
+              createdAt: event.payload.createdAt,
+              updatedAt: event.payload.updatedAt,
+              deletedAt: null,
+            });
+            return;
+
+          case "issue.updated":
+            yield* patchIssueRow(event.payload.issueId, {
+              ...(event.payload.title !== undefined ? { title: event.payload.title } : {}),
+              ...(event.payload.description !== undefined
+                ? { description: event.payload.description }
+                : {}),
+              ...(event.payload.priority !== undefined ? { priority: event.payload.priority } : {}),
+              ...(event.payload.modelSelection !== undefined
+                ? { modelSelection: event.payload.modelSelection }
+                : {}),
+              ...(event.payload.dependsOn !== undefined
+                ? { dependsOn: event.payload.dependsOn }
+                : {}),
+              ...(event.payload.threadId !== undefined ? { threadId: event.payload.threadId } : {}),
+              updatedAt: event.payload.updatedAt,
+            });
+            return;
+
+          case "issue.status-set":
+            yield* patchIssueRow(event.payload.issueId, {
+              status: event.payload.status,
+              updatedAt: event.payload.updatedAt,
+            });
+            return;
+
+          case "issue.deleted":
+            yield* patchIssueRow(event.payload.issueId, {
+              deletedAt: event.payload.deletedAt,
+              updatedAt: event.payload.deletedAt,
+            });
+            return;
+
+          case "issue.started":
+            yield* patchIssueRow(event.payload.issueId, {
+              threadId: event.payload.threadId,
+              status: event.payload.status,
+              updatedAt: event.payload.updatedAt,
+            });
+            return;
+
+          case "issue.start-failed":
+            yield* patchIssueRow(event.payload.issueId, {
+              threadId: null,
+              status: event.payload.status,
+              updatedAt: event.payload.updatedAt,
+            });
+            return;
+
+          case "issue.pull-request-linked":
+            yield* patchIssueRow(event.payload.issueId, {
+              pullRequestUrl: event.payload.pullRequestUrl,
+              ...(event.payload.status !== undefined ? { status: event.payload.status } : {}),
+              updatedAt: event.payload.updatedAt,
+            });
+            return;
+
+          case "issue.attention-flagged":
+            yield* patchIssueRow(event.payload.issueId, {
+              needsAttentionAt: event.payload.needsAttentionAt,
+              needsAttentionReason: event.payload.reason,
+              updatedAt: event.payload.updatedAt,
+            });
+            return;
+
+          case "issue.attention-cleared":
+            yield* patchIssueRow(event.payload.issueId, {
+              needsAttentionAt: null,
+              needsAttentionReason: null,
+              updatedAt: event.payload.updatedAt,
+            });
+            return;
+
+          case "issue.review-started":
+            yield* patchIssueRow(event.payload.issueId, {
+              reviewerThreadId: event.payload.reviewerThreadId,
+              updatedAt: event.payload.updatedAt,
+            });
+            return;
+
+          case "issue.review-recorded":
+            // The notes land here and nowhere else: this table is the only
+            // place that carries an issue's unbounded text.
+            yield* patchIssueRow(event.payload.issueId, {
+              reviewVerdict: event.payload.verdict,
+              reviewerThreadId: event.payload.reviewerThreadId,
+              reviewedAt: event.payload.reviewedAt,
+              reviewNotes: event.payload.notes,
+              ...(event.payload.status !== undefined ? { status: event.payload.status } : {}),
+              updatedAt: event.payload.updatedAt,
+            });
+            return;
+
+          default:
+            return;
+        }
+      },
+    );
 
     const refreshThreadShellSummary = Effect.fn("refreshThreadShellSummary")(function* (
       threadId: ThreadId,
@@ -1620,6 +1802,10 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
         apply: applyProjectsProjection,
       },
       {
+        name: ORCHESTRATION_PROJECTOR_NAMES.issues,
+        apply: applyIssuesProjection,
+      },
+      {
         name: ORCHESTRATION_PROJECTOR_NAMES.threadMessages,
         apply: applyThreadMessagesProjection,
       },
@@ -1746,6 +1932,7 @@ export const OrchestrationProjectionPipelineLive = Layer.effect(
   makeOrchestrationProjectionPipeline(),
 ).pipe(
   Layer.provideMerge(ProjectionProjectRepositoryLive),
+  Layer.provideMerge(ProjectionIssueRepositoryLive),
   Layer.provideMerge(ProjectionThreadRepositoryLive),
   Layer.provideMerge(ProjectionThreadMessageRepositoryLive),
   Layer.provideMerge(ProjectionThreadProposedPlanRepositoryLive),

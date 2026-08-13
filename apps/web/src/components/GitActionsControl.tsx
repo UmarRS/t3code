@@ -1107,7 +1107,11 @@ export default function GitActionsControl({
   const noneSelected = selectedFiles.length === 0;
 
   const initAction = useVcsInitAction(sourceControlScope);
-  const runImmediateGitAction = useGitStackedAction(sourceControlScope);
+  // The thread rides along so a pull request opened here can be attributed to
+  // the issue this thread is doing the work for.
+  const runImmediateGitAction = useGitStackedAction(sourceControlScope, {
+    threadId: activeThreadRef?.threadId ?? null,
+  });
   const pullAction = useVcsPullAction(sourceControlScope);
   const isGitActionRunning = useSourceControlActionRunning(
     sourceControlScope,

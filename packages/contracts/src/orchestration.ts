@@ -1,9 +1,8 @@
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 import * as SchemaIssue from "effect/SchemaIssue";
-import * as SchemaTransformation from "effect/SchemaTransformation";
 import * as Struct from "effect/Struct";
-import { ProviderOptionSelections } from "./model.ts";
+import { ModelSelection } from "./model.ts";
 import { RepositoryIdentity, ThreadEnvMode } from "./environment.ts";
 import {
   ApprovalRequestId,
@@ -11,6 +10,7 @@ import {
   CommandId,
   EventId,
   IsoDateTime,
+  IssueId,
   MessageId,
   NonNegativeInt,
   PositiveInt,
@@ -21,6 +21,18 @@ import {
   TrimmedString,
   TurnId,
 } from "./baseSchemas.ts";
+import {
+  IssueAttentionReason,
+  IssueDependsOn,
+  IssueDescription,
+  IssuePriority,
+  IssueReviewNotes,
+  IssueReviewVerdict,
+  IssueStatus,
+  IssueTitle,
+  OrchestrationIssue,
+  OrchestrationIssueDetail,
+} from "./issues.ts";
 import { ProviderInstanceId } from "./providerInstance.ts";
 import { ThreadScopeFields } from "./threadScope.ts";
 
@@ -31,6 +43,7 @@ export const ORCHESTRATION_WS_METHODS = {
   getFullThreadDiff: "orchestration.getFullThreadDiff",
   searchThreads: "orchestration.searchThreads",
   getArchivedShellSnapshot: "orchestration.getArchivedShellSnapshot",
+  getIssue: "orchestration.getIssue",
   subscribeShell: "orchestration.subscribeShell",
   subscribeThread: "orchestration.subscribeThread",
 } as const;
@@ -64,58 +77,7 @@ export type ProviderSandboxMode = typeof ProviderSandboxMode.Type;
  * post-decode compatibility code lives in the runtime; the transform is the
  * only compat surface.
  */
-const ModelSelectionWire = Schema.Struct({
-  instanceId: ProviderInstanceId,
-  model: TrimmedNonEmptyString,
-  options: Schema.optionalKey(ProviderOptionSelections),
-});
-
-// Source shape for persisted legacy payloads. Fields are typed as
-// `Schema.Unknown` so malformed drafts still make it into the transform and
-// fail validation through the target schema (with proper error messages)
-// rather than at the source-struct layer where the error is less actionable.
-const ModelSelectionSource = Schema.Struct({
-  provider: Schema.optional(Schema.Unknown),
-  instanceId: Schema.optional(Schema.Unknown),
-  model: Schema.Unknown,
-  options: Schema.optional(Schema.Unknown),
-});
-
-export const ModelSelection = ModelSelectionSource.pipe(
-  Schema.decodeTo(
-    ModelSelectionWire,
-    SchemaTransformation.transformOrFail({
-      decode: (raw) => {
-        // Resolve the routing key: prefer an explicit `instanceId`; fall
-        // back to promoting the legacy `provider` slug (the canonical
-        // `defaultInstanceIdForDriver` mapping) so persisted rollout-era
-        // payloads decode without data loss. The target schema brands the
-        // string as `ProviderInstanceId`.
-        const instanceIdSource =
-          raw.instanceId !== undefined
-            ? raw.instanceId
-            : typeof raw.provider === "string"
-              ? raw.provider
-              : undefined;
-        const base: Record<string, unknown> = {
-          instanceId: instanceIdSource,
-          model: raw.model,
-        };
-        if (raw.options !== undefined) base.options = raw.options;
-        return Effect.succeed(base as typeof ModelSelectionWire.Encoded);
-      },
-      encode: (value) => {
-        const base: Record<string, unknown> = {
-          model: value.model,
-          instanceId: value.instanceId,
-        };
-        if (value.options !== undefined) base.options = value.options;
-        return Effect.succeed(base as typeof ModelSelectionSource.Encoded);
-      },
-    }),
-  ),
-);
-export type ModelSelection = typeof ModelSelection.Type;
+export { ModelSelection } from "./model.ts";
 
 export const RuntimeMode = Schema.Literals([
   "approval-required",
@@ -230,6 +192,17 @@ export const OrchestrationProject = Schema.Struct({
   // Optional on the wire so cached snapshots from older servers still decode.
   faviconPath: Schema.optional(Schema.NullOr(ProjectFaviconPath)),
   scripts: Schema.Array(ProjectScript),
+  /**
+   * Autonomous mode: the server works this project's backlog to done without a
+   * human. Non-null `autonomousStartedAt` means a run is live. When a run ends
+   * the server records why, so the UI can tell "the user stopped it" from "it
+   * finished the backlog". All optional so pre-autonomous payloads decode.
+   */
+  autonomousStartedAt: Schema.optional(Schema.NullOr(IsoDateTime)),
+  autonomousFinishedAt: Schema.optional(Schema.NullOr(IsoDateTime)),
+  autonomousFinishedReason: Schema.optional(
+    Schema.NullOr(Schema.Literals(["completed", "disabled"])),
+  ),
   createdAt: IsoDateTime,
   updatedAt: IsoDateTime,
   deletedAt: Schema.NullOr(IsoDateTime),
@@ -416,6 +389,9 @@ export const OrchestrationReadModel = Schema.Struct({
   snapshotSequence: NonNegativeInt,
   projects: Schema.Array(OrchestrationProject),
   threads: Schema.Array(OrchestrationThread),
+  // Summary rows only (no markdown body) — the decider validates dependency
+  // graphs and start gates, neither of which reads the description.
+  issues: Schema.Array(OrchestrationIssue).pipe(Schema.withDecodingDefault(Effect.succeed([]))),
   updatedAt: IsoDateTime,
 });
 export type OrchestrationReadModel = typeof OrchestrationReadModel.Type;
@@ -430,6 +406,17 @@ export const OrchestrationProjectShell = Schema.Struct({
   // Optional on the wire so cached snapshots from older servers still decode.
   faviconPath: Schema.optional(Schema.NullOr(ProjectFaviconPath)),
   scripts: Schema.Array(ProjectScript),
+  /**
+   * Autonomous mode: the server works this project's backlog to done without a
+   * human. Non-null `autonomousStartedAt` means a run is live. When a run ends
+   * the server records why, so the UI can tell "the user stopped it" from "it
+   * finished the backlog". All optional so pre-autonomous payloads decode.
+   */
+  autonomousStartedAt: Schema.optional(Schema.NullOr(IsoDateTime)),
+  autonomousFinishedAt: Schema.optional(Schema.NullOr(IsoDateTime)),
+  autonomousFinishedReason: Schema.optional(
+    Schema.NullOr(Schema.Literals(["completed", "disabled"])),
+  ),
   createdAt: IsoDateTime,
   updatedAt: IsoDateTime,
 });
@@ -494,6 +481,11 @@ export const OrchestrationShellSnapshot = Schema.Struct({
   snapshotSequence: NonNegativeInt,
   projects: Schema.Array(OrchestrationProjectShell),
   threads: Schema.Array(OrchestrationThreadShell),
+  // Issues ride the shell for the same reason threads do: the dashboard needs
+  // every row at once, and the one unbounded field (the markdown body) is left
+  // behind for `orchestration.getIssue`. Defaulted so snapshots cached by
+  // pre-issue servers still decode.
+  issues: Schema.Array(OrchestrationIssue).pipe(Schema.withDecodingDefault(Effect.succeed([]))),
   updatedAt: IsoDateTime,
 });
 export type OrchestrationShellSnapshot = typeof OrchestrationShellSnapshot.Type;
@@ -518,6 +510,16 @@ export const OrchestrationShellStreamEvent = Schema.Union([
     kind: Schema.Literal("thread-removed"),
     sequence: NonNegativeInt,
     threadId: ThreadId,
+  }),
+  Schema.Struct({
+    kind: Schema.Literal("issue-upserted"),
+    sequence: NonNegativeInt,
+    issue: OrchestrationIssue,
+  }),
+  Schema.Struct({
+    kind: Schema.Literal("issue-removed"),
+    sequence: NonNegativeInt,
+    issueId: IssueId,
   }),
 ]);
 export type OrchestrationShellStreamEvent = typeof OrchestrationShellStreamEvent.Type;
@@ -907,6 +909,130 @@ const ThreadSessionStopCommand = Schema.Struct({
   onlyIfSettled: Schema.optional(Schema.Boolean),
 });
 
+/**
+ * Turn on autonomous mode for a project: from here the server starts every
+ * startable issue in parallel and merges them one at a time, until the backlog
+ * has nothing left it can advance.
+ */
+const ProjectAutonomousEnableCommand = Schema.Struct({
+  type: Schema.Literal("project.autonomous.enable"),
+  commandId: CommandId,
+  projectId: ProjectId,
+  createdAt: IsoDateTime,
+});
+
+/**
+ * Stop starting new work. In-flight worker and reviewer threads are
+ * deliberately left alone — killing an agent mid-edit is worse than letting it
+ * finish. `reason` is `completed` only when the server auto-disables a finished
+ * run; clients always send `user`.
+ */
+const ProjectAutonomousDisableCommand = Schema.Struct({
+  type: Schema.Literal("project.autonomous.disable"),
+  commandId: CommandId,
+  projectId: ProjectId,
+  reason: Schema.Literals(["user", "completed"]).pipe(
+    Schema.withDecodingDefault(Effect.succeed("user" as const)),
+  ),
+});
+
+const IssueCreateCommand = Schema.Struct({
+  type: Schema.Literal("issue.create"),
+  commandId: CommandId,
+  issueId: IssueId,
+  projectId: ProjectId,
+  title: IssueTitle,
+  description: Schema.optional(IssueDescription),
+  priority: Schema.optional(Schema.NullOr(IssuePriority)),
+  modelSelection: Schema.optional(Schema.NullOr(ModelSelection)),
+  dependsOn: Schema.optional(IssueDependsOn),
+  createdAt: IsoDateTime,
+});
+
+/**
+ * Field-wise update. Absent means "leave alone" everywhere, matching
+ * `thread.meta.update`; a null `priority` clears it, and a `dependsOn` array
+ * replaces the list wholesale. Status is deliberately not here — it moves
+ * through `issue.status.set` so a status change is one auditable event.
+ */
+const IssueUpdateCommand = Schema.Struct({
+  type: Schema.Literal("issue.update"),
+  commandId: CommandId,
+  issueId: IssueId,
+  title: Schema.optional(IssueTitle),
+  description: Schema.optional(IssueDescription),
+  priority: Schema.optional(Schema.NullOr(IssuePriority)),
+  modelSelection: Schema.optional(Schema.NullOr(ModelSelection)),
+  dependsOn: Schema.optional(IssueDependsOn),
+  // The way out of a start: null unlinks the thread so the issue can be
+  // started again (into a fresh worktree) without deleting anything.
+  threadId: Schema.optional(Schema.NullOr(ThreadId)),
+});
+
+const IssueStatusSetCommand = Schema.Struct({
+  type: Schema.Literal("issue.status.set"),
+  commandId: CommandId,
+  issueId: IssueId,
+  status: IssueStatus,
+});
+
+const IssueDeleteCommand = Schema.Struct({
+  type: Schema.Literal("issue.delete"),
+  commandId: CommandId,
+  issueId: IssueId,
+});
+
+/**
+ * Start work on an issue: open a thread for the issue's project in an isolated
+ * git worktree, seed its first turn from the issue text, link the two, and move
+ * the issue to `in_progress`. Rejected while any dependency is unfinished.
+ *
+ * The client supplies the ids and the thread settings it would use for a normal
+ * new thread; the server builds the prompt, so the seeded message is identical
+ * no matter which surface pressed the button.
+ */
+const IssueStartCommand = Schema.Struct({
+  type: Schema.Literal("issue.start"),
+  commandId: CommandId,
+  issueId: IssueId,
+  threadId: ThreadId,
+  messageId: MessageId,
+  modelSelection: ModelSelection,
+  runtimeMode: RuntimeMode,
+  interactionMode: ProviderInteractionMode.pipe(
+    Schema.withDecodingDefault(Effect.succeed(DEFAULT_PROVIDER_INTERACTION_MODE)),
+  ),
+  /** Branch the worktree forks from. Defaults to the project's current ref. */
+  baseBranch: Schema.optional(TrimmedNonEmptyString),
+  /** Desired new branch name. Absent lets git derive one. */
+  branch: Schema.optional(TrimmedNonEmptyString),
+  startFromOrigin: Schema.optional(Schema.Boolean),
+  createdAt: IsoDateTime,
+});
+
+/**
+ * A pull request opened for a thread. Dispatched by the client right after it
+ * creates a PR, keyed by thread because that is what the PR surface knows; the
+ * server resolves the linked issue and moves it to `in_review`.
+ */
+const IssuePullRequestLinkCommand = Schema.Struct({
+  type: Schema.Literal("issue.pull-request.link"),
+  commandId: CommandId,
+  threadId: ThreadId,
+  pullRequestUrl: Schema.optional(Schema.String),
+});
+
+/**
+ * Clear the needs-attention flag. The way out of every automatic park: a
+ * cleared issue in the backlog becomes startable again, so an autonomous run
+ * picks it up on its next tick.
+ */
+const IssueAttentionClearCommand = Schema.Struct({
+  type: Schema.Literal("issue.attention.clear"),
+  commandId: CommandId,
+  issueId: IssueId,
+});
+
 const DispatchableClientOrchestrationCommand = Schema.Union([
   ProjectCreateCommand,
   ProjectMetaUpdateCommand,
@@ -931,6 +1057,15 @@ const DispatchableClientOrchestrationCommand = Schema.Union([
   ThreadUserInputRespondCommand,
   ThreadCheckpointRevertCommand,
   ThreadSessionStopCommand,
+  IssueCreateCommand,
+  IssueUpdateCommand,
+  IssueStatusSetCommand,
+  IssueDeleteCommand,
+  IssueStartCommand,
+  IssuePullRequestLinkCommand,
+  IssueAttentionClearCommand,
+  ProjectAutonomousEnableCommand,
+  ProjectAutonomousDisableCommand,
 ]);
 export type DispatchableClientOrchestrationCommand =
   typeof DispatchableClientOrchestrationCommand.Type;
@@ -959,6 +1094,15 @@ export const ClientOrchestrationCommand = Schema.Union([
   ThreadUserInputRespondCommand,
   ThreadCheckpointRevertCommand,
   ThreadSessionStopCommand,
+  IssueCreateCommand,
+  IssueUpdateCommand,
+  IssueStatusSetCommand,
+  IssueDeleteCommand,
+  IssueStartCommand,
+  IssuePullRequestLinkCommand,
+  IssueAttentionClearCommand,
+  ProjectAutonomousEnableCommand,
+  ProjectAutonomousDisableCommand,
 ]);
 export type ClientOrchestrationCommand = typeof ClientOrchestrationCommand.Type;
 
@@ -1035,6 +1179,58 @@ const ThreadTitleRegenerationCompleteCommand = Schema.Struct({
   title: Schema.optional(TrimmedNonEmptyString),
 });
 
+/**
+ * Compensation for a start whose worktree or thread bootstrap blew up after the
+ * issue was already marked in progress. Server-only: it rewinds the status and
+ * drops the thread link so the issue is startable again.
+ */
+const IssueStartFailedCommand = Schema.Struct({
+  type: Schema.Literal("issue.start.failed"),
+  commandId: CommandId,
+  issueId: IssueId,
+  previousStatus: IssueStatus,
+  detail: TrimmedNonEmptyString,
+});
+
+/**
+ * Park an issue for a human. Server-only: it is raised by the autonomous
+ * reactor when a worker turn errors, a pull request cannot be opened, or a
+ * reviewer refuses to merge. A user never flags — a user clears
+ * (`issue.attention.clear`).
+ */
+const IssueAttentionFlagCommand = Schema.Struct({
+  type: Schema.Literal("issue.attention.flag"),
+  commandId: CommandId,
+  issueId: IssueId,
+  reason: IssueAttentionReason,
+});
+
+/**
+ * Claim an issue for review by a freshly opened reviewer thread. Server-only.
+ * Persisting the reviewer's thread id before the review runs is what lets
+ * turn-completion ingestion tell a reviewer thread from a worker thread, and
+ * what stops the merge queue from reviewing the same issue twice.
+ */
+const IssueReviewStartCommand = Schema.Struct({
+  type: Schema.Literal("issue.review.start"),
+  commandId: CommandId,
+  issueId: IssueId,
+  reviewerThreadId: ThreadId,
+});
+
+/**
+ * Record a reviewer's verdict and notes on the issue. Server-only: it is
+ * produced from the `t3-review` block on the reviewer thread's final message.
+ */
+const IssueReviewRecordCommand = Schema.Struct({
+  type: Schema.Literal("issue.review.record"),
+  commandId: CommandId,
+  issueId: IssueId,
+  reviewerThreadId: ThreadId,
+  verdict: IssueReviewVerdict,
+  notes: IssueReviewNotes,
+});
+
 const InternalOrchestrationCommand = Schema.Union([
   ThreadSessionSetCommand,
   ThreadMessageAssistantDeltaCommand,
@@ -1044,6 +1240,10 @@ const InternalOrchestrationCommand = Schema.Union([
   ThreadActivityAppendCommand,
   ThreadRevertCompleteCommand,
   ThreadTitleRegenerationCompleteCommand,
+  IssueStartFailedCommand,
+  IssueAttentionFlagCommand,
+  IssueReviewStartCommand,
+  IssueReviewRecordCommand,
 ]);
 export type InternalOrchestrationCommand = typeof InternalOrchestrationCommand.Type;
 
@@ -1083,10 +1283,23 @@ export const OrchestrationEventType = Schema.Literals([
   "thread.proposed-plan-upserted",
   "thread.turn-diff-completed",
   "thread.activity-appended",
+  "issue.created",
+  "issue.updated",
+  "issue.status-set",
+  "issue.deleted",
+  "issue.started",
+  "issue.start-failed",
+  "issue.pull-request-linked",
+  "issue.attention-flagged",
+  "issue.attention-cleared",
+  "issue.review-started",
+  "issue.review-recorded",
+  "project.autonomous-enabled",
+  "project.autonomous-disabled",
 ]);
 export type OrchestrationEventType = typeof OrchestrationEventType.Type;
 
-export const OrchestrationAggregateKind = Schema.Literals(["project", "thread"]);
+export const OrchestrationAggregateKind = Schema.Literals(["project", "thread", "issue"]);
 export type OrchestrationAggregateKind = typeof OrchestrationAggregateKind.Type;
 export const OrchestrationActorKind = Schema.Literals(["client", "server", "provider"]);
 
@@ -1321,6 +1534,113 @@ export const ThreadActivityAppendedPayload = Schema.Struct({
   activity: OrchestrationThreadActivity,
 });
 
+export const IssueCreatedPayload = Schema.Struct({
+  issueId: IssueId,
+  projectId: ProjectId,
+  title: IssueTitle,
+  description: IssueDescription,
+  status: IssueStatus,
+  priority: Schema.NullOr(IssuePriority),
+  modelSelection: Schema.NullOr(ModelSelection).pipe(
+    Schema.withDecodingDefault(Effect.succeed(null)),
+  ),
+  dependsOn: IssueDependsOn,
+  createdAt: IsoDateTime,
+  updatedAt: IsoDateTime,
+});
+
+export const IssueUpdatedPayload = Schema.Struct({
+  issueId: IssueId,
+  title: Schema.optional(IssueTitle),
+  description: Schema.optional(IssueDescription),
+  priority: Schema.optional(Schema.NullOr(IssuePriority)),
+  modelSelection: Schema.optional(Schema.NullOr(ModelSelection)),
+  dependsOn: Schema.optional(IssueDependsOn),
+  threadId: Schema.optional(Schema.NullOr(ThreadId)),
+  updatedAt: IsoDateTime,
+});
+
+export const IssueStatusSetPayload = Schema.Struct({
+  issueId: IssueId,
+  status: IssueStatus,
+  updatedAt: IsoDateTime,
+});
+
+export const IssueDeletedPayload = Schema.Struct({
+  issueId: IssueId,
+  deletedAt: IsoDateTime,
+});
+
+export const IssueStartedPayload = Schema.Struct({
+  issueId: IssueId,
+  threadId: ThreadId,
+  status: IssueStatus,
+  updatedAt: IsoDateTime,
+});
+
+export const IssueStartFailedPayload = Schema.Struct({
+  issueId: IssueId,
+  status: IssueStatus,
+  detail: TrimmedNonEmptyString,
+  updatedAt: IsoDateTime,
+});
+
+export const IssuePullRequestLinkedPayload = Schema.Struct({
+  issueId: IssueId,
+  threadId: ThreadId,
+  pullRequestUrl: Schema.NullOr(Schema.String),
+  // Absent when the issue was already past review (done/canceled) and the PR
+  // link is recorded without dragging it backwards.
+  status: Schema.optional(IssueStatus),
+  updatedAt: IsoDateTime,
+});
+
+export const IssueAttentionFlaggedPayload = Schema.Struct({
+  issueId: IssueId,
+  reason: IssueAttentionReason,
+  needsAttentionAt: IsoDateTime,
+  updatedAt: IsoDateTime,
+});
+
+export const IssueAttentionClearedPayload = Schema.Struct({
+  issueId: IssueId,
+  updatedAt: IsoDateTime,
+});
+
+export const IssueReviewStartedPayload = Schema.Struct({
+  issueId: IssueId,
+  reviewerThreadId: ThreadId,
+  updatedAt: IsoDateTime,
+});
+
+export const IssueReviewRecordedPayload = Schema.Struct({
+  issueId: IssueId,
+  reviewerThreadId: ThreadId,
+  verdict: IssueReviewVerdict,
+  notes: IssueReviewNotes,
+  /** The URL under review, copied onto the event so the record stands alone. */
+  pullRequestUrl: Schema.NullOr(Schema.String),
+  /** `done` on a merge; absent when the verdict parks the issue instead. */
+  status: Schema.optional(IssueStatus),
+  reviewedAt: IsoDateTime,
+  updatedAt: IsoDateTime,
+});
+
+export const ProjectAutonomousEnabledPayload = Schema.Struct({
+  projectId: ProjectId,
+  autonomousStartedAt: IsoDateTime,
+  updatedAt: IsoDateTime,
+});
+
+export const ProjectAutonomousDisabledPayload = Schema.Struct({
+  projectId: ProjectId,
+  // "completed" is the server auto-disabling a finished run; "disabled" is a
+  // user stopping one. The UI tells a finished run from a stopped one by this.
+  reason: Schema.Literals(["completed", "disabled"]),
+  autonomousFinishedAt: IsoDateTime,
+  updatedAt: IsoDateTime,
+});
+
 export const OrchestrationEventMetadata = Schema.Struct({
   providerTurnId: Schema.optional(TrimmedNonEmptyString),
   providerItemId: Schema.optional(ProviderItemId),
@@ -1334,7 +1654,7 @@ const EventBaseFields = {
   sequence: NonNegativeInt,
   eventId: EventId,
   aggregateKind: OrchestrationAggregateKind,
-  aggregateId: Schema.Union([ProjectId, ThreadId]),
+  aggregateId: Schema.Union([ProjectId, ThreadId, IssueId]),
   occurredAt: IsoDateTime,
   commandId: Schema.NullOr(CommandId),
   causationEventId: Schema.NullOr(EventId),
@@ -1488,6 +1808,71 @@ export const OrchestrationEvent = Schema.Union([
     type: Schema.Literal("thread.activity-appended"),
     payload: ThreadActivityAppendedPayload,
   }),
+  Schema.Struct({
+    ...EventBaseFields,
+    type: Schema.Literal("issue.created"),
+    payload: IssueCreatedPayload,
+  }),
+  Schema.Struct({
+    ...EventBaseFields,
+    type: Schema.Literal("issue.updated"),
+    payload: IssueUpdatedPayload,
+  }),
+  Schema.Struct({
+    ...EventBaseFields,
+    type: Schema.Literal("issue.status-set"),
+    payload: IssueStatusSetPayload,
+  }),
+  Schema.Struct({
+    ...EventBaseFields,
+    type: Schema.Literal("issue.deleted"),
+    payload: IssueDeletedPayload,
+  }),
+  Schema.Struct({
+    ...EventBaseFields,
+    type: Schema.Literal("issue.started"),
+    payload: IssueStartedPayload,
+  }),
+  Schema.Struct({
+    ...EventBaseFields,
+    type: Schema.Literal("issue.start-failed"),
+    payload: IssueStartFailedPayload,
+  }),
+  Schema.Struct({
+    ...EventBaseFields,
+    type: Schema.Literal("issue.pull-request-linked"),
+    payload: IssuePullRequestLinkedPayload,
+  }),
+  Schema.Struct({
+    ...EventBaseFields,
+    type: Schema.Literal("issue.attention-flagged"),
+    payload: IssueAttentionFlaggedPayload,
+  }),
+  Schema.Struct({
+    ...EventBaseFields,
+    type: Schema.Literal("issue.attention-cleared"),
+    payload: IssueAttentionClearedPayload,
+  }),
+  Schema.Struct({
+    ...EventBaseFields,
+    type: Schema.Literal("issue.review-started"),
+    payload: IssueReviewStartedPayload,
+  }),
+  Schema.Struct({
+    ...EventBaseFields,
+    type: Schema.Literal("issue.review-recorded"),
+    payload: IssueReviewRecordedPayload,
+  }),
+  Schema.Struct({
+    ...EventBaseFields,
+    type: Schema.Literal("project.autonomous-enabled"),
+    payload: ProjectAutonomousEnabledPayload,
+  }),
+  Schema.Struct({
+    ...EventBaseFields,
+    type: Schema.Literal("project.autonomous-disabled"),
+    payload: ProjectAutonomousDisabledPayload,
+  }),
 ]);
 export type OrchestrationEvent = typeof OrchestrationEvent.Type;
 
@@ -1617,6 +2002,20 @@ export const OrchestrationSearchThreadsResult = Schema.Struct({
 });
 export type OrchestrationSearchThreadsResult = typeof OrchestrationSearchThreadsResult.Type;
 
+/**
+ * Detail read for one issue. The shell carries every issue summary already, so
+ * this exists only to fetch the markdown body when a client opens an issue.
+ */
+export const OrchestrationGetIssueInput = Schema.Struct({
+  issueId: IssueId,
+});
+export type OrchestrationGetIssueInput = typeof OrchestrationGetIssueInput.Type;
+
+export const OrchestrationGetIssueResult = Schema.Struct({
+  issue: Schema.NullOr(OrchestrationIssueDetail),
+});
+export type OrchestrationGetIssueResult = typeof OrchestrationGetIssueResult.Type;
+
 export const OrchestrationGetWorkflowScriptInput = Schema.Struct({
   threadId: ThreadId,
   /** Absolute path from the workflow's runHandles.scriptPath. The server
@@ -1689,6 +2088,10 @@ export const OrchestrationRpcSchemas = {
   getArchivedShellSnapshot: {
     input: Schema.Struct({}),
     output: OrchestrationShellSnapshot,
+  },
+  getIssue: {
+    input: OrchestrationGetIssueInput,
+    output: OrchestrationGetIssueResult,
   },
   subscribeThread: {
     input: OrchestrationSubscribeThreadInput,

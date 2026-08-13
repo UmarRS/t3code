@@ -1786,7 +1786,7 @@ it.layer(Layer.mergeAll(NodeServices.layer, ServerSettingsModule.layerTest(), Te
             ]);
             assert.strictEqual(codexProvider?.enabled, false);
             assert.strictEqual(codexProvider?.status, "disabled");
-            assert.strictEqual(codexProvider?.message, "Codex is disabled in T3 Code settings.");
+            assert.strictEqual(codexProvider?.message, "Codex is disabled in Atlas settings.");
             assert.strictEqual(codexSpawned, false);
           }).pipe(Effect.provide(runtimeServices));
         }),
@@ -1800,7 +1800,7 @@ it.layer(Layer.mergeAll(NodeServices.layer, ServerSettingsModule.layerTest(), Te
           assert.strictEqual(status.enabled, false);
           assert.strictEqual(status.status, "disabled");
           assert.strictEqual(status.installed, false);
-          assert.strictEqual(status.message, "Codex is disabled in T3 Code settings.");
+          assert.strictEqual(status.message, "Codex is disabled in Atlas settings.");
         }),
       );
     });

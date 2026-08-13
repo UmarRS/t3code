@@ -27,11 +27,14 @@ import { useNavigate, useParams } from "@tanstack/react-router";
 import * as Option from "effect/Option";
 import {
   ArrowLeftIcon,
+  BotIcon,
+  ClipboardCheckIcon,
   CornerLeftUpIcon,
   FileSearchIcon,
   FolderIcon,
   FolderPlusIcon,
   LinkIcon,
+  ListChecksIcon,
   MessageSquareIcon,
   PaletteIcon,
   SettingsIcon,
@@ -55,6 +58,9 @@ import { useAtomValue } from "@effect/atom-react";
 import { isDesktopLocalConnectionTarget } from "../connection/desktopLocal";
 import { useDesktopLocalBootstraps } from "../connection/useDesktopLocalBootstraps";
 import { useHandleNewThread } from "../hooks/useHandleNewThread";
+import { useIssuesBoardProjectRef } from "../hooks/useIssuesBoardTarget";
+import { resolveAutonomousRunState } from "./issues/autonomousRun.logic";
+import { requestAutonomousRunPrompt } from "./issues/issuesDashboardBus";
 import { useClientSettings } from "../hooks/useSettings";
 import { useTheme } from "../hooks/useTheme";
 import { readLocalApi } from "../localApi";
@@ -569,6 +575,7 @@ function OpenCommandPaletteDialog(props: {
   const primaryEnvironmentId = usePrimaryEnvironmentId();
   const { activeDraftThread, activeThread, defaultProjectRef, handleNewThread } =
     useHandleNewThread();
+  const issuesProjectRef = useIssuesBoardProjectRef();
   const projects = useProjects();
   const projectOrder = useUiStateStore((store) => store.projectOrder);
   const threads = useThreadShells();
@@ -1455,6 +1462,59 @@ function OpenCommandPaletteDialog(props: {
       });
     },
   });
+
+  if (issuesProjectRef !== null) {
+    const issuesRouteParams = {
+      environmentId: issuesProjectRef.environmentId,
+      projectId: issuesProjectRef.projectId,
+    };
+    const issuesProject = projects.find(
+      (candidate) =>
+        candidate.id === issuesProjectRef.projectId &&
+        candidate.environmentId === issuesProjectRef.environmentId,
+    );
+    const autonomousRunning = resolveAutonomousRunState(issuesProject).kind === "running";
+    const issuesProjectTitle = issuesProject?.title ?? "current project";
+
+    actionItems.push({
+      kind: "action",
+      value: "action:issues",
+      searchTerms: ["issues", "backlog", "board", "stories", "kanban", "go to issues"],
+      title: `Open issues for ${issuesProjectTitle}`,
+      icon: <ListChecksIcon className={ITEM_ICON_CLASS} />,
+      run: async () => {
+        await navigate({ to: "/issues/$environmentId/$projectId", params: issuesRouteParams });
+      },
+    });
+
+    actionItems.push({
+      kind: "action",
+      value: "action:issues-review",
+      searchTerms: ["review", "issues", "merged", "needs attention", "go to review"],
+      title: `Open issue review for ${issuesProjectTitle}`,
+      icon: <ClipboardCheckIcon className={ITEM_ICON_CLASS} />,
+      run: async () => {
+        await navigate({
+          to: "/issues/$environmentId/$projectId/review",
+          params: issuesRouteParams,
+        });
+      },
+    });
+
+    actionItems.push({
+      kind: "action",
+      value: "action:issues-autonomous",
+      searchTerms: ["autonomous", "auto", "run", "backlog", "agent", "unattended"],
+      title: autonomousRunning ? "Stop autonomous mode" : "Start autonomous mode",
+      icon: <BotIcon className={ITEM_ICON_CLASS} />,
+      run: async () => {
+        // Navigate first: the dashboard owns the confirmation that explains
+        // what a run does, and what stopping one does not do.
+        await navigate({ to: "/issues/$environmentId/$projectId", params: issuesRouteParams });
+        requestAutonomousRunPrompt();
+      },
+    });
+  }
 
   actionItems.push({
     kind: "action",

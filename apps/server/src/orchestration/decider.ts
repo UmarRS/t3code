@@ -1,5 +1,7 @@
 import {
+  DEFAULT_ISSUE_STATUS,
   EventId,
+  issueNeedsAttention,
   normalizeThreadScopeLinkedPaths,
   type OrchestrationCommand,
   type OrchestrationEvent,
@@ -12,14 +14,20 @@ import type * as PlatformError from "effect/PlatformError";
 
 import { OrchestrationCommandInvariantError } from "./Errors.ts";
 import {
+  findActiveIssueByThreadId,
+  listActiveIssuesByProjectId,
   listThreadsByProjectId,
   requireActiveProjectWorkspaceRootAbsent,
+  requireIssue,
+  requireIssueAbsent,
+  requireIssueDependenciesSatisfied,
   requireProject,
   requireProjectAbsent,
   requireThread,
   requireThreadArchived,
   requireThreadAbsent,
   requireThreadNotArchived,
+  requireValidIssueDependencies,
 } from "./commandInvariants.ts";
 import { projectEvent } from "./projector.ts";
 
@@ -314,10 +322,21 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           detail: `Project '${command.projectId}' is not empty and cannot be deleted without force=true.`,
         });
       }
-      if (activeThreads.length > 0) {
+      // A project's backlog goes with it. Issues never block the delete the way
+      // threads do — a backlog is planning, not work in flight — so they are
+      // swept regardless of `force`.
+      const activeIssues = listActiveIssuesByProjectId(readModel, command.projectId);
+      if (activeThreads.length > 0 || activeIssues.length > 0) {
         return yield* decideCommandSequence({
           readModel,
           commands: [
+            ...activeIssues.map(
+              (issue): Extract<OrchestrationCommand, { type: "issue.delete" }> => ({
+                type: "issue.delete",
+                commandId: command.commandId,
+                issueId: issue.id,
+              }),
+            ),
             ...activeThreads.map(
               (thread): Extract<OrchestrationCommand, { type: "thread.delete" }> => ({
                 type: "thread.delete",
@@ -395,7 +414,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         threadId: command.threadId,
       });
       const occurredAt = yield* nowIso;
-      return {
+      const deletedEvent: Omit<OrchestrationEvent, "sequence"> = {
         ...(yield* withEventBase({
           aggregateKind: "thread",
           aggregateId: command.threadId,
@@ -408,6 +427,29 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           deletedAt: occurredAt,
         },
       };
+      // Deleting the thread frees the issue: leaving the link would leave an
+      // issue that can never be started again, pointing at nothing.
+      const linkedIssue = findActiveIssueByThreadId(readModel, command.threadId);
+      if (!linkedIssue) {
+        return deletedEvent;
+      }
+      return [
+        deletedEvent,
+        {
+          ...(yield* withEventBase({
+            aggregateKind: "issue",
+            aggregateId: linkedIssue.id,
+            occurredAt,
+            commandId: command.commandId,
+          })),
+          type: "issue.updated" as const,
+          payload: {
+            issueId: linkedIssue.id,
+            threadId: null,
+            updatedAt: occurredAt,
+          },
+        },
+      ];
     }
 
     case "thread.archive": {
@@ -1410,6 +1452,465 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         },
       };
       return [unsettledEvent, activityAppendedEvent];
+    }
+
+    case "issue.create": {
+      yield* requireProject({
+        readModel,
+        command,
+        projectId: command.projectId,
+      });
+      yield* requireIssueAbsent({
+        readModel,
+        command,
+        issueId: command.issueId,
+      });
+      const dependsOn = command.dependsOn ?? [];
+      yield* requireValidIssueDependencies({
+        readModel,
+        command,
+        issueId: command.issueId,
+        projectId: command.projectId,
+        dependsOn,
+      });
+      return {
+        ...(yield* withEventBase({
+          aggregateKind: "issue",
+          aggregateId: command.issueId,
+          occurredAt: command.createdAt,
+          commandId: command.commandId,
+        })),
+        type: "issue.created",
+        payload: {
+          issueId: command.issueId,
+          projectId: command.projectId,
+          title: command.title,
+          description: command.description ?? "",
+          status: DEFAULT_ISSUE_STATUS,
+          priority: command.priority ?? null,
+          modelSelection: command.modelSelection ?? null,
+          dependsOn,
+          createdAt: command.createdAt,
+          updatedAt: command.createdAt,
+        },
+      };
+    }
+
+    case "issue.update": {
+      const issue = yield* requireIssue({
+        readModel,
+        command,
+        issueId: command.issueId,
+      });
+      if (command.dependsOn !== undefined) {
+        yield* requireValidIssueDependencies({
+          readModel,
+          command,
+          issueId: issue.id,
+          projectId: issue.projectId,
+          dependsOn: command.dependsOn,
+        });
+      }
+      // Linking a thread is the start flow's job; an update may only clear the
+      // link, which is how a user frees an issue to be started again.
+      if (command.threadId != null) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: `Issue '${issue.id}' can only be linked to a thread by 'issue.start'; pass threadId: null to unlink.`,
+        });
+      }
+      const occurredAt = yield* nowIso;
+      return {
+        ...(yield* withEventBase({
+          aggregateKind: "issue",
+          aggregateId: command.issueId,
+          occurredAt,
+          commandId: command.commandId,
+        })),
+        type: "issue.updated",
+        payload: {
+          issueId: command.issueId,
+          ...(command.title !== undefined ? { title: command.title } : {}),
+          ...(command.description !== undefined ? { description: command.description } : {}),
+          ...(command.priority !== undefined ? { priority: command.priority } : {}),
+          ...(command.modelSelection !== undefined
+            ? { modelSelection: command.modelSelection }
+            : {}),
+          ...(command.dependsOn !== undefined ? { dependsOn: command.dependsOn } : {}),
+          ...(command.threadId !== undefined ? { threadId: null } : {}),
+          updatedAt: occurredAt,
+        },
+      };
+    }
+
+    case "issue.status.set": {
+      const issue = yield* requireIssue({
+        readModel,
+        command,
+        issueId: command.issueId,
+      });
+      // Every transition is legal in both directions, including done ->
+      // backlog: status is a label the user owns, not a ratchet. Re-setting the
+      // same status re-emits with the existing updatedAt so a double-click
+      // projects as a no-op instead of churning ordering.
+      const statusUnchanged = issue.status === command.status;
+      const occurredAt = yield* nowIso;
+      return {
+        ...(yield* withEventBase({
+          aggregateKind: "issue",
+          aggregateId: command.issueId,
+          occurredAt,
+          commandId: command.commandId,
+        })),
+        type: "issue.status-set",
+        payload: {
+          issueId: command.issueId,
+          status: command.status,
+          updatedAt: statusUnchanged ? issue.updatedAt : occurredAt,
+        },
+      };
+    }
+
+    case "issue.delete": {
+      const issue = yield* requireIssue({
+        readModel,
+        command,
+        issueId: command.issueId,
+      });
+      const occurredAt = yield* nowIso;
+      const deletedEvent: Omit<OrchestrationEvent, "sequence"> = {
+        ...(yield* withEventBase({
+          aggregateKind: "issue",
+          aggregateId: command.issueId,
+          occurredAt,
+          commandId: command.commandId,
+        })),
+        type: "issue.deleted",
+        payload: {
+          issueId: command.issueId,
+          deletedAt: occurredAt,
+        },
+      };
+      // Dangling dependencies would leave other issues gated on something the
+      // dashboard can no longer show, so the edge is removed with the issue.
+      const dependents = listActiveIssuesByProjectId(readModel, issue.projectId).filter(
+        (candidate) => candidate.id !== issue.id && candidate.dependsOn.includes(issue.id),
+      );
+      if (dependents.length === 0) {
+        return deletedEvent;
+      }
+      const dependentEvents: Array<Omit<OrchestrationEvent, "sequence">> = [];
+      for (const dependent of dependents) {
+        dependentEvents.push({
+          ...(yield* withEventBase({
+            aggregateKind: "issue",
+            aggregateId: dependent.id,
+            occurredAt,
+            commandId: command.commandId,
+          })),
+          type: "issue.updated",
+          payload: {
+            issueId: dependent.id,
+            dependsOn: dependent.dependsOn.filter((entry) => entry !== issue.id),
+            updatedAt: occurredAt,
+          },
+        });
+      }
+      return [deletedEvent, ...dependentEvents];
+    }
+
+    case "issue.start": {
+      const issue = yield* requireIssue({
+        readModel,
+        command,
+        issueId: command.issueId,
+      });
+      yield* requireProject({
+        readModel,
+        command,
+        projectId: issue.projectId,
+      });
+      // Starting twice would orphan the first worktree. Unlink first
+      // (`issue.update` with threadId: null) to start over.
+      if (issue.threadId !== null) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: `Issue '${issue.id}' is already linked to thread '${issue.threadId}'.`,
+        });
+      }
+      // A flagged issue is parked for a human. Rejecting here is what stops an
+      // autonomous run from re-picking work that already failed once, which is
+      // what makes the loop terminate.
+      if (issueNeedsAttention(issue)) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: `Issue '${issue.id}' needs attention and cannot be started until the flag is cleared.`,
+        });
+      }
+      yield* requireIssueDependenciesSatisfied({ readModel, command, issue });
+      return {
+        ...(yield* withEventBase({
+          aggregateKind: "issue",
+          aggregateId: command.issueId,
+          occurredAt: command.createdAt,
+          commandId: command.commandId,
+        })),
+        type: "issue.started",
+        payload: {
+          issueId: command.issueId,
+          threadId: command.threadId,
+          status: "in_progress",
+          updatedAt: command.createdAt,
+        },
+      };
+    }
+
+    case "issue.start.failed": {
+      yield* requireIssue({
+        readModel,
+        command,
+        issueId: command.issueId,
+      });
+      const occurredAt = yield* nowIso;
+      return {
+        ...(yield* withEventBase({
+          aggregateKind: "issue",
+          aggregateId: command.issueId,
+          occurredAt,
+          commandId: command.commandId,
+        })),
+        type: "issue.start-failed",
+        payload: {
+          issueId: command.issueId,
+          status: command.previousStatus,
+          detail: command.detail,
+          updatedAt: occurredAt,
+        },
+      };
+    }
+
+    case "issue.pull-request.link": {
+      const thread = yield* requireThread({
+        readModel,
+        command,
+        threadId: command.threadId,
+      });
+      const issue = findActiveIssueByThreadId(readModel, thread.id);
+      if (!issue) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: `Thread '${command.threadId}' is not linked to an issue.`,
+        });
+      }
+      // A PR opening moves work into review, but never drags a finished or
+      // abandoned issue backwards — the URL is still recorded so the dashboard
+      // can link out.
+      const advancesToReview = issue.status !== "done" && issue.status !== "canceled";
+      const occurredAt = yield* nowIso;
+      return {
+        ...(yield* withEventBase({
+          aggregateKind: "issue",
+          aggregateId: issue.id,
+          occurredAt,
+          commandId: command.commandId,
+        })),
+        type: "issue.pull-request-linked",
+        payload: {
+          issueId: issue.id,
+          threadId: thread.id,
+          pullRequestUrl: command.pullRequestUrl ?? null,
+          ...(advancesToReview ? { status: "in_review" as const } : {}),
+          updatedAt: occurredAt,
+        },
+      };
+    }
+
+    case "issue.attention.flag": {
+      const issue = yield* requireIssue({
+        readModel,
+        command,
+        issueId: command.issueId,
+      });
+      // Re-flagging keeps the original timestamp and reason: the first failure
+      // is the one worth showing, and a retry loop must not churn ordering.
+      const alreadyFlagged = issue.needsAttentionAt != null;
+      const occurredAt = yield* nowIso;
+      return {
+        ...(yield* withEventBase({
+          aggregateKind: "issue",
+          aggregateId: command.issueId,
+          occurredAt,
+          commandId: command.commandId,
+        })),
+        type: "issue.attention-flagged",
+        payload: {
+          issueId: command.issueId,
+          reason: alreadyFlagged ? (issue.needsAttentionReason ?? command.reason) : command.reason,
+          needsAttentionAt: alreadyFlagged ? issue.needsAttentionAt : occurredAt,
+          updatedAt: alreadyFlagged ? issue.updatedAt : occurredAt,
+        },
+      };
+    }
+
+    case "issue.attention.clear": {
+      const issue = yield* requireIssue({
+        readModel,
+        command,
+        issueId: command.issueId,
+      });
+      // Idempotent by re-emission (see thread.settle): clearing an unflagged
+      // issue lands on the same state without churning updatedAt.
+      const alreadyClear = issue.needsAttentionAt == null;
+      const occurredAt = yield* nowIso;
+      return {
+        ...(yield* withEventBase({
+          aggregateKind: "issue",
+          aggregateId: command.issueId,
+          occurredAt,
+          commandId: command.commandId,
+        })),
+        type: "issue.attention-cleared",
+        payload: {
+          issueId: command.issueId,
+          updatedAt: alreadyClear ? issue.updatedAt : occurredAt,
+        },
+      };
+    }
+
+    case "issue.review.start": {
+      yield* requireIssue({
+        readModel,
+        command,
+        issueId: command.issueId,
+      });
+      const occurredAt = yield* nowIso;
+      return {
+        ...(yield* withEventBase({
+          aggregateKind: "issue",
+          aggregateId: command.issueId,
+          occurredAt,
+          commandId: command.commandId,
+        })),
+        type: "issue.review-started",
+        payload: {
+          issueId: command.issueId,
+          reviewerThreadId: command.reviewerThreadId,
+          updatedAt: occurredAt,
+        },
+      };
+    }
+
+    case "issue.review.record": {
+      const issue = yield* requireIssue({
+        readModel,
+        command,
+        issueId: command.issueId,
+      });
+      const occurredAt = yield* nowIso;
+      const reviewEvent: Omit<OrchestrationEvent, "sequence"> = {
+        ...(yield* withEventBase({
+          aggregateKind: "issue",
+          aggregateId: command.issueId,
+          occurredAt,
+          commandId: command.commandId,
+        })),
+        type: "issue.review-recorded",
+        payload: {
+          issueId: command.issueId,
+          reviewerThreadId: command.reviewerThreadId,
+          verdict: command.verdict,
+          notes: command.notes,
+          pullRequestUrl: issue.pullRequestUrl,
+          // A merge is the end of the line for the issue. A parked verdict
+          // leaves the status alone so the reviewer's own work stays visible
+          // where it stopped, and the flag below is what takes it out of play.
+          ...(command.verdict === "merged" ? { status: "done" as const } : {}),
+          reviewedAt: occurredAt,
+          updatedAt: occurredAt,
+        },
+      };
+      if (command.verdict === "merged") {
+        return reviewEvent;
+      }
+      return [
+        reviewEvent,
+        {
+          ...(yield* withEventBase({
+            aggregateKind: "issue",
+            aggregateId: command.issueId,
+            occurredAt,
+            commandId: command.commandId,
+          })),
+          type: "issue.attention-flagged" as const,
+          payload: {
+            issueId: command.issueId,
+            reason: `Reviewer left this unmerged. See the review notes on issue '${command.issueId}'.`,
+            needsAttentionAt: issue.needsAttentionAt ?? occurredAt,
+            updatedAt: occurredAt,
+          },
+        },
+      ];
+    }
+
+    case "project.autonomous.enable": {
+      const project = yield* requireProject({
+        readModel,
+        command,
+        projectId: command.projectId,
+      });
+      if (project.deletedAt !== null) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: `Project '${command.projectId}' is deleted and cannot run autonomously.`,
+        });
+      }
+      // Re-enabling a live run keeps the original start time so the UI's "since"
+      // does not jump when a raced client double-enables.
+      const alreadyRunning = project.autonomousStartedAt != null;
+      const occurredAt = yield* nowIso;
+      return {
+        ...(yield* withEventBase({
+          aggregateKind: "project",
+          aggregateId: command.projectId,
+          occurredAt,
+          commandId: command.commandId,
+        })),
+        type: "project.autonomous-enabled",
+        payload: {
+          projectId: command.projectId,
+          autonomousStartedAt: alreadyRunning ? project.autonomousStartedAt : occurredAt,
+          updatedAt: alreadyRunning ? project.updatedAt : occurredAt,
+        },
+      };
+    }
+
+    case "project.autonomous.disable": {
+      const project = yield* requireProject({
+        readModel,
+        command,
+        projectId: command.projectId,
+      });
+      // Idempotent by re-emission. The reason still lands so a run that
+      // finishes after a user already stopped it does not relabel itself.
+      const alreadyStopped = project.autonomousStartedAt == null;
+      const occurredAt = yield* nowIso;
+      return {
+        ...(yield* withEventBase({
+          aggregateKind: "project",
+          aggregateId: command.projectId,
+          occurredAt,
+          commandId: command.commandId,
+        })),
+        type: "project.autonomous-disabled",
+        payload: {
+          projectId: command.projectId,
+          reason: command.reason === "completed" ? "completed" : "disabled",
+          autonomousFinishedAt: alreadyStopped
+            ? (project.autonomousFinishedAt ?? occurredAt)
+            : occurredAt,
+          updatedAt: alreadyStopped ? project.updatedAt : occurredAt,
+        },
+      };
     }
 
     default: {
