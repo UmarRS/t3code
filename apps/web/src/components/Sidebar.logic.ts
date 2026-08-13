@@ -584,6 +584,52 @@ export function sortSettledThreadsForSidebar<
   );
 }
 
+export type SettledProjectGroup<T> = {
+  readonly projectKey: string;
+  readonly projectName: string;
+  readonly threads: readonly T[];
+};
+
+/** Clusters an already-sorted settled tail by project, without disturbing the
+    within-project order (still most-recently-settled first). Group order
+    follows first appearance in the input, so the project with the freshest
+    settle leads — except unresolvable projects (deleted since), which are
+    pooled into one trailing "Unknown project" group instead of being lost. */
+export function groupSettledThreadsByProject<
+  T extends { readonly environmentId: string; readonly projectId: string },
+>(
+  threads: readonly T[],
+  resolveProjectName: (projectKey: `${T["environmentId"]}:${T["projectId"]}`) => string | null,
+): SettledProjectGroup<T>[] {
+  const groups = new Map<string, { projectName: string; threads: T[] }>();
+  const unknown: T[] = [];
+  for (const thread of threads) {
+    const projectKey: `${T["environmentId"]}:${T["projectId"]}` = `${thread.environmentId}:${thread.projectId}`;
+    const projectName = resolveProjectName(projectKey);
+    if (projectName === null) {
+      unknown.push(thread);
+      continue;
+    }
+    let group = groups.get(projectKey);
+    if (!group) {
+      group = { projectName, threads: [] };
+      groups.set(projectKey, group);
+    }
+    group.threads.push(thread);
+  }
+  const result: SettledProjectGroup<T>[] = Array.from(groups.entries()).map(
+    ([projectKey, group]) => ({
+      projectKey,
+      projectName: group.projectName,
+      threads: group.threads,
+    }),
+  );
+  if (unknown.length > 0) {
+    result.push({ projectKey: "unknown", projectName: "Unknown project", threads: unknown });
+  }
+  return result;
+}
+
 /** The timestamp a working thread's elapsed label counts from: the running
     turn's start (request time until adoption), falling back to the session's
     last transition when the turn projection lags behind. Malformed

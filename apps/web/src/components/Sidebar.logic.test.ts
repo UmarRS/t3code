@@ -10,6 +10,7 @@ import {
   getFallbackThreadIdAfterDelete,
   getVisibleThreadsForProject,
   getProjectSortTimestamp,
+  groupSettledThreadsByProject,
   hasUnseenCompletion,
   isContextMenuPointerDown,
   isTrailingDoubleClick,
@@ -938,6 +939,81 @@ describe("sortSettledThreadsForSidebar", () => {
     ]);
 
     expect(sorted.map((thread) => thread.id)).toEqual(["a", "b"]);
+  });
+});
+
+describe("groupSettledThreadsByProject", () => {
+  const thread = (input: { id: string; environmentId: string; projectId: string }) => ({
+    id: input.id,
+    environmentId: input.environmentId,
+    projectId: input.projectId,
+  });
+  const projectNames: Record<string, string> = {
+    "env-1:project-a": "Project A",
+    "env-1:project-b": "Project B",
+  };
+  const resolveName = (key: string) => projectNames[key] ?? null;
+
+  it("clusters threads by project while preserving each project's incoming order", () => {
+    const groups = groupSettledThreadsByProject(
+      [
+        thread({ id: "1", environmentId: "env-1", projectId: "project-a" }),
+        thread({ id: "2", environmentId: "env-1", projectId: "project-b" }),
+        thread({ id: "3", environmentId: "env-1", projectId: "project-a" }),
+      ],
+      resolveName,
+    );
+
+    expect(groups.map((group) => group.projectName)).toEqual(["Project A", "Project B"]);
+    expect(groups[0]?.threads.map((t) => t.id)).toEqual(["1", "3"]);
+    expect(groups[1]?.threads.map((t) => t.id)).toEqual(["2"]);
+  });
+
+  it("orders groups by first appearance, leading with the freshest project", () => {
+    const groups = groupSettledThreadsByProject(
+      [
+        thread({ id: "1", environmentId: "env-1", projectId: "project-b" }),
+        thread({ id: "2", environmentId: "env-1", projectId: "project-a" }),
+      ],
+      resolveName,
+    );
+
+    expect(groups.map((group) => group.projectName)).toEqual(["Project B", "Project A"]);
+  });
+
+  it("renders a single group when every thread belongs to one project", () => {
+    const groups = groupSettledThreadsByProject(
+      [
+        thread({ id: "1", environmentId: "env-1", projectId: "project-a" }),
+        thread({ id: "2", environmentId: "env-1", projectId: "project-a" }),
+      ],
+      resolveName,
+    );
+
+    expect(groups).toHaveLength(1);
+    expect(groups[0]?.threads.map((t) => t.id)).toEqual(["1", "2"]);
+  });
+
+  it("pools threads whose project no longer resolves into a trailing Unknown project group", () => {
+    const groups = groupSettledThreadsByProject(
+      [
+        thread({ id: "1", environmentId: "env-1", projectId: "project-a" }),
+        thread({ id: "2", environmentId: "env-1", projectId: "deleted-project" }),
+        thread({ id: "3", environmentId: "env-1", projectId: "project-b" }),
+      ],
+      resolveName,
+    );
+
+    expect(groups.map((group) => group.projectName)).toEqual([
+      "Project A",
+      "Project B",
+      "Unknown project",
+    ]);
+    expect(groups.at(-1)?.threads.map((t) => t.id)).toEqual(["2"]);
+  });
+
+  it("returns no groups for an empty thread list", () => {
+    expect(groupSettledThreadsByProject([], resolveName)).toEqual([]);
   });
 });
 

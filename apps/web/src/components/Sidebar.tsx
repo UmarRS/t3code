@@ -121,6 +121,7 @@ import {
   buildBulkTitleRegenerationContextMenuItem,
   formatWorkingDurationLabel,
   firstValidTimestampMs,
+  groupSettledThreadsByProject,
   hasUnseenCompletion,
   isTrailingDoubleClick,
   orderItemsByPreferredIds,
@@ -2041,6 +2042,20 @@ export default function Sidebar() {
     );
     return routeThread === undefined ? [] : [routeThread];
   }, [routeThreadKey, settledShelfExpanded, visibleSettledThreads]);
+  // Scoped to one project, every settled row is already that project — a
+  // header would just repeat the shelf's own context. Unscoped, cluster the
+  // (already recency-sorted) tail by project so history from several
+  // projects doesn't read as one undifferentiated pile.
+  const settledProjectGroups = useMemo(
+    () =>
+      scopedProjectGroup !== null
+        ? null
+        : groupSettledThreadsByProject(
+            renderedSettledThreads,
+            (projectKey) => projectDisplayNameByKey.get(projectKey) ?? null,
+          ),
+    [projectDisplayNameByKey, renderedSettledThreads, scopedProjectGroup],
+  );
 
   // The snoozed shelf is collapsed by default: out of the way, never gone.
   // Collapsed threads don't render (and so don't participate in jump
@@ -3632,8 +3647,44 @@ export default function Sidebar() {
                       </li>,
                     );
                   }
-                  for (const thread of renderedSettledThreads) {
-                    items.push(renderThreadRow(thread, "settled"));
+                  if (settledProjectGroups !== null && settledProjectGroups.length > 1) {
+                    for (const group of settledProjectGroups) {
+                      const headerThread = group.threads[0];
+                      items.push(
+                        <li
+                          key={`settled-project-header-${group.projectKey}`}
+                          data-thread-selection-safe
+                          className="list-none"
+                        >
+                          <div className="mt-2 mb-0.5 flex items-center gap-1.5 px-2.5 text-[11px] font-medium text-muted-foreground/40">
+                            {headerThread !== undefined ? (
+                              <ProjectFavicon
+                                environmentId={headerThread.environmentId}
+                                cwd={
+                                  projectCwdByKey.get(
+                                    `${headerThread.environmentId}:${headerThread.projectId}`,
+                                  ) ?? ""
+                                }
+                                faviconPath={
+                                  projectFaviconPathByKey.get(
+                                    `${headerThread.environmentId}:${headerThread.projectId}`,
+                                  ) ?? null
+                                }
+                                className="size-3"
+                              />
+                            ) : null}
+                            <span className="truncate">{group.projectName}</span>
+                          </div>
+                        </li>,
+                      );
+                      for (const thread of group.threads) {
+                        items.push(renderThreadRow(thread, "settled"));
+                      }
+                    }
+                  } else {
+                    for (const thread of renderedSettledThreads) {
+                      items.push(renderThreadRow(thread, "settled"));
+                    }
                   }
                   return items;
                 })()}
