@@ -1,9 +1,11 @@
 import { CommandId, OrchestrationDispatchCommandError } from "@t3tools/contracts";
 import * as Cause from "effect/Cause";
 import * as Crypto from "effect/Crypto";
+import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
+import * as Schedule from "effect/Schedule";
 import * as Schema from "effect/Schema";
 
 import { GitWorkflowService } from "../../git/GitWorkflowService.ts";
@@ -20,6 +22,28 @@ import { buildIssueStartPrompt } from "../issueStartPrompt.ts";
 import { buildIssueReviewPrompt } from "../issueReviewPrompt.ts";
 
 const isDispatchCommandError = Schema.is(OrchestrationDispatchCommandError);
+
+/**
+ * Worktree preparation is the part of a start that fails for reasons that
+ * pass on their own: an index lock held by a sibling start, a fetch that
+ * times out, a directory git is still cleaning up. Parking the issue on the
+ * first stumble sends a user to needs-attention for something a second
+ * attempt would have fixed, so give it three attempts a few seconds apart —
+ * long enough to outlast a lock, short enough that a genuinely broken
+ * repository still gets flagged promptly.
+ */
+const WORKTREE_PREPARATION_ATTEMPTS = 3;
+const WORKTREE_PREPARATION_FIRST_RETRY_DELAY = Duration.seconds(2);
+const WORKTREE_PREPARATION_LATER_RETRY_DELAY = Duration.seconds(5);
+const WORKTREE_PREPARATION_RETRY = Schedule.recurs(WORKTREE_PREPARATION_ATTEMPTS - 1).pipe(
+  Schedule.addDelay(({ attempt }) =>
+    Effect.succeed(
+      attempt === 1
+        ? WORKTREE_PREPARATION_FIRST_RETRY_DELAY
+        : WORKTREE_PREPARATION_LATER_RETRY_DELAY,
+    ),
+  ),
+);
 
 const toDispatchError = (message: string) => (cause: unknown) =>
   isDispatchCommandError(cause)
@@ -111,57 +135,62 @@ const make = Effect.gen(function* () {
         // Every issue gets its own worktree: siblings are started in parallel and
         // would otherwise trample each other in one working tree.
         //
-        // The base must be a real branch name, never the literal "HEAD": it is
-        // recorded as the branch's merge base and later becomes `--base` on the
-        // pull request, where "HEAD" names no branch on the remote.
-        const baseBranch =
-          command.baseBranch ??
-          (yield* gitWorkflow.localStatus({ cwd: project.value.workspaceRoot }).pipe(
-            Effect.map((status) => status.refName),
-            Effect.orElseSucceed(() => null),
-          )) ??
-          "HEAD";
-        const startFromOrigin =
-          command.startFromOrigin === true &&
-          (yield* gitWorkflow.remoteExists({
-            cwd: project.value.workspaceRoot,
-            remoteName: "origin",
-          }));
-        let worktreeBaseRef = baseBranch;
-        if (startFromOrigin) {
-          yield* gitWorkflow.fetchRemote({
-            cwd: project.value.workspaceRoot,
-            remoteName: "origin",
-          });
-          const resolvedRemoteBase = yield* gitWorkflow.resolveRemoteTrackingCommit({
-            cwd: project.value.workspaceRoot,
-            refName: baseBranch,
-            fallbackRemoteName: "origin",
-          });
-          worktreeBaseRef = resolvedRemoteBase.commitSha;
-        }
+        // Nothing in here dispatches: the git steps are the retryable part of a
+        // start, and re-running a command the engine already accepted — the
+        // `thread.create` above most of all — is not something a retry may do.
+        const prepareWorktree = Effect.gen(function* () {
+          // The base must be a real branch name, never the literal "HEAD": it is
+          // recorded as the branch's merge base and later becomes `--base` on the
+          // pull request, where "HEAD" names no branch on the remote.
+          const baseBranch =
+            command.baseBranch ??
+            (yield* gitWorkflow.localStatus({ cwd: project.value.workspaceRoot }).pipe(
+              Effect.map((status) => status.refName),
+              Effect.orElseSucceed(() => null),
+            )) ??
+            "HEAD";
+          const startFromOrigin =
+            command.startFromOrigin === true &&
+            (yield* gitWorkflow.remoteExists({
+              cwd: project.value.workspaceRoot,
+              remoteName: "origin",
+            }));
+          let worktreeBaseRef = baseBranch;
+          if (startFromOrigin) {
+            yield* gitWorkflow.fetchRemote({
+              cwd: project.value.workspaceRoot,
+              remoteName: "origin",
+            });
+            const resolvedRemoteBase = yield* gitWorkflow.resolveRemoteTrackingCommit({
+              cwd: project.value.workspaceRoot,
+              refName: baseBranch,
+              fallbackRemoteName: "origin",
+            });
+            worktreeBaseRef = resolvedRemoteBase.commitSha;
+          }
 
-        // A retry after a failed or abandoned attempt finds this issue's branch
-        // already in the repository, sometimes with a live worktree. Reuse what
-        // exists instead of failing `git worktree add` on the collision — the
-        // branch may even carry pushed work from the earlier attempt.
-        const issueBranch = command.branch ?? `issue/${command.issueId}`;
-        const existingBranch = yield* gitWorkflow
-          .listRefs({
-            cwd: project.value.workspaceRoot,
-            query: issueBranch,
-            refKind: "local",
-            refresh: true,
-          })
-          .pipe(
-            Effect.map(
-              (result) =>
-                result.refs.find((ref) => !ref.isRemote && ref.name === issueBranch) ?? null,
-            ),
-            Effect.orElseSucceed(() => null),
-          );
-        const worktree =
-          existingBranch?.worktreePath != null
+          // A retry after a failed or abandoned attempt finds this issue's branch
+          // already in the repository, sometimes with a live worktree. Reuse what
+          // exists instead of failing `git worktree add` on the collision — the
+          // branch may even carry pushed work from the earlier attempt. This is
+          // also what makes the attempts below re-entrant: attempt two picks up
+          // whatever attempt one managed to create before it failed.
+          const issueBranch = command.branch ?? `issue/${command.issueId}`;
+          const existingBranch = yield* gitWorkflow
+            .listRefs({
+              cwd: project.value.workspaceRoot,
+              query: issueBranch,
+              refKind: "local",
+              refresh: true,
+            })
+            .pipe(
+              Effect.map(
+                (result) =>
+                  result.refs.find((ref) => !ref.isRemote && ref.name === issueBranch) ?? null,
+              ),
+              Effect.orElseSucceed(() => null),
+            );
+          return existingBranch?.worktreePath != null
             ? { worktree: { path: existingBranch.worktreePath, refName: issueBranch } }
             : existingBranch !== null
               ? // The branch survived without a worktree: check it out as-is.
@@ -180,6 +209,23 @@ const make = Effect.gen(function* () {
                   baseRefName: baseBranch,
                   path: null,
                 });
+        });
+
+        const worktree = yield* prepareWorktree.pipe(
+          Effect.tapError((error) =>
+            Effect.logWarning("issue worktree preparation attempt failed", {
+              issueId: command.issueId,
+              threadId: command.threadId,
+              detail: error.message,
+            }),
+          ),
+          Effect.retry(WORKTREE_PREPARATION_RETRY),
+          Effect.mapError(
+            toDispatchError(
+              `Failed to prepare the issue's worktree after ${WORKTREE_PREPARATION_ATTEMPTS} attempts.`,
+            ),
+          ),
+        );
 
         yield* orchestrationEngine.dispatch({
           type: "thread.meta.update",

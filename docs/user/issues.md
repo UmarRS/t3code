@@ -48,8 +48,10 @@ Cards in Backlog carry a **Start** button. Starting an issue:
    on, so the agent knows what it is building on.
 4. Moves the issue to In Progress and links it to the thread.
 
-You land in the new thread when it is ready. If the worktree or the first turn cannot be set up, the
-issue returns to where it was and can be started again.
+You land in the new thread when it is ready. Worktree creation is retried a few times over a few
+seconds first, so a passing git hiccup does not cost you a start. If the worktree still cannot be
+cut, or the first turn cannot be set up, the issue returns to where it was and can be started
+again.
 
 If an agent asks a question, the issue card shows **Awaiting answer** and the global question icon
 lights up. Open the linked thread to answer it; the run resumes from there.
