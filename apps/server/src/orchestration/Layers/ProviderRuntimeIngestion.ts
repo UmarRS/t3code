@@ -33,6 +33,7 @@ import { ProviderService } from "../../provider/Services/ProviderService.ts";
 import { ProjectionTurnRepository } from "../../persistence/Services/ProjectionTurns.ts";
 import { ProjectionTurnRepositoryLive } from "../../persistence/Layers/ProjectionTurns.ts";
 import { isGitRepository } from "../../git/Utils.ts";
+import { ModelFailoverService } from "../Services/ModelFailover.ts";
 import { OrchestrationEngineService } from "../Services/OrchestrationEngine.ts";
 import { ThreadBackgroundLivenessService } from "../ThreadBackgroundLiveness.ts";
 import { ThreadPlanProgressService } from "../ThreadPlanProgress.ts";
@@ -875,6 +876,7 @@ const make = Effect.gen(function* () {
   const providerService = yield* ProviderService;
   const projectionTurnRepository = yield* ProjectionTurnRepository;
   const serverSettingsService = yield* ServerSettingsService;
+  const modelFailover = yield* ModelFailoverService;
   const providerCommandId = (event: ProviderRuntimeEvent, tag: string) =>
     crypto.randomUUIDv4.pipe(
       Effect.map((uuid) => CommandId.make(`provider:${event.eventId}:${tag}:${uuid}`)),
@@ -1589,15 +1591,24 @@ const make = Effect.gen(function* () {
                   )
                 ? null
                 : activeTurnId;
+        const isFreshSessionError =
+          event.type === "session.state.changed" && event.payload.state === "error";
+        const isFreshTurnFailure =
+          event.type === "turn.completed" &&
+          normalizeRuntimeTurnState(event.payload.state) === "failed";
+        const rawLastError = isFreshSessionError
+          ? (event.payload.reason ?? thread.session?.lastError ?? "Provider session error")
+          : isFreshTurnFailure
+            ? (event.payload.errorMessage ?? thread.session?.lastError ?? "Turn failed")
+            : status === "ready"
+              ? null
+              : (thread.session?.lastError ?? null);
+        // A failure on the codex backup right after an automatic failover
+        // must surface both attempts, not just the codex error.
         const lastError =
-          event.type === "session.state.changed" && event.payload.state === "error"
-            ? (event.payload.reason ?? thread.session?.lastError ?? "Provider session error")
-            : event.type === "turn.completed" &&
-                normalizeRuntimeTurnState(event.payload.state) === "failed"
-              ? (event.payload.errorMessage ?? thread.session?.lastError ?? "Turn failed")
-              : status === "ready"
-                ? null
-                : (thread.session?.lastError ?? null);
+          rawLastError !== null && (isFreshSessionError || isFreshTurnFailure)
+            ? yield* modelFailover.withFailoverContext(thread.id, rawLastError)
+            : rawLastError;
 
         if (shouldApplyThreadLifecycle) {
           if (event.type === "turn.started" && acceptedTurnStartedSourcePlan !== null) {
@@ -1638,6 +1649,19 @@ const make = Effect.gen(function* () {
             },
             createdAt: now,
           });
+
+          // A turn that failed because the Claude account is out of
+          // credits/limits restarts once on the codex backup model (any other
+          // failure — and any failure of the backup itself — keeps the error
+          // state set above). Classification runs on the raw provider error;
+          // the failover service owns the mapping and the one-hop guarantee.
+          if (isFreshTurnFailure && rawLastError !== null) {
+            yield* modelFailover.maybeFailoverToBackup({
+              threadId: thread.id,
+              failureDetail: rawLastError,
+              createdAt: now,
+            });
+          }
         }
       }
 
