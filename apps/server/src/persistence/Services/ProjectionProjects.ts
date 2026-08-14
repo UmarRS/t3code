@@ -9,6 +9,7 @@
 import {
   IsoDateTime,
   ModelSelection,
+  ProjectAutonomousSchedule,
   ProjectId,
   ProjectScript,
   ThreadEnvMode,
@@ -32,6 +33,7 @@ export const ProjectionProject = Schema.Struct({
   autonomousFinishedReason: Schema.optional(
     Schema.NullOr(Schema.Literals(["completed", "disabled"])),
   ),
+  autonomousSchedule: ProjectAutonomousSchedule,
   scripts: Schema.Array(ProjectScript),
   createdAt: IsoDateTime,
   updatedAt: IsoDateTime,

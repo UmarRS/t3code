@@ -6,6 +6,7 @@ import * as Scope from "effect/Scope";
 import { afterEach, describe, expect, it } from "vite-plus/test";
 
 import { AutonomousRunReactor } from "../Services/AutonomousRunReactor.ts";
+import { AutonomousScheduleReactor } from "../Services/AutonomousScheduleReactor.ts";
 import { CheckpointReactor } from "../Services/CheckpointReactor.ts";
 import { ProviderCommandReactor } from "../Services/ProviderCommandReactor.ts";
 import { ProviderRuntimeIngestionService } from "../Services/ProviderRuntimeIngestion.ts";
@@ -73,6 +74,15 @@ describe("OrchestrationReactor", () => {
             drain: Effect.void,
           }),
         ),
+        Layer.provideMerge(
+          Layer.succeed(AutonomousScheduleReactor, {
+            start: () => {
+              started.push("autonomous-schedule-reactor");
+              return Effect.void;
+            },
+            runDueAt: () => Effect.void,
+          }),
+        ),
       ),
     );
 
@@ -86,6 +96,7 @@ describe("OrchestrationReactor", () => {
       "checkpoint-reactor",
       "thread-deletion-reactor",
       "autonomous-run-reactor",
+      "autonomous-schedule-reactor",
     ]);
 
     await Effect.runPromise(Scope.close(scope, Exit.void));

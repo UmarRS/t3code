@@ -12,8 +12,10 @@ import {
   deriveProjectGroupingOverrideKey,
   selectProjectGroupingSettings,
 } from "../../logicalProject";
+import { MAX_AUTONOMOUS_SCHEDULE_ENTRIES } from "@t3tools/contracts";
 import type {
   ModelSelection,
+  ProjectAutonomousScheduleEntry,
   ProviderDriverKind,
   SidebarProjectGroupingMode,
   T3ProjectFileScript,
@@ -27,6 +29,7 @@ import { CopyIcon, FolderIcon, PlusIcon, ServerIcon, SettingsIcon, Trash2Icon } 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { useComposerDraftStore } from "../../composerDraftStore";
+import { randomUUID } from "../../lib/utils";
 import { isElectron } from "../../env";
 import {
   useClientSettings,
@@ -79,6 +82,8 @@ import {
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
 import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../ui/select";
+import { Switch } from "../ui/switch";
+import { Toggle, ToggleGroup } from "../ui/toggle-group";
 import { stackedThreadToast, toastManager } from "../ui/toast";
 import {
   SettingResetButton,
@@ -87,6 +92,19 @@ import {
   SettingsSection,
 } from "./settingsLayout";
 import { ProjectFaviconPickerDialog } from "./ProjectFaviconPickerDialog";
+
+/** Sunday-first, matching `Date.prototype.getDay` and every calendar UI. */
+const SCHEDULE_DAYS = [
+  { value: 0, short: "S", label: "Sunday" },
+  { value: 1, short: "M", label: "Monday" },
+  { value: 2, short: "T", label: "Tuesday" },
+  { value: 3, short: "W", label: "Wednesday" },
+  { value: 4, short: "T", label: "Thursday" },
+  { value: 5, short: "F", label: "Friday" },
+  { value: 6, short: "S", label: "Saturday" },
+] as const;
+
+const SCHEDULE_TIME_PATTERN = /^([01]\d|2[0-3]):[0-5]\d$/;
 
 export const PROJECT_GROUPING_MODE_LABELS: Record<SidebarProjectGroupingMode, string> = {
   repository: "Group by repository",
@@ -272,6 +290,9 @@ function ProjectDetail({
   const threads = useThreadShells();
   const updateProject = useAtomCommand(projectEnvironment.update, { reportFailure: false });
   const deleteProject = useAtomCommand(projectEnvironment.delete, { reportFailure: false });
+  const setAutonomousSchedule = useAtomCommand(projectEnvironment.setAutonomousSchedule, {
+    reportFailure: false,
+  });
   const upsertKeybinding = useAtomCommand(serverEnvironment.upsertKeybinding, {
     reportFailure: false,
   });
@@ -586,6 +607,66 @@ function ProjectDetail({
       }
     },
     [submitScript],
+  );
+
+  // ----- scheduled runs -----
+  const schedule = representative.autonomousSchedule ?? [];
+  // Like scripts, a write replaces the whole list, so two overlapping writes
+  // computed from the same snapshot would drop each other's changes.
+  const [isSavingSchedule, setIsSavingSchedule] = useState(false);
+  const savingScheduleRef = useRef(false);
+  const persistSchedule = useCallback(
+    async (nextSchedule: ReadonlyArray<ProjectAutonomousScheduleEntry>) => {
+      if (savingScheduleRef.current) return;
+      savingScheduleRef.current = true;
+      setIsSavingSchedule(true);
+      try {
+        for (const member of group.memberProjects) {
+          const result = mapAtomCommandResult(
+            await setAutonomousSchedule({
+              environmentId: member.environmentId,
+              input: { projectId: member.id, schedule: nextSchedule },
+            }),
+            () => undefined,
+          );
+          if (result._tag === "Failure") {
+            reportFailure(
+              group.memberProjects.length > 1
+                ? `Failed to save scheduled runs on ${member.environmentLabel ?? "the current environment"}`
+                : "Failed to save scheduled runs",
+              result,
+            );
+            return;
+          }
+        }
+      } finally {
+        savingScheduleRef.current = false;
+        setIsSavingSchedule(false);
+      }
+    },
+    [group.memberProjects, reportFailure, setAutonomousSchedule],
+  );
+
+  const updateScheduleEntry = useCallback(
+    (entryId: string, patch: Partial<ProjectAutonomousScheduleEntry>) =>
+      void persistSchedule(
+        schedule.map((entry) => (entry.id === entryId ? { ...entry, ...patch } : entry)),
+      ),
+    [persistSchedule, schedule],
+  );
+
+  const addScheduleEntry = useCallback(
+    () =>
+      void persistSchedule([
+        ...schedule,
+        { id: randomUUID(), time: "09:00", daysOfWeek: [], enabled: true },
+      ]),
+    [persistSchedule, schedule],
+  );
+
+  const removeScheduleEntry = useCallback(
+    (entryId: string) => void persistSchedule(schedule.filter((entry) => entry.id !== entryId)),
+    [persistSchedule, schedule],
   );
 
   // ----- checkouts -----
@@ -985,6 +1066,103 @@ function ProjectDetail({
             }
           />
         ) : null}
+      </SettingsSection>
+
+      <SettingsSection
+        id="project-scheduled-runs"
+        title="Scheduled runs"
+        headerAction={
+          <Button
+            size="xs"
+            variant="outline"
+            disabled={isSavingSchedule || schedule.length >= MAX_AUTONOMOUS_SCHEDULE_ENTRIES}
+            onClick={addScheduleEntry}
+          >
+            <PlusIcon className="size-3.5" />
+            Add time
+          </Button>
+        }
+      >
+        {schedule.length === 0 ? (
+          <p className="px-3 py-2 text-sm text-muted-foreground sm:px-4">
+            No scheduled runs. Add a time and this project starts an autonomous run then, on the
+            server&rsquo;s clock. A time that passes while the server is off is skipped rather than
+            caught up later, and a scheduled time never interrupts a run that is already going.
+          </p>
+        ) : (
+          <div className="space-y-2 px-3 sm:px-4">
+            {schedule.map((entry) => (
+              <div
+                key={entry.id}
+                className="flex flex-wrap items-center gap-3 rounded-lg border border-border/50 p-3"
+              >
+                <Input
+                  key={`${entry.id}:${entry.time}`}
+                  type="time"
+                  aria-label="Run time"
+                  className="w-32 shrink-0"
+                  defaultValue={entry.time}
+                  disabled={isSavingSchedule}
+                  onChange={(event) => {
+                    // The picker emits an empty string mid-edit; only a
+                    // complete time is worth a round trip.
+                    const value = event.currentTarget.value;
+                    if (!SCHEDULE_TIME_PATTERN.test(value) || value === entry.time) return;
+                    updateScheduleEntry(entry.id, { time: value });
+                  }}
+                />
+                <ToggleGroup
+                  multiple
+                  size="sm"
+                  className="gap-1"
+                  disabled={isSavingSchedule}
+                  value={entry.daysOfWeek.map(String)}
+                  onValueChange={(value) => {
+                    const daysOfWeek = SCHEDULE_DAYS.map((day) => day.value).filter((day) =>
+                      value.includes(String(day)),
+                    );
+                    updateScheduleEntry(entry.id, { daysOfWeek });
+                  }}
+                >
+                  {SCHEDULE_DAYS.map((day) => (
+                    <Toggle
+                      key={day.value}
+                      value={String(day.value)}
+                      aria-label={day.label}
+                      variant="outline"
+                      className="w-8"
+                    >
+                      {day.short}
+                    </Toggle>
+                  ))}
+                </ToggleGroup>
+                <span className="text-xs text-muted-foreground">
+                  {entry.daysOfWeek.length === 0 ? "Every day" : ""}
+                </span>
+                <div className="ms-auto flex shrink-0 items-center gap-2">
+                  <Switch
+                    checked={entry.enabled}
+                    disabled={isSavingSchedule}
+                    aria-label={`Scheduled run at ${entry.time}`}
+                    onCheckedChange={(checked) =>
+                      updateScheduleEntry(entry.id, { enabled: checked })
+                    }
+                  />
+                  <Button
+                    size="icon-xs"
+                    variant="ghost"
+                    className="text-muted-foreground hover:text-destructive-foreground"
+                    aria-label={`Remove scheduled run at ${entry.time}`}
+                    disabled={isSavingSchedule}
+                    onClick={() => removeScheduleEntry(entry.id)}
+                  >
+                    <Trash2Icon className="size-3.5" />
+                  </Button>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
       </SettingsSection>
 
       <SettingsSection id="project-checkouts" title="Checkouts">

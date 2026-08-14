@@ -540,6 +540,12 @@ const makeWsRpcLayer = (
         switch (event.type) {
           case "project.created":
           case "project.meta-updated":
+          // Run state and schedules live on the project row, so the clients
+          // rendering "a run is live" and the schedule editor need the same
+          // upsert a metadata edit sends.
+          case "project.autonomous-enabled":
+          case "project.autonomous-disabled":
+          case "project.autonomous-schedule-set":
             return projectUpsertOrRemove(event.payload.projectId, event.sequence);
           case "project.deleted":
             return Effect.succeed(

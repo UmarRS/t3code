@@ -34,6 +34,7 @@ import {
   OrchestrationIssueDetail,
 } from "./issues.ts";
 import { ProviderInstanceId } from "./providerInstance.ts";
+import { ProjectAutonomousSchedule } from "./autonomousSchedule.ts";
 import { ThreadScopeFields } from "./threadScope.ts";
 
 export const ORCHESTRATION_WS_METHODS = {
@@ -203,6 +204,11 @@ export const OrchestrationProject = Schema.Struct({
   autonomousFinishedReason: Schema.optional(
     Schema.NullOr(Schema.Literals(["completed", "disabled"])),
   ),
+  /**
+   * Times of day at which the server starts a run by itself. Absent means the
+   * project has no schedule, so pre-schedule payloads decode unchanged.
+   */
+  autonomousSchedule: Schema.optional(ProjectAutonomousSchedule),
   createdAt: IsoDateTime,
   updatedAt: IsoDateTime,
   deletedAt: Schema.NullOr(IsoDateTime),
@@ -417,6 +423,11 @@ export const OrchestrationProjectShell = Schema.Struct({
   autonomousFinishedReason: Schema.optional(
     Schema.NullOr(Schema.Literals(["completed", "disabled"])),
   ),
+  /**
+   * Times of day at which the server starts a run by itself. Absent means the
+   * project has no schedule, so pre-schedule payloads decode unchanged.
+   */
+  autonomousSchedule: Schema.optional(ProjectAutonomousSchedule),
   createdAt: IsoDateTime,
   updatedAt: IsoDateTime,
 });
@@ -936,6 +947,18 @@ const ProjectAutonomousDisableCommand = Schema.Struct({
   ),
 });
 
+/**
+ * Replace a project's schedule wholesale. The list is short and always edited
+ * as a whole in settings, so a field-wise merge would only add a way for two
+ * clients to disagree about what the list is.
+ */
+const ProjectAutonomousScheduleSetCommand = Schema.Struct({
+  type: Schema.Literal("project.autonomous.schedule.set"),
+  commandId: CommandId,
+  projectId: ProjectId,
+  schedule: ProjectAutonomousSchedule,
+});
+
 const IssueCreateCommand = Schema.Struct({
   type: Schema.Literal("issue.create"),
   commandId: CommandId,
@@ -1066,6 +1089,7 @@ const DispatchableClientOrchestrationCommand = Schema.Union([
   IssueAttentionClearCommand,
   ProjectAutonomousEnableCommand,
   ProjectAutonomousDisableCommand,
+  ProjectAutonomousScheduleSetCommand,
 ]);
 export type DispatchableClientOrchestrationCommand =
   typeof DispatchableClientOrchestrationCommand.Type;
@@ -1103,6 +1127,7 @@ export const ClientOrchestrationCommand = Schema.Union([
   IssueAttentionClearCommand,
   ProjectAutonomousEnableCommand,
   ProjectAutonomousDisableCommand,
+  ProjectAutonomousScheduleSetCommand,
 ]);
 export type ClientOrchestrationCommand = typeof ClientOrchestrationCommand.Type;
 
@@ -1296,6 +1321,7 @@ export const OrchestrationEventType = Schema.Literals([
   "issue.review-recorded",
   "project.autonomous-enabled",
   "project.autonomous-disabled",
+  "project.autonomous-schedule-set",
 ]);
 export type OrchestrationEventType = typeof OrchestrationEventType.Type;
 
@@ -1641,6 +1667,12 @@ export const ProjectAutonomousDisabledPayload = Schema.Struct({
   updatedAt: IsoDateTime,
 });
 
+export const ProjectAutonomousScheduleSetPayload = Schema.Struct({
+  projectId: ProjectId,
+  schedule: ProjectAutonomousSchedule,
+  updatedAt: IsoDateTime,
+});
+
 export const OrchestrationEventMetadata = Schema.Struct({
   providerTurnId: Schema.optional(TrimmedNonEmptyString),
   providerItemId: Schema.optional(ProviderItemId),
@@ -1872,6 +1904,11 @@ export const OrchestrationEvent = Schema.Union([
     ...EventBaseFields,
     type: Schema.Literal("project.autonomous-disabled"),
     payload: ProjectAutonomousDisabledPayload,
+  }),
+  Schema.Struct({
+    ...EventBaseFields,
+    type: Schema.Literal("project.autonomous-schedule-set"),
+    payload: ProjectAutonomousScheduleSetPayload,
   }),
 ]);
 export type OrchestrationEvent = typeof OrchestrationEvent.Type;

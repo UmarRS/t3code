@@ -22,6 +22,7 @@ import type {
   OrchestrationThreadDetailSnapshot,
   OrchestrationThreadDetailWindow,
   OrchestrationThreadShell,
+  ProjectAutonomousScheduleEntry,
   ProjectId,
   ThreadId,
 } from "@t3tools/contracts";
@@ -30,6 +31,14 @@ import type * as Option from "effect/Option";
 import type * as Effect from "effect/Effect";
 
 import type { ProjectionRepositoryError } from "../../persistence/Errors.ts";
+
+/** Just enough of a project for the schedule ticker to decide. */
+export interface ProjectionScheduledProject {
+  readonly projectId: ProjectId;
+  /** Non-null means a run is live, and the ticker leaves the project alone. */
+  readonly autonomousStartedAt: string | null;
+  readonly autonomousSchedule: ReadonlyArray<ProjectAutonomousScheduleEntry>;
+}
 
 export interface ProjectionSnapshotCounts {
   readonly projectCount: number;
@@ -128,6 +137,18 @@ export interface ProjectionSnapshotQueryShape {
   readonly getActiveProjectByWorkspaceRoot: (
     workspaceRoot: string,
   ) => Effect.Effect<Option.Option<OrchestrationProject>, ProjectionRepositoryError>;
+
+  /**
+   * Read the active projects that carry a schedule.
+   *
+   * Deliberately narrower than the shell snapshot: this runs once a minute, so
+   * it reads three columns of the projects that have anything to fire rather
+   * than every project, thread and issue in the environment.
+   */
+  readonly listScheduledProjects: () => Effect.Effect<
+    ReadonlyArray<ProjectionScheduledProject>,
+    ProjectionRepositoryError
+  >;
 
   /**
    * Read a single active project shell row by id.
