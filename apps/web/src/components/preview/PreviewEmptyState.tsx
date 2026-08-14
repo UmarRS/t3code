@@ -11,7 +11,6 @@ import { useDiscoveredLocalServers } from "./useDiscoveredLocalServers";
 interface Props {
   environmentId: EnvironmentId;
   configuredUrls?: ReadonlyArray<string> | undefined;
-  recentlySeenUrls?: ReadonlyArray<string> | undefined;
   recentEntries: ReadonlyArray<BrowserHistoryEntry>;
   onRemoveRecent: (url: string) => void;
   onOpenUrl: (url: string) => void;
@@ -20,7 +19,6 @@ interface Props {
 export function PreviewEmptyState({
   environmentId,
   configuredUrls,
-  recentlySeenUrls,
   recentEntries,
   onRemoveRecent,
   onOpenUrl,
@@ -28,7 +26,6 @@ export function PreviewEmptyState({
   const servers = useDiscoveredLocalServers({
     environmentId,
     configuredUrls,
-    recentlySeenUrls,
   });
   const recents = recentEntries.filter((entry) => URL.canParse(entry.url)).slice(0, 8);
 
@@ -40,7 +37,7 @@ export function PreviewEmptyState({
         </EmptyMedia>
         <EmptyTitle>No preview yet</EmptyTitle>
         <EmptyDescription>
-          Type a URL above, or run a dev script. Listening localhost ports will show up here
+          Type a URL above, or run a dev script. Browser-ready localhost servers will show up here
           automatically.
         </EmptyDescription>
       </Empty>
@@ -49,7 +46,7 @@ export function PreviewEmptyState({
 
   return (
     <div className="flex h-full min-h-0 overflow-y-auto px-5 py-8">
-      <div className="m-auto flex w-full max-w-xl flex-col gap-6">
+      <div className="mx-auto flex w-full max-w-xl flex-col gap-6">
         {recents.length > 0 ? (
           <div className="flex flex-col gap-3">
             <div className="flex items-center gap-2 text-sm text-muted-foreground">
@@ -84,7 +81,7 @@ export function PreviewEmptyState({
               ))}
             </div>
             <p className="px-1 text-xs text-muted-foreground">
-              Select a listening port to open it in this browser tab.
+              Select a live local server to open it in this browser tab.
             </p>
           </div>
         ) : null}
