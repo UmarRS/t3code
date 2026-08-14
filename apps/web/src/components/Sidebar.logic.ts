@@ -594,26 +594,29 @@ export type SettledProjectGroup<T> = {
     within-project order (still most-recently-settled first). Group order
     follows first appearance in the input, so the project with the freshest
     settle leads — except unresolvable projects (deleted since), which are
-    pooled into one trailing "Unknown project" group instead of being lost. */
+    pooled into one trailing "Unknown project" group instead of being lost.
+
+    Resolution goes through the LOGICAL project (the same grouping the scope
+    menu and row labels use), so the two members of one cross-environment
+    project land under a single header instead of two identically named ones. */
 export function groupSettledThreadsByProject<
   T extends { readonly environmentId: string; readonly projectId: string },
 >(
   threads: readonly T[],
-  resolveProjectName: (projectKey: `${T["environmentId"]}:${T["projectId"]}`) => string | null,
+  resolveProject: (projectKey: string) => { key: string; name: string } | null,
 ): SettledProjectGroup<T>[] {
   const groups = new Map<string, { projectName: string; threads: T[] }>();
   const unknown: T[] = [];
   for (const thread of threads) {
-    const projectKey: `${T["environmentId"]}:${T["projectId"]}` = `${thread.environmentId}:${thread.projectId}`;
-    const projectName = resolveProjectName(projectKey);
-    if (projectName === null) {
+    const project = resolveProject(`${thread.environmentId}:${thread.projectId}`);
+    if (project === null) {
       unknown.push(thread);
       continue;
     }
-    let group = groups.get(projectKey);
+    let group = groups.get(project.key);
     if (!group) {
-      group = { projectName, threads: [] };
-      groups.set(projectKey, group);
+      group = { projectName: project.name, threads: [] };
+      groups.set(project.key, group);
     }
     group.threads.push(thread);
   }

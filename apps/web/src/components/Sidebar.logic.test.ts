@@ -948,11 +948,14 @@ describe("groupSettledThreadsByProject", () => {
     environmentId: input.environmentId,
     projectId: input.projectId,
   });
-  const projectNames: Record<string, string> = {
-    "env-1:project-a": "Project A",
-    "env-1:project-b": "Project B",
+  // Mirrors the sidebar's logical grouping: a project key resolves to the
+  // logical project it belongs to, and two members can share one.
+  const projectsByKey: Record<string, { key: string; name: string }> = {
+    "env-1:project-a": { key: "group-a", name: "Project A" },
+    "env-1:project-b": { key: "group-b", name: "Project B" },
+    "env-2:project-a": { key: "group-a", name: "Project A" },
   };
-  const resolveName = (key: string) => projectNames[key] ?? null;
+  const resolveName = (key: string) => projectsByKey[key] ?? null;
 
   it("clusters threads by project while preserving each project's incoming order", () => {
     const groups = groupSettledThreadsByProject(
@@ -1010,6 +1013,20 @@ describe("groupSettledThreadsByProject", () => {
       "Unknown project",
     ]);
     expect(groups.at(-1)?.threads.map((t) => t.id)).toEqual(["2"]);
+  });
+
+  it("keeps the members of one cross-environment project under a single header", () => {
+    const groups = groupSettledThreadsByProject(
+      [
+        thread({ id: "1", environmentId: "env-1", projectId: "project-a" }),
+        thread({ id: "2", environmentId: "env-2", projectId: "project-a" }),
+        thread({ id: "3", environmentId: "env-1", projectId: "project-b" }),
+      ],
+      resolveName,
+    );
+
+    expect(groups.map((group) => group.projectName)).toEqual(["Project A", "Project B"]);
+    expect(groups[0]?.threads.map((t) => t.id)).toEqual(["1", "2"]);
   });
 
   it("returns no groups for an empty thread list", () => {
