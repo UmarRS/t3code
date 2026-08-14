@@ -64,6 +64,7 @@ import {
   type OrchestrationEngineShape,
 } from "../src/orchestration/Services/OrchestrationEngine.ts";
 import { AutonomousRunReactor } from "../src/orchestration/Services/AutonomousRunReactor.ts";
+import { AutonomousScheduleReactor } from "../src/orchestration/Services/AutonomousScheduleReactor.ts";
 import { ThreadDeletionReactor } from "../src/orchestration/Services/ThreadDeletionReactor.ts";
 import { OrchestrationReactor } from "../src/orchestration/Services/OrchestrationReactor.ts";
 import { ProjectionSnapshotQuery } from "../src/orchestration/Services/ProjectionSnapshotQuery.ts";
@@ -388,6 +389,12 @@ export const makeOrchestrationIntegrationHarness = (
         Layer.succeed(AutonomousRunReactor, {
           start: () => Effect.void,
           drain: Effect.void,
+        }),
+      ),
+      Layer.provideMerge(
+        Layer.succeed(AutonomousScheduleReactor, {
+          start: () => Effect.void,
+          runDueAt: () => Effect.void,
         }),
       ),
     );
