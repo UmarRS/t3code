@@ -37,6 +37,7 @@ import { TextGeneration } from "../../textGeneration/TextGeneration.ts";
 import { ProviderService } from "../../provider/Services/ProviderService.ts";
 import { ProviderRegistry } from "../../provider/Services/ProviderRegistry.ts";
 import { OrchestrationEngineService } from "../Services/OrchestrationEngine.ts";
+import { ModelFailoverService } from "../Services/ModelFailover.ts";
 import { ProjectionSnapshotQuery } from "../Services/ProjectionSnapshotQuery.ts";
 import {
   ProviderCommandReactor,
@@ -324,6 +325,7 @@ const make = Effect.gen(function* () {
   const vcsStatusBroadcaster = yield* VcsStatusBroadcaster;
   const textGeneration = yield* TextGeneration;
   const serverSettingsService = yield* ServerSettingsService;
+  const modelFailover = yield* ModelFailoverService;
   const serverCommandId = (tag: string) =>
     crypto.randomUUIDv4.pipe(Effect.map((uuid) => CommandId.make(`server:${tag}:${uuid}`)));
   const serverEventId = () => crypto.randomUUIDv4.pipe(Effect.map(EventId.make));
@@ -1145,18 +1147,33 @@ const make = Effect.gen(function* () {
         return Effect.void;
       }
       const detail = formatFailureDetail(cause);
-      return setThreadSessionErrorOnTurnStartFailure({
-        threadId: event.payload.threadId,
-        detail,
-        createdAt: event.payload.createdAt,
-      }).pipe(
-        Effect.flatMap(() =>
-          appendProviderFailureActivity({
+      return modelFailover.withFailoverContext(event.payload.threadId, detail).pipe(
+        Effect.flatMap((detailWithContext) =>
+          setThreadSessionErrorOnTurnStartFailure({
             threadId: event.payload.threadId,
-            kind: "provider.turn.start.failed",
-            summary: "Provider turn start failed",
-            detail,
-            turnId: null,
+            detail: detailWithContext,
+            createdAt: event.payload.createdAt,
+          }).pipe(
+            Effect.flatMap(() =>
+              appendProviderFailureActivity({
+                threadId: event.payload.threadId,
+                kind: "provider.turn.start.failed",
+                summary: "Provider turn start failed",
+                detail: detailWithContext,
+                turnId: null,
+                createdAt: event.payload.createdAt,
+              }),
+            ),
+          ),
+        ),
+        // Exhausted-credit/limit failures on a Claude model restart the turn
+        // on the codex backup; anything else already surfaced above. The
+        // classifier sees the full cause text because start failures wrap the
+        // exhaustion reason in a generic "failed to start" detail.
+        Effect.flatMap(() =>
+          modelFailover.maybeFailoverToBackup({
+            threadId: event.payload.threadId,
+            failureDetail: `${detail}\n${Cause.pretty(cause)}`,
             createdAt: event.payload.createdAt,
           }),
         ),

@@ -45,7 +45,10 @@ describe("searchSettings", () => {
 
   it("matches normalized title substrings", () => {
     expect(searchSettings("  WORD   WRAP  ", ITEMS).map((item) => item.id)).toEqual(["word-wrap"]);
-    expect(searchSettings("work").map((item) => item.id)).toEqual(["project-new-thread-workspace"]);
+    expect(searchSettings("work").map((item) => item.id)).toEqual([
+      "worktree-cleanup",
+      "project-new-thread-workspace",
+    ]);
     expect(searchSettings("xyzzy")).toEqual([]);
   });
 

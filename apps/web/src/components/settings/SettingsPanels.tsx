@@ -470,6 +470,9 @@ export function useSettingsRestore(onRestored?: () => void) {
       DEFAULT_UNIFIED_SETTINGS.newWorktreesStartFromOrigin
         ? ["New worktrees start from origin"]
         : []),
+      ...(settings.enableWorktreeCleanup !== DEFAULT_UNIFIED_SETTINGS.enableWorktreeCleanup
+        ? ["Clean up settled worktrees"]
+        : []),
       ...(settings.addProjectBaseDirectory !== DEFAULT_UNIFIED_SETTINGS.addProjectBaseDirectory
         ? ["Add project base directory"]
         : []),
@@ -489,6 +492,7 @@ export function useSettingsRestore(onRestored?: () => void) {
       settings.addProjectBaseDirectory,
       settings.defaultThreadEnvMode,
       settings.newWorktreesStartFromOrigin,
+      settings.enableWorktreeCleanup,
       settings.diffIgnoreWhitespace,
       settings.environmentIdentificationMode,
       settings.fontFamilyCode,
@@ -2021,6 +2025,32 @@ export function GeneralSettingsPanel() {
             }
           />
         ) : null}
+
+        <SettingsRow
+          {...searchableSetting("worktree-cleanup")}
+          description="Removes worktrees for threads settled over two weeks ago, once their work is merged or safely pushed. Branches are never deleted."
+          resetAction={
+            settings.enableWorktreeCleanup !== DEFAULT_UNIFIED_SETTINGS.enableWorktreeCleanup ? (
+              <SettingResetButton
+                label="worktree cleanup"
+                onClick={() =>
+                  updateSettings({
+                    enableWorktreeCleanup: DEFAULT_UNIFIED_SETTINGS.enableWorktreeCleanup,
+                  })
+                }
+              />
+            ) : null
+          }
+          control={
+            <Switch
+              checked={settings.enableWorktreeCleanup}
+              onCheckedChange={(checked) =>
+                updateSettings({ enableWorktreeCleanup: Boolean(checked) })
+              }
+              aria-label="Clean up settled worktrees"
+            />
+          }
+        />
 
         <SettingsRow
           {...searchableSetting("add-project-starts-in")}
