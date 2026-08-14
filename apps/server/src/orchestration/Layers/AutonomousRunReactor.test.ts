@@ -84,7 +84,9 @@ function makeHarness(options?: { readonly pullRequestFails?: boolean }) {
   const started: StartedIssue[] = [];
   const reviews: IssueReviewStartInput[] = [];
   const stackedActions: Array<{ readonly cwd: string; readonly action: string }> = [];
+  const resolvedPullRequests: Array<{ readonly cwd: string; readonly reference: string }> = [];
   let pullRequestFails = options?.pullRequestFails ?? false;
+  let pullRequestState: "open" | "merged" = "open";
 
   const orchestrationLayer = OrchestrationEngineLive.pipe(
     Layer.provide(OrchestrationProjectionSnapshotQueryLive),
@@ -137,6 +139,20 @@ function makeHarness(options?: { readonly pullRequestFails?: boolean }) {
           toast: { title: "done", cta: { kind: "none" as const } },
         };
       }),
+    resolvePullRequest: (input: { readonly cwd: string; readonly reference: string }) =>
+      Effect.sync(() => {
+        resolvedPullRequests.push(input);
+        return {
+          pullRequest: {
+            number: 1,
+            title: "Issue issue-a",
+            url: "https://example.test/pr/1",
+            baseBranch: "main",
+            headBranch: "issue/issue-a",
+            state: pullRequestState,
+          },
+        };
+      }),
   } as never);
 
   const layer = AutonomousRunReactorLive.pipe(
@@ -155,8 +171,12 @@ function makeHarness(options?: { readonly pullRequestFails?: boolean }) {
     started,
     reviews,
     stackedActions,
+    resolvedPullRequests,
     allowPullRequests: () => {
       pullRequestFails = false;
+    },
+    markPullRequestMerged: () => {
+      pullRequestState = "merged";
     },
   };
 }
@@ -597,6 +617,42 @@ describe("AutonomousRunReactor", () => {
       expect(harness.reviews[1]?.issueId).toBe(IssueId.make("issue-b"));
 
       expect((yield* run.findIssue("issue-a"))?.status).toBe("done");
+    }).pipe(Effect.scoped, Effect.provide(harness.layer));
+  });
+
+  it.effect("finishes an issue when its active pull request was merged outside Atlas", () => {
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      const run = yield* bootRun();
+      yield* run.createProject();
+      yield* run.createIssue("issue-a");
+      yield* run.enableAutonomous();
+      yield* run.reactor.drain;
+
+      const threadId = harness.started[0]?.command.threadId;
+      if (!threadId) throw new Error("expected the issue to have started");
+      yield* run.createWorkerThread(threadId, "/tmp/acme-worktrees/issue-a", "issue/issue-a");
+      yield* run.receiptsWhile(2, run.endTurn(threadId, "idle"));
+
+      expect((yield* run.findIssue("issue-a"))?.status).toBe("in_review");
+      harness.markPullRequestMerged();
+
+      // Any subsequent project evaluation reconciles the external state; the
+      // background minute tick uses this same path in production.
+      yield* run.enableAutonomous();
+      yield* run.reactor.drain;
+
+      const issue = yield* run.findIssue("issue-a");
+      expect(issue?.status).toBe("done");
+      expect(issue?.reviewVerdict).toBe("merged");
+      expect(harness.resolvedPullRequests).toContainEqual({
+        cwd: "/tmp/acme-worktrees/issue-a",
+        reference: "https://example.test/pr/1",
+      });
+
+      const project = yield* run.snapshotQuery.getProjectShellById(PROJECT_ID);
+      expect(Option.getOrThrow(project).autonomousStartedAt).toBeNull();
+      expect(Option.getOrThrow(project).autonomousFinishedReason).toBe("completed");
     }).pipe(Effect.scoped, Effect.provide(harness.layer));
   });
 
