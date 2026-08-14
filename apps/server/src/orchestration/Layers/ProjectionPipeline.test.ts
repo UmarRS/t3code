@@ -2789,4 +2789,75 @@ engineLayer("OrchestrationProjectionPipeline via engine dispatch", (it) => {
       ]);
     }),
   );
+
+  it.effect("projects persist link edges added and removed from either side", () =>
+    Effect.gen(function* () {
+      const engine = yield* OrchestrationEngineService;
+      const sql = yield* SqlClient.SqlClient;
+      const createdAt = "2026-01-01T00:00:00.000Z";
+
+      yield* engine.dispatch({
+        type: "project.create",
+        commandId: CommandId.make("cmd-link-frontend-create"),
+        projectId: ProjectId.make("project-link-frontend"),
+        title: "Frontend",
+        workspaceRoot: "/tmp/project-link-frontend",
+        createdAt,
+      });
+      yield* engine.dispatch({
+        type: "project.create",
+        commandId: CommandId.make("cmd-link-backend-create"),
+        projectId: ProjectId.make("project-link-backend"),
+        title: "Backend",
+        workspaceRoot: "/tmp/project-link-backend",
+        createdAt,
+      });
+
+      yield* engine.dispatch({
+        type: "project.link.add",
+        commandId: CommandId.make("cmd-link-add"),
+        projectId: ProjectId.make("project-link-frontend"),
+        linkId: "link-1",
+        path: "/tmp/project-link-backend",
+        description: "backend for all APIs",
+        createdAt,
+      });
+
+      const linkedRows = yield* sql<{
+        readonly projectId: string;
+        readonly projectLinksJson: string;
+      }>`
+        SELECT
+          project_id AS "projectId",
+          project_links_json AS "projectLinksJson"
+        FROM projection_projects
+        WHERE project_id IN ('project-link-frontend', 'project-link-backend')
+        ORDER BY project_id ASC
+      `;
+      // One stored edge: the mirror on the backend is derived, never written.
+      assert.deepEqual(linkedRows, [
+        { projectId: "project-link-backend", projectLinksJson: "[]" },
+        {
+          projectId: "project-link-frontend",
+          projectLinksJson:
+            '[{"id":"link-1","path":"/tmp/project-link-backend","description":"backend for all APIs","createdAt":"2026-01-01T00:00:00.000Z"}]',
+        },
+      ]);
+
+      // Removing from the mirrored side clears the one stored edge.
+      yield* engine.dispatch({
+        type: "project.link.remove",
+        commandId: CommandId.make("cmd-link-remove"),
+        projectId: ProjectId.make("project-link-backend"),
+        linkId: "link-1",
+      });
+
+      const unlinkedRows = yield* sql<{ readonly projectLinksJson: string }>`
+        SELECT project_links_json AS "projectLinksJson"
+        FROM projection_projects
+        WHERE project_id = 'project-link-frontend'
+      `;
+      assert.deepEqual(unlinkedRows, [{ projectLinksJson: "[]" }]);
+    }),
+  );
 });

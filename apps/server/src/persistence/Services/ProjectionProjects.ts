@@ -10,6 +10,7 @@ import {
   IsoDateTime,
   ModelSelection,
   ProjectId,
+  ProjectLink,
   ProjectScript,
   ThreadEnvMode,
 } from "@t3tools/contracts";
@@ -33,6 +34,8 @@ export const ProjectionProject = Schema.Struct({
     Schema.NullOr(Schema.Literals(["completed", "disabled"])),
   ),
   scripts: Schema.Array(ProjectScript),
+  // Only the link edges this project owns. Mirrors are derived on read.
+  links: Schema.Array(ProjectLink),
   createdAt: IsoDateTime,
   updatedAt: IsoDateTime,
   deletedAt: Schema.NullOr(IsoDateTime),

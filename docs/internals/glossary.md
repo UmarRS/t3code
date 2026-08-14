@@ -36,6 +36,12 @@ The narrowing of a thread to part of its workspace, so an agent in a large repos
 
 Scope moves the agent's cwd only. `resolveThreadWorkspaceCwd` stays at the workspace root, so worktrees, checkpoints, and diffs keep covering the whole repository — restore and review must not narrow with the agent. Changing either half restarts the provider session on its resume cursor, since both adapters fix their directory grants at session start.
 
+#### Project link
+
+A link from one project to an absolute folder elsewhere on the same environment — the backend a frontend calls, the frontends a backend serves. Distinct from scope, which narrows a thread _inside_ one workspace: project links point outward, at other repositories, and belong to the project rather than any thread. Shapes live in `packages/contracts/src/projectLink.ts`; a link is `{ id, path, description, createdAt }` and the description is required because it is what an agent reads to learn what the folder is.
+
+The target folder need not be a registered project. When it is, the link is bidirectional — but only one edge is stored, on the project that created it. The other project's mirror is derived on read by `deriveProjectLinkViews` in `packages/shared/src/projectLinks.ts`, which also resolves each link path against the known project roots (`targetProjectId`, null for a context-only folder). One stored edge means removing the link from either side removes it for both: `project.link.remove` resolves a mirror back to its owner before emitting `project.link-removed`. The server exposes the resolved view as `ProjectionSnapshotQuery.getProjectLinksById`.
+
 ### Issues
 
 #### Issue

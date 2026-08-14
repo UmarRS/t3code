@@ -87,6 +87,7 @@ import {
   SettingsSection,
 } from "./settingsLayout";
 import { ProjectFaviconPickerDialog } from "./ProjectFaviconPickerDialog";
+import { ProjectLinksSection } from "./ProjectLinksSection";
 
 export const PROJECT_GROUPING_MODE_LABELS: Record<SidebarProjectGroupingMode, string> = {
   repository: "Group by repository",
@@ -883,6 +884,8 @@ function ProjectDetail({
           }
         />
       </SettingsSection>
+
+      <ProjectLinksSection group={group} reportFailure={reportFailure} />
 
       <SettingsSection
         id="project-scripts"

@@ -127,6 +127,10 @@
       "types": "./src/projectFavicon.ts",
       "import": "./src/projectFavicon.ts"
     },
+    "./projectLinks": {
+      "types": "./src/projectLinks.ts",
+      "import": "./src/projectLinks.ts"
+    },
     "./projectScripts": {
       "types": "./src/projectScripts.ts",
       "import": "./src/projectScripts.ts"

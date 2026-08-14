@@ -16,6 +16,7 @@ import {
   OrchestrationShellSnapshot,
   OrchestrationThread,
   OrchestrationThreadDetailSnapshot,
+  ProjectLink,
   ProjectScript,
   TurnId,
   type OrchestrationCheckpointSummary,
@@ -49,6 +50,7 @@ import {
   toPersistenceSqlError,
   type ProjectionRepositoryError,
 } from "../../persistence/Errors.ts";
+import { deriveProjectLinkViews } from "@t3tools/shared/projectLinks";
 import { ProjectionCheckpoint } from "../../persistence/Services/ProjectionCheckpoints.ts";
 import { ThreadBackgroundLivenessService } from "../ThreadBackgroundLiveness.ts";
 import { ThreadPlanProgressService } from "../ThreadPlanProgress.ts";
@@ -81,6 +83,7 @@ const ProjectionProjectDbRowSchema = ProjectionProject.mapFields(
   Struct.assign({
     defaultModelSelection: Schema.NullOr(Schema.fromJsonString(ModelSelection)),
     scripts: Schema.fromJsonString(Schema.Array(ProjectScript)),
+    links: Schema.fromJsonString(Schema.Array(ProjectLink)),
   }),
 );
 // Summary rows are the issue minus its markdown body — everything the shell
@@ -381,6 +384,7 @@ function mapProjectShellRow(
     defaultThreadEnvMode: row.defaultThreadEnvMode,
     faviconPath: row.faviconPath ?? null,
     scripts: row.scripts,
+    links: row.links,
     autonomousStartedAt: row.autonomousStartedAt ?? null,
     autonomousFinishedAt: row.autonomousFinishedAt ?? null,
     autonomousFinishedReason: row.autonomousFinishedReason ?? null,
@@ -464,6 +468,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           autonomous_finished_at AS "autonomousFinishedAt",
           autonomous_finished_reason AS "autonomousFinishedReason",
           scripts_json AS "scripts",
+          project_links_json AS "links",
           created_at AS "createdAt",
           updated_at AS "updatedAt",
           deleted_at AS "deletedAt"
@@ -1081,6 +1086,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           autonomous_finished_at AS "autonomousFinishedAt",
           autonomous_finished_reason AS "autonomousFinishedReason",
           scripts_json AS "scripts",
+          project_links_json AS "links",
           created_at AS "createdAt",
           updated_at AS "updatedAt",
           deleted_at AS "deletedAt"
@@ -1108,6 +1114,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           autonomous_finished_at AS "autonomousFinishedAt",
           autonomous_finished_reason AS "autonomousFinishedReason",
           scripts_json AS "scripts",
+          project_links_json AS "links",
           created_at AS "createdAt",
           updated_at AS "updatedAt",
           deleted_at AS "deletedAt"
@@ -1800,6 +1807,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
                 defaultThreadEnvMode: row.defaultThreadEnvMode,
                 faviconPath: row.faviconPath ?? null,
                 scripts: row.scripts,
+                links: row.links,
                 autonomousStartedAt: row.autonomousStartedAt ?? null,
                 autonomousFinishedAt: row.autonomousFinishedAt ?? null,
                 autonomousFinishedReason: row.autonomousFinishedReason ?? null,
@@ -1955,6 +1963,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
                   defaultThreadEnvMode: row.defaultThreadEnvMode,
                   faviconPath: row.faviconPath ?? null,
                   scripts: row.scripts,
+                  links: row.links,
                   autonomousStartedAt: row.autonomousStartedAt ?? null,
                   autonomousFinishedAt: row.autonomousFinishedAt ?? null,
                   autonomousFinishedReason: row.autonomousFinishedReason ?? null,
@@ -2485,6 +2494,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
                     defaultThreadEnvMode: option.value.defaultThreadEnvMode,
                     faviconPath: option.value.faviconPath ?? null,
                     scripts: option.value.scripts,
+                    links: option.value.links,
                     createdAt: option.value.createdAt,
                     updatedAt: option.value.updatedAt,
                     deletedAt: option.value.deletedAt,
@@ -2513,6 +2523,32 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
                 ),
               ),
       ),
+    );
+
+  // Reads every active project rather than just the one asked for: mirrors are
+  // edges other projects own, so they are only visible from the whole list.
+  // Project rows are few (one per registered workspace) and this is not a hot
+  // path — it runs when something needs to route across a link, not per frame.
+  const getProjectLinksById: ProjectionSnapshotQueryShape["getProjectLinksById"] = (projectId) =>
+    listProjectRows().pipe(
+      Effect.mapError(
+        toPersistenceSqlOrDecodeError(
+          "ProjectionSnapshotQuery.getProjectLinksById:query",
+          "ProjectionSnapshotQuery.getProjectLinksById:decodeRows",
+        ),
+      ),
+      Effect.map((rows) => {
+        const projects = rows
+          .filter((row) => row.deletedAt === null)
+          .map((row) => ({
+            id: row.projectId,
+            title: row.title,
+            workspaceRoot: row.workspaceRoot,
+            links: row.links,
+          }));
+        const project = projects.find((candidate) => candidate.id === projectId);
+        return project === undefined ? [] : deriveProjectLinkViews({ project, projects });
+      }),
     );
 
   const getFirstActiveThreadIdByProjectId: ProjectionSnapshotQueryShape["getFirstActiveThreadIdByProjectId"] =
@@ -3046,6 +3082,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
     getCounts,
     getActiveProjectByWorkspaceRoot,
     getProjectShellById,
+    getProjectLinksById,
     getFirstActiveThreadIdByProjectId,
     getThreadCheckpointContext,
     getFullThreadDiffContext,
