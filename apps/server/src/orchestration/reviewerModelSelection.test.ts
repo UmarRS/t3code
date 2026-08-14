@@ -1,7 +1,11 @@
 import { ProviderDriverKind, ProviderInstanceId, type ServerProvider } from "@t3tools/contracts";
 import { describe, expect, it } from "vite-plus/test";
 
-import { resolveReviewerModelSelection } from "./reviewerModelSelection.ts";
+import {
+  resolveReviewClassifierModelSelection,
+  resolveReviewerModelSelection,
+  resolveTieredReviewerModelSelection,
+} from "./reviewerModelSelection.ts";
 
 const provider = (overrides: Partial<ServerProvider>): ServerProvider =>
   ({
@@ -79,5 +83,104 @@ describe("resolveReviewerModelSelection", () => {
 
   it("returns null when there are no providers", () => {
     expect(resolveReviewerModelSelection([])).toBeNull();
+  });
+});
+
+// The full Claude catalog, newest first, including the cheaper classes the
+// tiers map onto.
+const FULL_CLAUDE_CATALOG = [
+  model("claude-fable-5"),
+  model("claude-opus-5"),
+  model("claude-sonnet-5"),
+  model("claude-opus-4-8"),
+  model("claude-sonnet-4-6"),
+  model("claude-haiku-4-5"),
+];
+
+const codexProvider = (models: ReadonlyArray<{ slug: string }>) =>
+  provider({
+    instanceId: ProviderInstanceId.make("codex"),
+    driver: ProviderDriverKind.make("codex"),
+    models: models as never,
+  });
+
+const CODEX_CATALOG = [model("gpt-5.6-sol"), model("gpt-5.5"), model("gpt-5.4-mini")];
+
+describe("resolveTieredReviewerModelSelection", () => {
+  it("maps each tier to its model class in catalog order", () => {
+    const providers = [provider({ models: FULL_CLAUDE_CATALOG })];
+    expect(resolveTieredReviewerModelSelection(providers, "trivial")?.model).toBe(
+      "claude-haiku-4-5",
+    );
+    expect(resolveTieredReviewerModelSelection(providers, "standard")?.model).toBe(
+      "claude-sonnet-5",
+    );
+    expect(resolveTieredReviewerModelSelection(providers, "complex")?.model).toBe("claude-opus-5");
+  });
+
+  it("falls upward when a tier's class is missing from the catalog", () => {
+    // No Haiku: trivial reviews on the standard tier's Sonnet.
+    const noHaiku = [provider({ models: [model("claude-opus-5"), model("claude-sonnet-5")] })];
+    expect(resolveTieredReviewerModelSelection(noHaiku, "trivial")?.model).toBe("claude-sonnet-5");
+
+    // No Haiku and no Sonnet: everything reviews on the strongest.
+    const opusOnly = [provider({ models: [model("claude-opus-5")] })];
+    expect(resolveTieredReviewerModelSelection(opusOnly, "trivial")?.model).toBe("claude-opus-5");
+    expect(resolveTieredReviewerModelSelection(opusOnly, "standard")?.model).toBe("claude-opus-5");
+  });
+
+  it("never falls downward: complex ignores cheaper models entirely", () => {
+    const providers = [provider({ models: FULL_CLAUDE_CATALOG })];
+    expect(resolveTieredReviewerModelSelection(providers, "complex")?.model).toBe("claude-opus-5");
+  });
+
+  it("lets a Codex mini review trivial work when no Claude provider is usable", () => {
+    const providers = [
+      provider({ enabled: false, models: FULL_CLAUDE_CATALOG }),
+      codexProvider(CODEX_CATALOG),
+    ];
+    expect(resolveTieredReviewerModelSelection(providers, "trivial")).toEqual({
+      instanceId: ProviderInstanceId.make("codex"),
+      model: "gpt-5.4-mini",
+    });
+  });
+
+  it("does not go sideways to Codex while a Claude provider is usable", () => {
+    // Claude without a Haiku falls up to Sonnet, not over to the Codex mini.
+    const providers = [
+      provider({ models: [model("claude-opus-5"), model("claude-sonnet-5")] }),
+      codexProvider(CODEX_CATALOG),
+    ];
+    expect(resolveTieredReviewerModelSelection(providers, "trivial")?.model).toBe(
+      "claude-sonnet-5",
+    );
+  });
+
+  it("keeps the existing park-the-issue null when nothing is configured", () => {
+    expect(resolveTieredReviewerModelSelection([], "trivial")).toBeNull();
+    expect(resolveTieredReviewerModelSelection([], "complex")).toBeNull();
+    // Codex alone cannot serve the standard or complex tiers; that stays the
+    // existing null so the caller parks instead of inventing a new path.
+    expect(resolveTieredReviewerModelSelection([codexProvider(CODEX_CATALOG)], "standard")).toBe(
+      null,
+    );
+  });
+});
+
+describe("resolveReviewClassifierModelSelection", () => {
+  it("prefers the Claude Haiku, then the Codex mini", () => {
+    expect(
+      resolveReviewClassifierModelSelection([provider({ models: FULL_CLAUDE_CATALOG })])?.model,
+    ).toBe("claude-haiku-4-5");
+    expect(resolveReviewClassifierModelSelection([codexProvider(CODEX_CATALOG)])?.model).toBe(
+      "gpt-5.4-mini",
+    );
+  });
+
+  it("returns null when no cheap class exists, so the caller skips classification", () => {
+    expect(
+      resolveReviewClassifierModelSelection([provider({ models: [model("claude-opus-5")] })]),
+    ).toBeNull();
+    expect(resolveReviewClassifierModelSelection([])).toBeNull();
   });
 });
