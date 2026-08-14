@@ -14,7 +14,15 @@
  *
  * @module RuntimeReceiptBus
  */
-import { CheckpointRef, IsoDateTime, NonNegativeInt, ThreadId, TurnId } from "@t3tools/contracts";
+import {
+  CheckpointRef,
+  IsoDateTime,
+  IssueId,
+  NonNegativeInt,
+  ProjectId,
+  ThreadId,
+  TurnId,
+} from "@t3tools/contracts";
 import * as Schema from "effect/Schema";
 import * as Context from "effect/Context";
 import type * as Effect from "effect/Effect";
@@ -49,10 +57,61 @@ export const TurnProcessingQuiescedReceipt = Schema.Struct({
 });
 export type TurnProcessingQuiescedReceipt = typeof TurnProcessingQuiescedReceipt.Type;
 
+/**
+ * Autonomous-run milestones. A run's interesting moments are spread across two
+ * queues and a provider turn, so a test that only drained would either race or
+ * block; these name the exact points instead.
+ */
+export const AutonomousIssueStartedReceipt = Schema.Struct({
+  type: Schema.Literal("autonomous.issue.started"),
+  projectId: ProjectId,
+  issueId: IssueId,
+  threadId: ThreadId,
+  createdAt: IsoDateTime,
+});
+export type AutonomousIssueStartedReceipt = typeof AutonomousIssueStartedReceipt.Type;
+
+export const AutonomousPullRequestOpenedReceipt = Schema.Struct({
+  type: Schema.Literal("autonomous.pull-request.opened"),
+  issueId: IssueId,
+  threadId: ThreadId,
+  pullRequestUrl: Schema.NullOr(Schema.String),
+  createdAt: IsoDateTime,
+});
+export type AutonomousPullRequestOpenedReceipt = typeof AutonomousPullRequestOpenedReceipt.Type;
+
+export const AutonomousReviewStartedReceipt = Schema.Struct({
+  type: Schema.Literal("autonomous.review.started"),
+  issueId: IssueId,
+  reviewerThreadId: ThreadId,
+  createdAt: IsoDateTime,
+});
+export type AutonomousReviewStartedReceipt = typeof AutonomousReviewStartedReceipt.Type;
+
+export const AutonomousIssueFlaggedReceipt = Schema.Struct({
+  type: Schema.Literal("autonomous.issue.flagged"),
+  issueId: IssueId,
+  reason: Schema.String,
+  createdAt: IsoDateTime,
+});
+export type AutonomousIssueFlaggedReceipt = typeof AutonomousIssueFlaggedReceipt.Type;
+
+export const AutonomousRunCompletedReceipt = Schema.Struct({
+  type: Schema.Literal("autonomous.run.completed"),
+  projectId: ProjectId,
+  createdAt: IsoDateTime,
+});
+export type AutonomousRunCompletedReceipt = typeof AutonomousRunCompletedReceipt.Type;
+
 export const OrchestrationRuntimeReceipt = Schema.Union([
   CheckpointBaselineCapturedReceipt,
   CheckpointDiffFinalizedReceipt,
   TurnProcessingQuiescedReceipt,
+  AutonomousIssueStartedReceipt,
+  AutonomousPullRequestOpenedReceipt,
+  AutonomousReviewStartedReceipt,
+  AutonomousIssueFlaggedReceipt,
+  AutonomousRunCompletedReceipt,
 ]);
 export type OrchestrationRuntimeReceipt = typeof OrchestrationRuntimeReceipt.Type;
 

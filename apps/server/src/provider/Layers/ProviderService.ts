@@ -131,6 +131,7 @@ function toRuntimePayloadFromSession(
 ): Record<string, unknown> {
   return {
     cwd: session.cwd ?? null,
+    contextDirectories: session.contextDirectories ?? [],
     model: session.model ?? null,
     activeTurnId: session.activeTurnId ?? null,
     lastError: session.lastError ?? null,
@@ -162,6 +163,23 @@ function readPersistedCwd(
   if (typeof rawCwd !== "string") return undefined;
   const trimmed = rawCwd.trim();
   return trimmed.length > 0 ? trimmed : undefined;
+}
+
+// A recovered session has to come back with the same grants it was started
+// with, or a scoped thread would silently lose access to its linked folders.
+function readPersistedContextDirectories(
+  runtimePayload: ProviderSessionDirectory.ProviderRuntimeBinding["runtimePayload"],
+): ReadonlyArray<string> | undefined {
+  if (!runtimePayload || typeof runtimePayload !== "object" || Array.isArray(runtimePayload)) {
+    return undefined;
+  }
+  const raw =
+    "contextDirectories" in runtimePayload ? runtimePayload.contextDirectories : undefined;
+  if (!Array.isArray(raw)) return undefined;
+  const directories = raw.filter(
+    (value): value is string => typeof value === "string" && value.trim().length > 0,
+  );
+  return directories.length > 0 ? directories : undefined;
 }
 
 const dieOnMissingBindingInstanceId = (
@@ -398,6 +416,9 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
       }
 
       const persistedCwd = readPersistedCwd(input.binding.runtimePayload);
+      const persistedContextDirectories = readPersistedContextDirectories(
+        input.binding.runtimePayload,
+      );
       const persistedModelSelection = readPersistedModelSelection(input.binding.runtimePayload);
 
       yield* prepareMcpSession(input.binding.threadId, bindingInstanceId);
@@ -407,6 +428,9 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
           provider: input.binding.provider,
           providerInstanceId: bindingInstanceId,
           ...(persistedCwd ? { cwd: persistedCwd } : {}),
+          ...(persistedContextDirectories
+            ? { contextDirectories: persistedContextDirectories }
+            : {}),
           ...(persistedModelSelection ? { modelSelection: persistedModelSelection } : {}),
           ...(hasResumeCursor ? { resumeCursor: input.binding.resumeCursor } : {}),
           runtimeMode: input.binding.runtimeMode ?? "full-access",
@@ -562,7 +586,7 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
         if (!instanceInfo.enabled) {
           return yield* toValidationError(
             "ProviderService.startSession",
-            `Provider instance '${resolvedInstanceId}' is disabled in T3 Code settings.`,
+            `Provider instance '${resolvedInstanceId}' is disabled in Atlas settings.`,
           );
         }
         const persistedBinding = Option.getOrUndefined(yield* directory.getBinding(threadId));

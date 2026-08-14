@@ -89,6 +89,42 @@ describe("buildTurnStartParams", () => {
     NodeAssert.doesNotMatch(JSON.stringify(directDiagnostics), new RegExp(secret));
   });
 
+  it.effect("grants linked scope folders as writable roots in workspace-write modes", () =>
+    Effect.gen(function* () {
+      const params = yield* buildTurnStartParams({
+        threadId: "provider-thread-1",
+        runtimeMode: "auto",
+        prompt: "Wire up the checkout button",
+        contextDirectories: ["/repos/acme/apps/server"],
+      });
+
+      NodeAssert.deepStrictEqual(params.sandboxPolicy, {
+        type: "workspaceWrite",
+        writableRoots: ["/repos/acme/apps/server"],
+      });
+    }),
+  );
+
+  // Full access already writes anywhere, and read-only writes nowhere, so the
+  // grant is meaningless in both — it must not leak into those policies.
+  it.effect("leaves non-workspace-write sandbox policies alone", () =>
+    Effect.gen(function* () {
+      const fullAccess = yield* buildTurnStartParams({
+        threadId: "provider-thread-1",
+        runtimeMode: "full-access",
+        contextDirectories: ["/repos/acme/apps/server"],
+      });
+      NodeAssert.deepStrictEqual(fullAccess.sandboxPolicy, { type: "dangerFullAccess" });
+
+      const readOnly = yield* buildTurnStartParams({
+        threadId: "provider-thread-1",
+        runtimeMode: "approval-required",
+        contextDirectories: ["/repos/acme/apps/server"],
+      });
+      NodeAssert.deepStrictEqual(readOnly.sandboxPolicy, { type: "readOnly" });
+    }),
+  );
+
   it("includes plan collaboration mode when requested", () => {
     const params = Effect.runSync(
       buildTurnStartParams({
@@ -254,7 +290,7 @@ describe("buildCodexDeveloperInstructions", () => {
     });
 
     NodeAssert.ok(instructions.startsWith(CODEX_DEFAULT_MODE_DEVELOPER_INSTRUCTIONS));
-    NodeAssert.match(instructions, /T3 Code/);
+    NodeAssert.match(instructions, /Atlas/);
     NodeAssert.match(instructions, /Codex harness/);
     NodeAssert.match(instructions, /as gpt-5\.3-codex with high reasoning effort/);
   });

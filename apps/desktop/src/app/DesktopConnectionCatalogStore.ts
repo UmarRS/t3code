@@ -2,7 +2,6 @@ import {
   BearerConnectionCredential,
   BearerConnectionProfile,
   BearerConnectionTarget,
-  RelayConnectionTarget,
   SshConnectionProfile,
   SshConnectionTarget,
 } from "@t3tools/client-runtime/connection";
@@ -300,13 +299,9 @@ const migrateSavedEnvironmentRecords = Effect.fn(
   const credentials: Array<RuntimeConnectionCatalogDocumentType["credentials"][number]> = [];
 
   for (const record of records) {
+    // Relay-managed environments belonged to T3 Connect, which this build does
+    // not ship. Drop them instead of migrating them into the local catalog.
     if (record.relayManaged !== undefined) {
-      targets.push(
-        new RelayConnectionTarget({
-          environmentId: record.environmentId,
-          label: record.label,
-        }),
-      );
       continue;
     }
 
@@ -371,7 +366,6 @@ const migrateSavedEnvironmentRecords = Effect.fn(
     targets,
     profiles,
     credentials,
-    remoteDpopTokens: [],
   };
 });
 

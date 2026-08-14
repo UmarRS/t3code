@@ -35,6 +35,8 @@ interface NewThreadWorkspaceOptions {
   worktreePath?: string | null;
   envMode?: DraftThreadEnvMode;
   startFromOrigin?: boolean;
+  focusPath?: string | null;
+  linkedPaths?: ReadonlyArray<string>;
 }
 
 // The workspace options the caller passed explicitly, shaped for the draft
@@ -122,6 +124,24 @@ export function useNewThreadHandler() {
         carrySourceShell?.interactionMode ??
         carrySourceDraft?.interactionMode ??
         null;
+      // Scope carries like the working mode, not like the branch: its paths
+      // are workspace-relative, so they stay meaningful in a fresh worktree.
+      // They only stay meaningful in the SAME project though — "apps/web"
+      // means nothing in a repository that has no such folder — so a new
+      // thread aimed elsewhere starts unscoped.
+      const carryScopeSource = [carrySourceShell, carrySourceDraft].find(
+        (candidate) =>
+          candidate != null &&
+          candidate.projectId === projectRef.projectId &&
+          candidate.environmentId === projectRef.environmentId,
+      );
+      const carryScope =
+        carryScopeSource && carryScopeSource.focusPath
+          ? {
+              focusPath: carryScopeSource.focusPath,
+              linkedPaths: carryScopeSource.linkedPaths ?? [],
+            }
+          : null;
       const project = projects.find(
         (candidate) =>
           candidate.id === projectRef.projectId &&
@@ -226,6 +246,7 @@ export function useNewThreadHandler() {
             workspaceContext = {
               branch: null,
               worktreePath: null,
+              ...(carryScope ?? { focusPath: null, linkedPaths: [] }),
               envMode: defaultEnvMode,
               startFromOrigin: resolveNewDraftStartFromOrigin({
                 envMode: defaultEnvMode,
@@ -363,6 +384,7 @@ export function useNewThreadHandler() {
             }),
           runtimeMode: carryRuntimeMode ?? DEFAULT_RUNTIME_MODE,
           ...(carryInteractionMode ? { interactionMode: carryInteractionMode } : {}),
+          ...(carryScope ?? {}),
         });
         applyStickyState(draftId);
         if (carryModelSelection) {

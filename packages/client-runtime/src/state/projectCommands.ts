@@ -11,9 +11,13 @@ import {
 import {
   type CreateProjectInput,
   type DeleteProjectInput,
+  type DisableProjectAutonomousInput,
+  type EnableProjectAutonomousInput,
   type UpdateProjectInput,
   createProject,
   deleteProject,
+  disableProjectAutonomous,
+  enableProjectAutonomous,
   updateProject,
 } from "../operations/commands.ts";
 import type { EnvironmentRegistry } from "../connection/registry.ts";
@@ -21,6 +25,8 @@ import type { EnvironmentRegistry } from "../connection/registry.ts";
 export type {
   CreateProjectInput,
   DeleteProjectInput,
+  DisableProjectAutonomousInput,
+  EnableProjectAutonomousInput,
   UpdateProjectInput,
 } from "../operations/commands.ts";
 
@@ -89,6 +95,18 @@ export function createProjectEnvironmentAtoms<R, E>(
     delete: createEnvironmentCommand(runtime, {
       label: "environment-data:commands:project:delete",
       execute: (input: DeleteProjectInput) => deleteProject(input),
+      scheduler: projectScheduler,
+      concurrency: projectConcurrency,
+    }),
+    enableAutonomous: createEnvironmentCommand(runtime, {
+      label: "environment-data:commands:project:autonomous-enable",
+      execute: (input: EnableProjectAutonomousInput) => enableProjectAutonomous(input),
+      scheduler: projectScheduler,
+      concurrency: projectConcurrency,
+    }),
+    disableAutonomous: createEnvironmentCommand(runtime, {
+      label: "environment-data:commands:project:autonomous-disable",
+      execute: (input: DisableProjectAutonomousInput) => disableProjectAutonomous(input),
       scheduler: projectScheduler,
       concurrency: projectConcurrency,
     }),

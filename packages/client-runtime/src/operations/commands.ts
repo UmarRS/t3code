@@ -31,6 +31,11 @@ type CommandInput<T extends CommandType> = Omit<
 export type CreateProjectInput = CommandInput<"project.create">;
 export type UpdateProjectInput = CommandInput<"project.meta.update">;
 export type DeleteProjectInput = CommandInput<"project.delete">;
+export type EnableProjectAutonomousInput = CommandInput<"project.autonomous.enable">;
+export type DisableProjectAutonomousInput = Omit<
+  CommandInput<"project.autonomous.disable">,
+  "reason"
+>;
 export type CreateThreadInput = CommandInput<"thread.create">;
 export type DeleteThreadInput = CommandInput<"thread.delete">;
 export type ArchiveThreadInput = CommandInput<"thread.archive">;
@@ -51,6 +56,13 @@ export type RespondToThreadApprovalInput = CommandInput<"thread.approval.respond
 export type RespondToThreadUserInputInput = CommandInput<"thread.user-input.respond">;
 export type RevertThreadCheckpointInput = CommandInput<"thread.checkpoint.revert">;
 export type StopThreadSessionInput = CommandInput<"thread.session.stop">;
+export type CreateIssueInput = CommandInput<"issue.create">;
+export type UpdateIssueInput = CommandInput<"issue.update">;
+export type SetIssueStatusInput = CommandInput<"issue.status.set">;
+export type DeleteIssueInput = CommandInput<"issue.delete">;
+export type StartIssueInput = CommandInput<"issue.start">;
+export type LinkIssuePullRequestInput = CommandInput<"issue.pull-request.link">;
+export type ClearIssueAttentionInput = CommandInput<"issue.attention.clear">;
 
 type DispatchTag = typeof ORCHESTRATION_WS_METHODS.dispatchCommand;
 type CommandEffect = Effect.Effect<
@@ -329,5 +341,117 @@ export const stopThreadSession: (input: StopThreadSessionInput) => CommandEffect
     type: "thread.session.stop",
     commandId: metadata.commandId,
     createdAt: metadata.createdAt,
+  });
+});
+
+export const createIssue: (input: CreateIssueInput) => CommandEffect = Effect.fn(
+  "EnvironmentCommands.createIssue",
+)(function* (input) {
+  const metadata = yield* timestampedCommandMetadata(input);
+  return yield* dispatch({
+    ...input,
+    type: "issue.create",
+    commandId: metadata.commandId,
+    createdAt: metadata.createdAt,
+  });
+});
+
+export const updateIssue: (input: UpdateIssueInput) => CommandEffect = Effect.fn(
+  "EnvironmentCommands.updateIssue",
+)(function* (input) {
+  return yield* dispatch({
+    ...input,
+    type: "issue.update",
+    commandId: yield* commandId(input),
+  });
+});
+
+export const setIssueStatus: (input: SetIssueStatusInput) => CommandEffect = Effect.fn(
+  "EnvironmentCommands.setIssueStatus",
+)(function* (input) {
+  return yield* dispatch({
+    ...input,
+    type: "issue.status.set",
+    commandId: yield* commandId(input),
+  });
+});
+
+export const deleteIssue: (input: DeleteIssueInput) => CommandEffect = Effect.fn(
+  "EnvironmentCommands.deleteIssue",
+)(function* (input) {
+  return yield* dispatch({
+    ...input,
+    type: "issue.delete",
+    commandId: yield* commandId(input),
+  });
+});
+
+/**
+ * Opens the worktree thread for an issue and seeds its first turn. The server
+ * builds the prompt, so every surface that starts an issue sends the same text.
+ */
+export const startIssue: (input: StartIssueInput) => CommandEffect = Effect.fn(
+  "EnvironmentCommands.startIssue",
+)(function* (input) {
+  const metadata = yield* timestampedCommandMetadata(input);
+  return yield* dispatch({
+    ...input,
+    type: "issue.start",
+    commandId: metadata.commandId,
+    createdAt: metadata.createdAt,
+  });
+});
+
+/**
+ * Records the pull request opened for a thread. Keyed by thread because that is
+ * what the source-control surface knows; the server resolves the linked issue
+ * and moves it to review.
+ */
+export const linkIssuePullRequest: (input: LinkIssuePullRequestInput) => CommandEffect = Effect.fn(
+  "EnvironmentCommands.linkIssuePullRequest",
+)(function* (input) {
+  return yield* dispatch({
+    ...input,
+    type: "issue.pull-request.link",
+    commandId: yield* commandId(input),
+  });
+});
+
+/**
+ * Turn on autonomous mode for a project. Idempotent: re-enabling a live run
+ * keeps its original start time.
+ */
+export const enableProjectAutonomous: (input: EnableProjectAutonomousInput) => CommandEffect =
+  Effect.fn("EnvironmentCommands.enableProjectAutonomous")(function* (input) {
+    const metadata = yield* timestampedCommandMetadata(input);
+    return yield* dispatch({
+      ...input,
+      type: "project.autonomous.enable",
+      commandId: metadata.commandId,
+      createdAt: metadata.createdAt,
+    });
+  });
+
+/**
+ * Stop starting new work. `reason` is fixed to `user` here: `completed` is the
+ * server's own auto-stop and is what tells a finished run from a stopped one.
+ */
+export const disableProjectAutonomous: (input: DisableProjectAutonomousInput) => CommandEffect =
+  Effect.fn("EnvironmentCommands.disableProjectAutonomous")(function* (input) {
+    return yield* dispatch({
+      ...input,
+      type: "project.autonomous.disable",
+      reason: "user",
+      commandId: yield* commandId(input),
+    });
+  });
+
+export const clearIssueAttention: (input: ClearIssueAttentionInput) => CommandEffect = Effect.fn(
+  "EnvironmentCommands.clearIssueAttention",
+)(function* (input) {
+  return yield* dispatch({
+    ...input,
+    type: "issue.attention.clear",
+    commandId: yield* commandId(input),
   });
 });

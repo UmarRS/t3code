@@ -137,6 +137,29 @@ function isNotGitRepositoryError(error: GitCommandError): boolean {
   return error.message.toLowerCase().includes("not a git repository");
 }
 
+/**
+ * PR content built from `git log --oneline` when the text generator is
+ * unavailable: the oldest commit subject as the title, every subject as a
+ * Summary bullet. Plain but always correct, which is what an unattended
+ * pipeline needs from its fallback.
+ */
+function fallbackPrContent(
+  headBranch: string,
+  commitSummary: string,
+): { title: string; body: string } {
+  const subjects = commitSummary
+    .split("\n")
+    .map((line) => line.replace(/^[0-9a-f]{7,40}\s+/i, "").trim())
+    .filter((line) => line.length > 0)
+    .toReversed();
+  const title = subjects[0] ?? headBranch;
+  const bullets = (subjects.length > 0 ? subjects : [title]).map((subject) => `- ${subject}`);
+  return {
+    title: title.slice(0, 120),
+    body: `## Summary\n${bullets.join("\n")}\n\n## Testing\n- Not run`,
+  };
+}
+
 interface OpenPrInfo {
   number: number;
   title: string;
@@ -1418,8 +1441,10 @@ export const make = Effect.gen(function* () {
     upstreamRef: string | null,
     headContext: Pick<BranchHeadContext, "isCrossRepository" | "remoteName">,
   ) {
+    // "HEAD" can be recorded by older worktree setups that never resolved the
+    // real base. It names no branch on the remote, so treat it as unset.
     const configured = yield* gitCore.readConfigValue(cwd, `branch.${branch}.gh-merge-base`);
-    if (configured) return configured;
+    if (configured && configured !== "HEAD") return configured;
 
     if (upstreamRef && !headContext.isCrossRepository) {
       const upstreamBranch = extractBranchNameFromRemoteRef(upstreamRef, {
@@ -1681,17 +1706,32 @@ export const make = Effect.gen(function* () {
         ? Option.getOrUndefined(yield* detectPrTemplate(cwd, baseRangeRef, gitCore.execute))
         : undefined;
 
-    const generated = yield* textGeneration.generatePrContent({
-      cwd,
-      baseBranch,
-      headBranch: headContext.headBranch,
-      commitSummary: limitContext(rangeContext.commitSummary, 20_000),
-      diffSummary: limitContext(rangeContext.diffSummary, 20_000),
-      diffPatch: limitContext(rangeContext.diffPatch, 60_000),
-      ...(changeRequestTemplate ? { changeRequestTemplate } : {}),
-      ...(policy ? { policy } : {}),
-      modelSelection: settings.modelSelection,
-    });
+    const generated = yield* textGeneration
+      .generatePrContent({
+        cwd,
+        baseBranch,
+        headBranch: headContext.headBranch,
+        commitSummary: limitContext(rangeContext.commitSummary, 20_000),
+        diffSummary: limitContext(rangeContext.diffSummary, 20_000),
+        diffPatch: limitContext(rangeContext.diffPatch, 60_000),
+        ...(changeRequestTemplate ? { changeRequestTemplate } : {}),
+        ...(policy ? { policy } : {}),
+        modelSelection: settings.modelSelection,
+      })
+      .pipe(
+        // A flaky generator must not strand a pushed branch without its PR:
+        // fall back to content derived from the commits themselves.
+        Effect.catch((error) =>
+          Effect.logWarning("PR content generation failed; using commit-derived fallback", {
+            cwd,
+            detail: error.message,
+          }).pipe(
+            Effect.as(
+              fallbackPrContent(headContext.headBranch, rangeContext.commitSummary),
+            ),
+          ),
+        ),
+      );
 
     const bodyFile = path.join(
       tempDir,

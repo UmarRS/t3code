@@ -1,8 +1,8 @@
 # Architecture
 
-> For maintainers. Using T3 Code? See [docs/user](../user/).
+> For maintainers. Using Atlas? See [docs/user](../user/).
 
-T3 Code is a server runtime that owns agent sessions, workspaces, and version control, plus clients
+Atlas is a server runtime that owns agent sessions, workspaces, and version control, plus clients
 (web, desktop, mobile) that talk to it over one authenticated Effect RPC WebSocket. The server is the
 execution boundary: every provider process, terminal, git operation, and filesystem read happens
 there, never in the client.
@@ -83,6 +83,26 @@ Command and event names live in [`orchestration.ts`][contracts]. Some commands a
 dispatchable (`thread.create`, `thread.turn.start`, `thread.approval.respond`); others are internal
 and produced only by server-side reactors (`thread.message.assistant.delta`,
 `thread.turn.diff.complete`).
+
+Three aggregates exist: `project`, `thread`, and `issue`. Issues are the planning layer — a
+project's backlog, with dependencies between them — and their shapes live in
+[`issues.ts`](../../packages/contracts/src/issues.ts). Two flows join issues to threads.
+`issue.start` is gated on every dependency being `done`, then composes the ordinary bootstrap
+turn start (create worktree, create thread, seed the first turn) in [`ws.ts`][ws] so worktree
+creation has exactly one implementation. In the other direction, when a turn completes
+[`ProviderRuntimeIngestion`][ingest] parses a `t3-issues` block out of the final assistant message
+and dispatches `issue.create` for each story. See [Glossary](./glossary.md#issues).
+
+**Autonomous mode** turns that into a loop. With a run enabled on a project,
+[`AutonomousRunReactor`](../../apps/server/src/orchestration/Layers/AutonomousRunReactor.ts)
+starts every startable issue in parallel, opens each one's pull request through the same
+`git.runStackedAction` the PR button uses when its worker's turn ends, and funnels reviews through
+a serial merge queue so each reviewer rebases onto a base branch that already contains its landed
+siblings. Reviewers run on Opus in the worker's worktree and report a `t3-review` verdict; anything
+that fails along the way flags the issue needs-attention and the run continues without it. Every
+decision is derived from projected state, so a restart resumes rather than double-starting, and a
+run with nothing left to advance disables itself. See
+[Glossary](./glossary.md#autonomous-mode).
 
 A turn is complete when its session leaves `running` status, projected by
 `settledTurnStateForSessionStatus` in [`projector.ts`][projector]. Checkpoint work settling later

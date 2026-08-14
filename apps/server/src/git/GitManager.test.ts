@@ -3055,7 +3055,7 @@ it.layer(GitManagerTestLayer)("GitManager", (it) => {
         Effect.flip,
         Effect.map((error) => error.message),
       );
-      expect(errorMessage).toContain("gh auth login");
+      expect(errorMessage).toContain("Check GitHub in Settings");
     }),
   );
 

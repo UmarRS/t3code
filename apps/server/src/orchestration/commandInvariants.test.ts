@@ -52,6 +52,7 @@ const readModel: OrchestrationReadModel = {
       deletedAt: null,
     },
   ],
+  issues: [],
   threads: [
     {
       id: ThreadId.make("thread-1"),

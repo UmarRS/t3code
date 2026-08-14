@@ -216,6 +216,8 @@ const PersistedDraftThreadState = Schema.Struct({
   worktreePath: Schema.NullOr(Schema.String),
   envMode: DraftThreadEnvModeSchema,
   startFromOrigin: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
+  focusPath: Schema.NullOr(Schema.String).pipe(Schema.withDecodingDefault(Effect.succeed(null))),
+  linkedPaths: Schema.Array(Schema.String).pipe(Schema.withDecodingDefault(Effect.succeed([]))),
   promotedTo: Schema.optionalKey(
     Schema.NullOr(
       Schema.Struct({
@@ -320,6 +322,10 @@ export interface DraftSessionState {
   worktreePath: string | null;
   envMode: DraftThreadEnvMode;
   startFromOrigin: boolean;
+  /** Workspace-relative folder the agent will run in. Null runs at the root. */
+  focusPath: string | null;
+  /** Workspace-relative folders the agent may also read and edit. */
+  linkedPaths: ReadonlyArray<string>;
   promotedTo?: ScopedThreadRef | null;
 }
 
@@ -384,6 +390,8 @@ interface ComposerDraftStoreState {
       startFromOrigin?: boolean;
       runtimeMode?: RuntimeMode;
       interactionMode?: ProviderInteractionMode;
+      focusPath?: string | null;
+      linkedPaths?: ReadonlyArray<string>;
     },
   ) => void;
   /** Creates or updates the draft session tracked for a concrete project ref. */
@@ -399,6 +407,8 @@ interface ComposerDraftStoreState {
       startFromOrigin?: boolean;
       runtimeMode?: RuntimeMode;
       interactionMode?: ProviderInteractionMode;
+      focusPath?: string | null;
+      linkedPaths?: ReadonlyArray<string>;
     },
   ) => void;
   /** Updates mutable draft-session metadata without touching composer content. */
@@ -413,6 +423,8 @@ interface ComposerDraftStoreState {
       startFromOrigin?: boolean;
       runtimeMode?: RuntimeMode;
       interactionMode?: ProviderInteractionMode;
+      focusPath?: string | null;
+      linkedPaths?: ReadonlyArray<string>;
     },
   ) => void;
   clearProjectDraftThreadId: (projectRef: ScopedProjectRef) => void;
@@ -1363,6 +1375,8 @@ function createDraftThreadState(
     startFromOrigin?: boolean;
     runtimeMode?: RuntimeMode;
     interactionMode?: ProviderInteractionMode;
+    focusPath?: string | null;
+    linkedPaths?: ReadonlyArray<string>;
   },
 ): DraftThreadState {
   // A project change (including switching environments within a logical
@@ -1389,6 +1403,21 @@ function createDraftThreadState(
     options?.startFromOrigin === undefined
       ? (existingThread?.startFromOrigin ?? false)
       : options.startFromOrigin;
+  // Scope is a set of paths inside one project, so a project change drops it
+  // for the same reason branch and worktree drop: those folders may not exist
+  // in the new target.
+  const nextFocusPath =
+    options?.focusPath === undefined
+      ? projectChanged
+        ? null
+        : (existingThread?.focusPath ?? null)
+      : options.focusPath;
+  const nextLinkedPaths =
+    options?.linkedPaths === undefined
+      ? projectChanged
+        ? []
+        : (existingThread?.linkedPaths ?? [])
+      : options.linkedPaths;
   return {
     threadId,
     environmentId: projectRef.environmentId,
@@ -1403,6 +1432,8 @@ function createDraftThreadState(
     envMode:
       options?.envMode ?? (nextWorktreePath ? "worktree" : (existingThread?.envMode ?? "local")),
     startFromOrigin: nextStartFromOrigin,
+    focusPath: nextFocusPath,
+    linkedPaths: nextLinkedPaths,
     promotedTo: null,
   };
 }
@@ -1435,6 +1466,9 @@ function draftThreadsEqual(left: DraftThreadState | undefined, right: DraftThrea
     left.worktreePath === right.worktreePath &&
     left.envMode === right.envMode &&
     left.startFromOrigin === right.startFromOrigin &&
+    left.focusPath === right.focusPath &&
+    left.linkedPaths.length === right.linkedPaths.length &&
+    left.linkedPaths.every((path, index) => path === right.linkedPaths[index]) &&
     scopedThreadRefsEqual(left.promotedTo, right.promotedTo)
   );
 }
@@ -1578,6 +1612,15 @@ function normalizePersistedDraftThreads(
         worktreePath: normalizedWorktreePath,
         envMode: normalizeDraftThreadEnvMode(candidateDraftThread.envMode, normalizedWorktreePath),
         startFromOrigin,
+        focusPath:
+          typeof candidateDraftThread.focusPath === "string"
+            ? candidateDraftThread.focusPath
+            : null,
+        linkedPaths: Array.isArray(candidateDraftThread.linkedPaths)
+          ? candidateDraftThread.linkedPaths.filter(
+              (path): path is string => typeof path === "string",
+            )
+          : [],
         promotedTo,
       };
     }
@@ -1624,6 +1667,8 @@ function normalizePersistedDraftThreads(
           worktreePath: null,
           envMode: "local",
           startFromOrigin: false,
+          focusPath: null,
+          linkedPaths: [],
           promotedTo: null,
         };
       } else if (
@@ -1966,7 +2011,10 @@ function partializeComposerDraftStoreState(
     if (!keptSessionKeys.has(threadKey)) {
       continue;
     }
-    persistedDraftThreadsByThreadKey[threadKey] = draftThread;
+    persistedDraftThreadsByThreadKey[threadKey] = {
+      ...draftThread,
+      linkedPaths: [...draftThread.linkedPaths],
+    };
   }
   return {
     draftsByThreadKey: persistedDraftsByThreadKey,
@@ -2227,6 +2275,8 @@ function toHydratedDraftThreadState(
     worktreePath: persistedDraftThread.worktreePath,
     envMode: persistedDraftThread.envMode,
     startFromOrigin: persistedDraftThread.startFromOrigin,
+    focusPath: persistedDraftThread.focusPath,
+    linkedPaths: persistedDraftThread.linkedPaths,
     promotedTo: persistedDraftThread.promotedTo
       ? scopeThreadRef(
           persistedDraftThread.promotedTo.environmentId as EnvironmentId,
@@ -2445,6 +2495,18 @@ const composerDraftStore = create<ComposerDraftStoreState>()(
               options.startFromOrigin === undefined
                 ? existing.startFromOrigin
                 : options.startFromOrigin;
+            const nextFocusPath =
+              options.focusPath === undefined
+                ? projectChanged
+                  ? null
+                  : existing.focusPath
+                : options.focusPath;
+            const nextLinkedPaths =
+              options.linkedPaths === undefined
+                ? projectChanged
+                  ? []
+                  : existing.linkedPaths
+                : options.linkedPaths;
             const nextDraftThread: DraftThreadState = {
               threadId: existing.threadId,
               environmentId: nextProjectRef.environmentId,
@@ -2461,6 +2523,8 @@ const composerDraftStore = create<ComposerDraftStoreState>()(
               envMode:
                 options.envMode ?? (nextWorktreePath ? "worktree" : (existing.envMode ?? "local")),
               startFromOrigin: nextStartFromOrigin,
+              focusPath: nextFocusPath,
+              linkedPaths: nextLinkedPaths,
               promotedTo: existing.promotedTo ?? null,
             };
             const isUnchanged =
@@ -2474,6 +2538,11 @@ const composerDraftStore = create<ComposerDraftStoreState>()(
               nextDraftThread.worktreePath === existing.worktreePath &&
               nextDraftThread.envMode === existing.envMode &&
               nextDraftThread.startFromOrigin === existing.startFromOrigin &&
+              nextDraftThread.focusPath === existing.focusPath &&
+              nextDraftThread.linkedPaths.length === existing.linkedPaths.length &&
+              nextDraftThread.linkedPaths.every(
+                (path, index) => path === existing.linkedPaths[index],
+              ) &&
               scopedThreadRefsEqual(nextDraftThread.promotedTo, existing.promotedTo);
             if (isUnchanged) {
               return state;

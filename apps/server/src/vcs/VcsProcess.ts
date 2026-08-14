@@ -55,13 +55,17 @@ const classifyNonZeroExit = (command: string, stderr: string): VcsProcessExitFai
 
   if (
     normalized.includes("authentication failed") ||
+    normalized.includes("bad credentials") ||
+    normalized.includes("http 401") ||
     normalized.includes("not logged in") ||
+    normalized.includes("requires authentication") ||
     normalized.includes("gh auth login") ||
     normalized.includes("glab auth login") ||
     normalized.includes("az devops login") ||
     normalized.includes("please run az login") ||
     normalized.includes("no oauth token") ||
-    normalized.includes("unauthorized")
+    normalized.includes("unauthorized") ||
+    normalized.includes("resource not accessible by integration")
   ) {
     return "authentication";
   }

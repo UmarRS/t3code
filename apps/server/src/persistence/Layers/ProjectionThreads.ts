@@ -19,6 +19,8 @@ import { ModelSelection } from "@t3tools/contracts";
 const ProjectionThreadDbRow = ProjectionThread.mapFields(
   Struct.assign({
     modelSelection: Schema.fromJsonString(ModelSelection),
+    // The column carries a '[]' default, so every row decodes as an array.
+    linkedPaths: Schema.fromJsonString(Schema.Array(Schema.String)),
   }),
 );
 type ProjectionThreadDbRow = typeof ProjectionThreadDbRow.Type;
@@ -39,6 +41,8 @@ const makeProjectionThreadRepository = Effect.gen(function* () {
           interaction_mode,
           branch,
           worktree_path,
+          focus_path,
+          linked_paths_json,
           latest_turn_id,
           created_at,
           updated_at,
@@ -66,6 +70,8 @@ const makeProjectionThreadRepository = Effect.gen(function* () {
           ${row.interactionMode},
           ${row.branch},
           ${row.worktreePath},
+          ${row.focusPath ?? null},
+          ${JSON.stringify(row.linkedPaths ?? [])},
           ${row.latestTurnId},
           ${row.createdAt},
           ${row.updatedAt},
@@ -93,6 +99,8 @@ const makeProjectionThreadRepository = Effect.gen(function* () {
           interaction_mode = excluded.interaction_mode,
           branch = excluded.branch,
           worktree_path = excluded.worktree_path,
+          focus_path = excluded.focus_path,
+          linked_paths_json = excluded.linked_paths_json,
           latest_turn_id = excluded.latest_turn_id,
           created_at = excluded.created_at,
           updated_at = excluded.updated_at,
@@ -127,6 +135,8 @@ const makeProjectionThreadRepository = Effect.gen(function* () {
           interaction_mode AS "interactionMode",
           branch,
           worktree_path AS "worktreePath",
+          focus_path AS "focusPath",
+          linked_paths_json AS "linkedPaths",
           latest_turn_id AS "latestTurnId",
           created_at AS "createdAt",
           updated_at AS "updatedAt",
@@ -163,6 +173,8 @@ const makeProjectionThreadRepository = Effect.gen(function* () {
           interaction_mode AS "interactionMode",
           branch,
           worktree_path AS "worktreePath",
+          focus_path AS "focusPath",
+          linked_paths_json AS "linkedPaths",
           latest_turn_id AS "latestTurnId",
           created_at AS "createdAt",
           updated_at AS "updatedAt",

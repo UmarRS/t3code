@@ -16,24 +16,25 @@ import {
   squashAtomCommandFailure,
 } from "@t3tools/client-runtime/state/runtime";
 import {
-  type DesktopWslState,
   type EnvironmentId,
   type FilesystemBrowseResult,
   type ProjectId,
   type SourceControlDiscoveryResult,
   type SourceControlProviderKind,
   type SourceControlRepositoryInfo,
-  PRIMARY_LOCAL_ENVIRONMENT_ID,
 } from "@t3tools/contracts";
 import { useNavigate, useParams } from "@tanstack/react-router";
 import * as Option from "effect/Option";
 import {
   ArrowLeftIcon,
+  BotIcon,
+  ClipboardCheckIcon,
   CornerLeftUpIcon,
   FileSearchIcon,
   FolderIcon,
   FolderPlusIcon,
   LinkIcon,
+  ListChecksIcon,
   MessageSquareIcon,
   PaletteIcon,
   SettingsIcon,
@@ -57,10 +58,12 @@ import { useAtomValue } from "@effect/atom-react";
 import { isDesktopLocalConnectionTarget } from "../connection/desktopLocal";
 import { useDesktopLocalBootstraps } from "../connection/useDesktopLocalBootstraps";
 import { useHandleNewThread } from "../hooks/useHandleNewThread";
+import { useIssuesBoardProjectRef } from "../hooks/useIssuesBoardTarget";
+import { resolveAutonomousRunState } from "./issues/autonomousRun.logic";
+import { requestAutonomousRunPrompt } from "./issues/issuesDashboardBus";
 import { useClientSettings } from "../hooks/useSettings";
 import { useTheme } from "../hooks/useTheme";
 import { readLocalApi } from "../localApi";
-import { desktopLocalBackendId } from "../connection/desktopLocal";
 import { filesystemEnvironment } from "../state/filesystem";
 import { projectEnvironment } from "../state/projects";
 import { useEnvironmentQuery } from "../state/query";
@@ -90,12 +93,6 @@ import { getLatestThreadForProject, sortThreads } from "../lib/threadSort";
 import { cn, isMacPlatform, isWindowsPlatform, newProjectId } from "../lib/utils";
 import { selectThreadTerminalUiState, useTerminalUiStateStore } from "../terminalUiStateStore";
 import { buildThreadRouteParams, resolveThreadRouteTarget } from "../threadRoutes";
-import {
-  applyWslEnvironmentConfiguration,
-  parseWslUncPath,
-  resolveProjectPickerTarget,
-  resolveWslProjectSelection,
-} from "../wslPaths";
 import {
   ADDON_ICON_CLASS,
   buildBrowseGroups,
@@ -578,6 +575,7 @@ function OpenCommandPaletteDialog(props: {
   const primaryEnvironmentId = usePrimaryEnvironmentId();
   const { activeDraftThread, activeThread, defaultProjectRef, handleNewThread } =
     useHandleNewThread();
+  const issuesProjectRef = useIssuesBoardProjectRef();
   const projects = useProjects();
   const projectOrder = useUiStateStore((store) => store.projectOrder);
   const threads = useThreadShells();
@@ -736,31 +734,16 @@ function OpenCommandPaletteDialog(props: {
   }, [environments]);
   const defaultAddProjectEnvironmentId =
     addProjectEnvironmentOptions.find((option) => option.isConnected)?.environmentId ?? null;
-  const wslAddProjectEnvironmentOption = useMemo(
-    () =>
-      addProjectEnvironmentOptions.find((option) => {
-        if (!option.isConnected) {
-          return false;
-        }
-        const environment = environments.find(
-          (candidate) => candidate.environmentId === option.environmentId,
-        );
-        return environment
-          ? desktopLocalBackendId(environment.entry.target)?.startsWith("wsl:") === true
-          : false;
-      }) ?? null,
-    [addProjectEnvironmentOptions, environments],
-  );
   const browseEnvironmentId = addProjectEnvironmentId ?? defaultAddProjectEnvironmentId;
   const browseEnvironment =
     environments.find((environment) => environment.environmentId === browseEnvironmentId) ?? null;
-  // A desktop-local secondary backend (today: the WSL backend). The picker is
-  // available against these too — the desktop dispatches pickFolder into the
-  // backend's filesystem when routed by its instance id.
+  // A desktop-local secondary backend. The picker is available against these
+  // too — the desktop dispatches pickFolder into the backend's filesystem when
+  // routed by its instance id.
   const browseEnvironmentIsDesktopLocal =
     browseEnvironment !== null && isDesktopLocalConnectionTarget(browseEnvironment.entry.target);
-  // Map the browsed desktop-local env to its desktop pool instance id (e.g.
-  // "wsl:ubuntu"). The catalog environmentId is descriptor-derived and won't
+  // Map the browsed desktop-local env to its desktop pool instance id. The
+  // catalog environmentId is descriptor-derived and won't
   // route on the desktop side; pickFolder only recognizes the pool id, which
   // the bootstrap list exposes. Match on backend URL, exactly as Sidebar's
   // LocalSecondaryStatus does (environment.displayUrl === bootstrap.httpBaseUrl).
@@ -1464,21 +1447,6 @@ function OpenCommandPaletteDialog(props: {
     },
   });
 
-  if (wslAddProjectEnvironmentOption) {
-    actionItems.push({
-      kind: "action",
-      value: "action:add-project:wsl-folder",
-      searchTerms: ["add project", "open", "wsl", "linux", "folder", "directory"],
-      title: "Open WSL folder",
-      description: wslAddProjectEnvironmentOption.label,
-      icon: <FolderPlusIcon className={ITEM_ICON_CLASS} />,
-      keepOpen: true,
-      run: async () => {
-        await startAddProjectBrowse(wslAddProjectEnvironmentOption.environmentId);
-      },
-    });
-  }
-
   actionItems.push({
     kind: "action",
     value: "action:theme-editor",
@@ -1494,6 +1462,59 @@ function OpenCommandPaletteDialog(props: {
       });
     },
   });
+
+  if (issuesProjectRef !== null) {
+    const issuesRouteParams = {
+      environmentId: issuesProjectRef.environmentId,
+      projectId: issuesProjectRef.projectId,
+    };
+    const issuesProject = projects.find(
+      (candidate) =>
+        candidate.id === issuesProjectRef.projectId &&
+        candidate.environmentId === issuesProjectRef.environmentId,
+    );
+    const autonomousRunning = resolveAutonomousRunState(issuesProject).kind === "running";
+    const issuesProjectTitle = issuesProject?.title ?? "current project";
+
+    actionItems.push({
+      kind: "action",
+      value: "action:issues",
+      searchTerms: ["issues", "backlog", "board", "stories", "kanban", "go to issues"],
+      title: `Open issues for ${issuesProjectTitle}`,
+      icon: <ListChecksIcon className={ITEM_ICON_CLASS} />,
+      run: async () => {
+        await navigate({ to: "/issues/$environmentId/$projectId", params: issuesRouteParams });
+      },
+    });
+
+    actionItems.push({
+      kind: "action",
+      value: "action:issues-review",
+      searchTerms: ["review", "issues", "merged", "needs attention", "go to review"],
+      title: `Open issue review for ${issuesProjectTitle}`,
+      icon: <ClipboardCheckIcon className={ITEM_ICON_CLASS} />,
+      run: async () => {
+        await navigate({
+          to: "/issues/$environmentId/$projectId/review",
+          params: issuesRouteParams,
+        });
+      },
+    });
+
+    actionItems.push({
+      kind: "action",
+      value: "action:issues-autonomous",
+      searchTerms: ["autonomous", "auto", "run", "backlog", "agent", "unattended"],
+      title: autonomousRunning ? "Stop autonomous mode" : "Start autonomous mode",
+      icon: <BotIcon className={ITEM_ICON_CLASS} />,
+      run: async () => {
+        // Navigate first: the dashboard owns the confirmation that explains
+        // what a run does, and what stopping one does not do.
+        await navigate({ to: "/issues/$environmentId/$projectId", params: issuesRouteParams });
+        requestAutonomousRunPrompt();
+      },
+    });
+  }
 
   actionItems.push({
     kind: "action",
@@ -2077,25 +2098,12 @@ function OpenCommandPaletteDialog(props: {
 
     setIsPickingProjectFolder(true);
     let pickedPath: string | null = null;
-    let desktopWslState: DesktopWslState | null = null;
     try {
-      desktopWslState =
-        browseEnvironmentId === primaryEnvironmentId && browseEnvironmentPlatform === "Linux"
-          ? ((await window.desktopBridge?.getWslState().catch(() => null)) ?? null)
-          : null;
-      // Route the picker to the browsed env's backend filesystem. The desktop
-      // only resolves a "wsl:*" pool instance id, so for a desktop-local env we
-      // pass the bootstrap-mapped instance id (not the catalog environmentId).
-      // A WSL-only primary has no secondary bootstrap, so resolve its instance
-      // id from desktop settings. Windows and combo-mode primaries still omit
-      // the target to preserve the native primary picker. The desktop converts
-      // a WSL UNC selection back to a Linux path before returning.
-      const pickerTargetEnvironmentId = resolveProjectPickerTarget({
-        browseEnvironmentId,
-        primaryEnvironmentId,
-        desktopInstanceId: browseDesktopInstanceId,
-        wslConfiguration: desktopWslState,
-      });
+      // Route the picker to the browsed env's backend filesystem: for a
+      // desktop-local env pass the bootstrap-mapped pool instance id (not the
+      // catalog environmentId), which is the only id the desktop resolves. The
+      // primary omits the target to preserve the native picker.
+      const pickerTargetEnvironmentId = browseDesktopInstanceId;
       const pickerOptions = {
         ...(fileManagerInitialPath ? { initialPath: fileManagerInitialPath } : {}),
         ...(pickerTargetEnvironmentId ? { targetEnvironmentId: pickerTargetEnvironmentId } : {}),
@@ -2110,56 +2118,6 @@ function OpenCommandPaletteDialog(props: {
     }
     setIsPickingProjectFolder(false);
     if (!pickedPath) {
-      return;
-    }
-    if (parseWslUncPath(pickedPath)) {
-      desktopWslState ??= (await window.desktopBridge?.getWslState().catch(() => null)) ?? null;
-      let primaryRunningDistro: string | null = null;
-      try {
-        primaryRunningDistro =
-          window.desktopBridge
-            ?.getLocalEnvironmentBootstraps()
-            .find((bootstrap) => bootstrap.id === PRIMARY_LOCAL_ENVIRONMENT_ID)?.runningDistro ??
-          null;
-      } catch {
-        // Keep UNC routing strict when the live primary identity cannot be read.
-      }
-      const selection = resolveWslProjectSelection(
-        pickedPath,
-        applyWslEnvironmentConfiguration(
-          environments.flatMap((environment) => {
-            const backendId = desktopLocalBackendId(environment.entry.target);
-            if (!backendId) {
-              return [];
-            }
-
-            const bootstrap = desktopLocalBootstraps.find(
-              (candidate) => candidate.httpBaseUrl === environment.displayUrl,
-            );
-            const runningDistro = bootstrap?.runningDistro ?? null;
-            return [{ environmentId: environment.environmentId, backendId, runningDistro }];
-          }),
-          primaryEnvironmentId,
-          desktopWslState ?? null,
-          primaryRunningDistro,
-        ),
-      );
-      if (!selection) {
-        toastManager.add(
-          stackedThreadToast({
-            type: "error",
-            title: "Could not add WSL project",
-            description: "Start the matching WSL backend, then choose the folder again.",
-          }),
-        );
-        return;
-      }
-      await handleAddProjectForEnvironment({
-        environmentId: selection.environmentId,
-        rawCwd: selection.linuxPath,
-        platform: "Linux",
-        currentProjectCwd: null,
-      });
       return;
     }
     await handleAddProject(pickedPath);

@@ -1,6 +1,7 @@
 import {
   CheckpointRef,
   EventId,
+  IssueId,
   MessageId,
   ProjectId,
   ThreadId,
@@ -39,6 +40,34 @@ const projectionSnapshotLayer = it.layer(
 );
 
 projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
+  it.effect("decodes an issue model selection from the detail row", () =>
+    Effect.gen(function* () {
+      const snapshotQuery = yield* ProjectionSnapshotQuery;
+      const sql = yield* SqlClient.SqlClient;
+
+      yield* sql`
+        INSERT INTO projection_issues (
+          issue_id, project_id, title, description, status, priority,
+          model_selection_json, depends_on_json, review_notes, created_at, updated_at
+        ) VALUES (
+          'issue-model', 'project-model', 'Model issue', 'Do the work', 'backlog', 'high',
+          '{"instanceId":"claudeAgent","model":"claude-opus-5"}', '[]', '',
+          '2026-08-10T00:00:00.000Z', '2026-08-10T00:00:00.000Z'
+        )
+      `;
+
+      const detail = yield* snapshotQuery.getIssueDetailById(IssueId.make("issue-model"));
+      assert.equal(detail._tag, "Some");
+      if (detail._tag === "Some") {
+        assert.deepEqual(detail.value.modelSelection, {
+          instanceId: ProviderInstanceId.make("claudeAgent"),
+          model: "claude-opus-5",
+        });
+      }
+      yield* sql`DELETE FROM projection_issues WHERE issue_id = 'issue-model'`;
+    }),
+  );
+
   it.effect("hydrates read model from projection tables and computes snapshot sequence", () =>
     Effect.gen(function* () {
       const snapshotQuery = yield* ProjectionSnapshotQuery;
@@ -286,6 +315,9 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
             },
           ],
           defaultThreadEnvMode: null,
+          autonomousStartedAt: null,
+          autonomousFinishedAt: null,
+          autonomousFinishedReason: null,
           createdAt: "2026-02-24T00:00:00.000Z",
           updatedAt: "2026-02-24T00:00:01.000Z",
           deletedAt: null,
@@ -406,6 +438,9 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
             },
           ],
           defaultThreadEnvMode: null,
+          autonomousStartedAt: null,
+          autonomousFinishedAt: null,
+          autonomousFinishedReason: null,
           createdAt: "2026-02-24T00:00:00.000Z",
           updatedAt: "2026-02-24T00:00:01.000Z",
         },

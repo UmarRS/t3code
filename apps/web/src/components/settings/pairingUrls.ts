@@ -1,4 +1,3 @@
-import { buildHostedPairingUrl } from "../../hostedPairing";
 import { setPairingTokenOnUrl } from "../../pairingUrl";
 
 export function resolveDesktopPairingUrl(endpointUrl: string, credential: string): string {
@@ -7,14 +6,10 @@ export function resolveDesktopPairingUrl(endpointUrl: string, credential: string
   return setPairingTokenOnUrl(url, credential).toString();
 }
 
-export function resolveHostedPairingUrl(endpointUrl: string, credential: string): string | null {
-  const url = new URL(endpointUrl);
-  if (url.protocol !== "https:") {
-    return null;
-  }
-
-  return buildHostedPairingUrl({
-    host: endpointUrl,
-    token: credential,
-  });
+/**
+ * This build ships no hosted web app, so there is never a hosted pairing URL to
+ * hand out. Callers fall back to the endpoint's own `/pair` URL.
+ */
+export function resolveHostedPairingUrl(_endpointUrl: string, _credential: string): string | null {
+  return null;
 }

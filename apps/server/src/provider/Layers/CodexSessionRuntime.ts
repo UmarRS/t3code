@@ -101,6 +101,8 @@ export interface CodexSessionRuntimeOptions {
   readonly launchArgs?: string;
   readonly environment?: NodeJS.ProcessEnv;
   readonly cwd: string;
+  /** Absolute directories outside `cwd` this session may also write to. */
+  readonly contextDirectories?: ReadonlyArray<string>;
   readonly runtimeMode: RuntimeMode;
   readonly model?: string;
   readonly serviceTier?: CodexServiceTier | undefined;
@@ -316,6 +318,7 @@ function buildThreadStartParams(input: {
 
 function runtimeModeToTurnSandboxPolicy(
   input: RuntimeMode,
+  contextDirectories?: ReadonlyArray<string>,
 ): EffectCodexSchema.V2TurnStartParams__SandboxPolicy {
   switch (input) {
     case "approval-required":
@@ -324,8 +327,14 @@ function runtimeModeToTurnSandboxPolicy(
       };
     case "auto-accept-edits":
     case "auto":
+      // Codex never restricts reads, so a thread's linked scope paths only
+      // need granting for writes: they join the workspace as writable roots
+      // alongside the cwd Codex derives them from.
       return {
         type: "workspaceWrite",
+        ...(contextDirectories && contextDirectories.length > 0
+          ? { writableRoots: contextDirectories }
+          : {}),
       };
     case "full-access":
     default:
@@ -370,6 +379,7 @@ export function buildTurnStartParams(input: {
   readonly serviceTier?: CodexServiceTier;
   readonly effort?: EffectCodexSchema.V2TurnStartParams__ReasoningEffort;
   readonly interactionMode?: ProviderInteractionMode;
+  readonly contextDirectories?: ReadonlyArray<string>;
 }): Effect.Effect<
   CodexTurnStartParamsWithCollaborationMode,
   CodexErrors.CodexAppServerProtocolParseError
@@ -397,7 +407,7 @@ export function buildTurnStartParams(input: {
     input: turnInput,
     approvalPolicy: config.approvalPolicy,
     approvalsReviewer: config.approvalsReviewer,
-    sandboxPolicy: runtimeModeToTurnSandboxPolicy(input.runtimeMode),
+    sandboxPolicy: runtimeModeToTurnSandboxPolicy(input.runtimeMode, input.contextDirectories),
     ...(input.model ? { model: input.model } : {}),
     ...(input.serviceTier ? { serviceTier: input.serviceTier } : {}),
     ...(input.effort ? { effort: input.effort } : {}),
@@ -921,6 +931,9 @@ export const makeCodexSessionRuntime = (
       status: "connecting",
       runtimeMode: options.runtimeMode,
       cwd: options.cwd,
+      ...(options.contextDirectories && options.contextDirectories.length > 0
+        ? { contextDirectories: options.contextDirectories }
+        : {}),
       ...(options.model ? { model: options.model } : {}),
       threadId: options.threadId,
       ...(options.resumeCursor !== undefined ? { resumeCursor: options.resumeCursor } : {}),
@@ -1764,6 +1777,9 @@ export const makeCodexSessionRuntime = (
           const params = yield* buildTurnStartParams({
             threadId: providerThreadId,
             runtimeMode: options.runtimeMode,
+            ...(options.contextDirectories && options.contextDirectories.length > 0
+              ? { contextDirectories: options.contextDirectories }
+              : {}),
             ...(input.input ? { prompt: input.input } : {}),
             ...(input.attachments ? { attachments: input.attachments } : {}),
             ...(normalizedModel ? { model: normalizedModel } : {}),

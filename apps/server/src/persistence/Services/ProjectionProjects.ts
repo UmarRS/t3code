@@ -27,6 +27,11 @@ export const ProjectionProject = Schema.Struct({
   defaultModelSelection: Schema.NullOr(ModelSelection),
   defaultThreadEnvMode: Schema.NullOr(ThreadEnvMode),
   faviconPath: Schema.optional(Schema.NullOr(Schema.String)),
+  autonomousStartedAt: Schema.optional(Schema.NullOr(IsoDateTime)),
+  autonomousFinishedAt: Schema.optional(Schema.NullOr(IsoDateTime)),
+  autonomousFinishedReason: Schema.optional(
+    Schema.NullOr(Schema.Literals(["completed", "disabled"])),
+  ),
   scripts: Schema.Array(ProjectScript),
   createdAt: IsoDateTime,
   updatedAt: IsoDateTime,

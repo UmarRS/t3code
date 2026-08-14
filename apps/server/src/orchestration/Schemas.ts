@@ -27,6 +27,19 @@ import {
   ThreadApprovalResponseRequestedPayload as ContractsThreadApprovalResponseRequestedPayloadSchema,
   ThreadCheckpointRevertRequestedPayload as ContractsThreadCheckpointRevertRequestedPayloadSchema,
   ThreadSessionStopRequestedPayload as ContractsThreadSessionStopRequestedPayloadSchema,
+  IssueCreatedPayload as ContractsIssueCreatedPayloadSchema,
+  IssueUpdatedPayload as ContractsIssueUpdatedPayloadSchema,
+  IssueStatusSetPayload as ContractsIssueStatusSetPayloadSchema,
+  IssueDeletedPayload as ContractsIssueDeletedPayloadSchema,
+  IssueStartedPayload as ContractsIssueStartedPayloadSchema,
+  IssueStartFailedPayload as ContractsIssueStartFailedPayloadSchema,
+  IssuePullRequestLinkedPayload as ContractsIssuePullRequestLinkedPayloadSchema,
+  IssueAttentionFlaggedPayload as ContractsIssueAttentionFlaggedPayloadSchema,
+  IssueAttentionClearedPayload as ContractsIssueAttentionClearedPayloadSchema,
+  IssueReviewStartedPayload as ContractsIssueReviewStartedPayloadSchema,
+  IssueReviewRecordedPayload as ContractsIssueReviewRecordedPayloadSchema,
+  ProjectAutonomousEnabledPayload as ContractsProjectAutonomousEnabledPayloadSchema,
+  ProjectAutonomousDisabledPayload as ContractsProjectAutonomousDisabledPayloadSchema,
 } from "@t3tools/contracts";
 
 // Server-internal alias surface, backed by contract schemas as the source of truth.
@@ -64,3 +77,17 @@ export const ThreadApprovalResponseRequestedPayload =
 export const ThreadCheckpointRevertRequestedPayload =
   ContractsThreadCheckpointRevertRequestedPayloadSchema;
 export const ThreadSessionStopRequestedPayload = ContractsThreadSessionStopRequestedPayloadSchema;
+
+export const IssueCreatedPayload = ContractsIssueCreatedPayloadSchema;
+export const IssueUpdatedPayload = ContractsIssueUpdatedPayloadSchema;
+export const IssueStatusSetPayload = ContractsIssueStatusSetPayloadSchema;
+export const IssueDeletedPayload = ContractsIssueDeletedPayloadSchema;
+export const IssueStartedPayload = ContractsIssueStartedPayloadSchema;
+export const IssueStartFailedPayload = ContractsIssueStartFailedPayloadSchema;
+export const IssuePullRequestLinkedPayload = ContractsIssuePullRequestLinkedPayloadSchema;
+export const IssueAttentionFlaggedPayload = ContractsIssueAttentionFlaggedPayloadSchema;
+export const IssueAttentionClearedPayload = ContractsIssueAttentionClearedPayloadSchema;
+export const IssueReviewStartedPayload = ContractsIssueReviewStartedPayloadSchema;
+export const IssueReviewRecordedPayload = ContractsIssueReviewRecordedPayloadSchema;
+export const ProjectAutonomousEnabledPayload = ContractsProjectAutonomousEnabledPayloadSchema;
+export const ProjectAutonomousDisabledPayload = ContractsProjectAutonomousDisabledPayloadSchema;

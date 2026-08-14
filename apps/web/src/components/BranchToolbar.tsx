@@ -12,6 +12,8 @@ import {
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { useComposerDraftStore, type DraftId } from "../composerDraftStore";
+import { threadEnvironment } from "../state/threads";
+import { useAtomCommand } from "../state/use-atom-command";
 import { useProject, useThread, useThreadShellsForProjectRefs } from "../state/entities";
 import { useIsMobile } from "../hooks/useMediaQuery";
 import {
@@ -28,6 +30,10 @@ import {
 import { BranchToolbarBranchSelector } from "./BranchToolbarBranchSelector";
 import { BranchToolbarEnvironmentSelector } from "./BranchToolbarEnvironmentSelector";
 import { BranchToolbarEnvModeSelector } from "./BranchToolbarEnvModeSelector";
+import {
+  BranchToolbarScopeSelector,
+  type ThreadScopeSelection,
+} from "./BranchToolbarScopeSelector";
 import { Button } from "./ui/button";
 import {
   Menu,
@@ -384,6 +390,45 @@ export const BranchToolbar = memo(function BranchToolbar({
     });
   }, [activeProjectRef, draftId, previousWorktreeSeed, setDraftThreadContext, threadRef]);
 
+  // A draft keeps its scope in the composer store; a started thread keeps it
+  // on the server, and rescoping it restarts the provider session with the new
+  // cwd and grants.
+  const scope = useMemo<ThreadScopeSelection>(
+    () => ({
+      focusPath: serverThread?.focusPath ?? draftThread?.focusPath ?? null,
+      linkedPaths: serverThread?.linkedPaths ?? draftThread?.linkedPaths ?? [],
+    }),
+    [
+      draftThread?.focusPath,
+      draftThread?.linkedPaths,
+      serverThread?.focusPath,
+      serverThread?.linkedPaths,
+    ],
+  );
+  const updateThreadMetadata = useAtomCommand(threadEnvironment.updateMetadata, {
+    label: "thread scope update",
+  });
+  const handleScopeChange = useCallback(
+    (nextScope: ThreadScopeSelection) => {
+      if (serverThread) {
+        void updateThreadMetadata({
+          environmentId: serverThread.environmentId,
+          input: {
+            threadId: serverThread.id,
+            focusPath: nextScope.focusPath,
+            linkedPaths: nextScope.linkedPaths,
+          },
+        });
+        return;
+      }
+      setDraftThreadContext(draftId ?? threadRef, {
+        focusPath: nextScope.focusPath,
+        linkedPaths: nextScope.linkedPaths,
+      });
+    },
+    [draftId, serverThread, setDraftThreadContext, threadRef, updateThreadMetadata],
+  );
+
   const showEnvironmentPicker = Boolean(
     availableEnvironments && availableEnvironments.length > 1 && onEnvironmentChange,
   );
@@ -445,6 +490,13 @@ export const BranchToolbar = memo(function BranchToolbar({
               onUsePreviousWorktree={onUsePreviousWorktree}
             />
           ) : null}
+          <Separator orientation="vertical" className="mx-0.5 h-3.5!" />
+          <BranchToolbarScopeSelector
+            environmentId={environmentId}
+            workspaceRoot={activeProject.workspaceRoot}
+            scope={scope}
+            onScopeChange={handleScopeChange}
+          />
         </div>
       )}
 

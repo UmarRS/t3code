@@ -118,6 +118,7 @@ describe("OrchestrationEngine", () => {
     const projectionSnapshot = {
       snapshotSequence: 7,
       updatedAt: "2026-03-03T00:00:04.000Z",
+      issues: [],
       projects: [
         {
           id: asProjectId("project-bootstrap"),
@@ -187,6 +188,7 @@ describe("OrchestrationEngine", () => {
               snapshotSequence: projectionSnapshot.snapshotSequence,
               projects: [],
               threads: [],
+              issues: [],
               updatedAt: projectionSnapshot.updatedAt,
             }),
           getArchivedShellSnapshot: () =>
@@ -194,6 +196,7 @@ describe("OrchestrationEngine", () => {
               snapshotSequence: projectionSnapshot.snapshotSequence,
               projects: [],
               threads: [],
+              issues: [],
               updatedAt: projectionSnapshot.updatedAt,
             }),
           getSnapshotSequence: () =>
@@ -208,6 +211,10 @@ describe("OrchestrationEngine", () => {
           getThreadDetailById: () => Effect.succeed(Option.none()),
           getThreadDetailSnapshot: () => Effect.succeed(Option.none()),
           searchThreads: () => Effect.succeed({ matches: [] }),
+          getIssueSummaryById: () => Effect.succeed(Option.none()),
+          getIssueDetailById: () => Effect.succeed(Option.none()),
+          getIssueByReviewerThreadId: () => Effect.succeed(Option.none()),
+          listIssuesByProjectId: () => Effect.succeed([]),
         }),
       ),
       Layer.provide(

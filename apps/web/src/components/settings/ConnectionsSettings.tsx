@@ -13,8 +13,6 @@ import {
   AuthAdministrativeScopes,
   AuthOrchestrationOperateScope,
   AuthOrchestrationReadScope,
-  AuthRelayReadScope,
-  AuthRelayWriteScope,
   AuthReviewWriteScope,
   AuthStandardClientScopes,
   AuthTerminalOperateScope,
@@ -25,7 +23,6 @@ import {
   type DesktopDiscoveredSshHost,
   type DesktopSshEnvironmentTarget,
   type DesktopServerExposureState,
-  type DesktopWslState,
   type EnvironmentId,
 } from "@t3tools/contracts";
 import { connectionStatusText } from "@t3tools/client-runtime/connection";
@@ -40,11 +37,7 @@ import { useCopyToClipboard } from "../../hooks/useCopyToClipboard";
 import { cn } from "../../lib/utils";
 import { formatElapsedDurationLabel, formatExpiresInLabel } from "../../timestampFormat";
 import { resolveDesktopPairingUrl, resolveHostedPairingUrl } from "./pairingUrls";
-import {
-  applyWslEnableSelection,
-  isQrShareableEndpoint,
-  selectQrEndpointOption,
-} from "./ConnectionsSettings.logic";
+import { isQrShareableEndpoint, selectQrEndpointOption } from "./ConnectionsSettings.logic";
 import {
   SettingsPageContainer,
   SettingsRow,
@@ -100,12 +93,7 @@ import {
 } from "~/environments/primary";
 import { isDesktopLocalConnectionTarget } from "~/connection/desktopLocal";
 import { useUiStateStore } from "~/uiStateStore";
-import {
-  resolveServerConfigVersionMismatch,
-  resolveServerSelfUpdateCapability,
-} from "~/versionSkew";
-import { hasCloudPublicConfig } from "~/cloud/publicConfig";
-import { useCloudLinkController } from "~/cloud/useCloudLinkController";
+import { resolveServerConfigVersionMismatch } from "~/versionSkew";
 import { authEnvironment } from "~/state/auth";
 import { environmentCatalog } from "~/connection/catalog";
 import {
@@ -118,7 +106,6 @@ import {
   refreshDesktopNetworkAccessState,
 } from "~/state/desktopNetworkAccess";
 import { desktopSshHostsStateAtom } from "~/state/desktopSshHosts";
-import { desktopWslStateAtom, refreshDesktopWslState } from "~/state/desktopWslState";
 import {
   type EnvironmentPresentation,
   useEnvironments,
@@ -127,19 +114,11 @@ import {
 import { useAtomCommand } from "../../state/use-atom-command";
 import { serverEnvironment } from "~/state/server";
 import { ConnectionStatusDot } from "../ConnectionStatusDot";
-import { ServerUpdateAction, ServerUpdateProgress } from "../ServerUpdateAction";
-import { CloudEnvironmentConnectRows } from "../cloud/CloudEnvironmentConnectList";
 import { ITEM_ROW_CLASSNAME, ITEM_ROW_INNER_CLASSNAME } from "./itemRows";
 
 const DEFAULT_TAILSCALE_SERVE_PORT = 443;
 const EMPTY_ADVERTISED_ENDPOINTS: ReadonlyArray<AdvertisedEndpoint> = [];
 const EMPTY_DISCOVERED_SSH_HOSTS: ReadonlyArray<DesktopDiscoveredSshHost> = [];
-
-// Sentinels for the consolidated WSL backend picker. The colon is
-// rejected by DISTRO_NAME_PATTERN (validated on the desktop side) so
-// neither can collide with a real distro name.
-const BACKEND_VALUE_DEFAULT_WSL = "backend:default-wsl";
-const BACKEND_VALUE_WSL_OFF = "backend:wsl-off";
 
 const accessTimestampFormatter = new Intl.DateTimeFormat(undefined, {
   dateStyle: "medium",
@@ -188,16 +167,6 @@ const PAIRING_SCOPE_OPTIONS: ReadonlyArray<{
     scope: AuthAccessWriteScope,
     title: "Manage access",
     description: "Issue and revoke credentials for other clients.",
-  },
-  {
-    scope: AuthRelayReadScope,
-    title: "View relay",
-    description: "Inspect managed relay connectivity.",
-  },
-  {
-    scope: AuthRelayWriteScope,
-    title: "Manage relay",
-    description: "Change managed tunnel connectivity.",
   },
 ];
 
@@ -1384,25 +1353,20 @@ function SavedBackendListRow({
     [copyTraceIdToClipboard],
   );
   const versionMismatch = resolveServerConfigVersionMismatch(environment.serverConfig);
-  const serverUpdateState = useAtomValue(serverEnvironment.updateStateAtom(environmentId));
-  const resumingServerUpdate =
-    serverUpdateState.status === "running" && serverUpdateState.stage === "resuming";
   const sshTarget =
     environment.entry.target._tag === "SshConnectionTarget" &&
     Option.isSome(environment.entry.profile) &&
     environment.entry.profile.value._tag === "SshConnectionProfile"
       ? environment.entry.profile.value.target
       : null;
-  const metadataBits = [
-    sshTarget ? `SSH ${formatDesktopSshTarget(sshTarget)}` : null,
-    environment.relayManaged ? "T3 Connect" : null,
-  ].filter((value): value is string => value !== null);
+  const metadataBits = [sshTarget ? `SSH ${formatDesktopSshTarget(sshTarget)}` : null].filter(
+    (value): value is string => value !== null,
+  );
 
-  // The WSL backend is a desktop-managed local backend (it surfaces as a bearer
-  // environment whose connection id is prefixed "local:"), not a remote
-  // environment you connect to or remove here — its lifecycle is driven by the
-  // WSL on/off + distro picker on this page.
-  const isWslEnvironment = isDesktopLocalConnectionTarget(environment.entry.target);
+  // A desktop-managed local backend surfaces as a bearer environment whose
+  // connection id is prefixed "local:". Its lifecycle is driven by the desktop,
+  // not by connect/remove on this page.
+  const isDesktopManagedEnvironment = isDesktopLocalConnectionTarget(environment.entry.target);
 
   return (
     <div className={ITEM_ROW_CLASSNAME}>
@@ -1423,11 +1387,7 @@ function SavedBackendListRow({
           {metadataBits.length > 0 ? (
             <p className="text-xs text-muted-foreground">{metadataBits.join(" · ")}</p>
           ) : null}
-          {serverUpdateState.status !== "idle" ? (
-            <div className="max-w-md">
-              <ServerUpdateProgress state={serverUpdateState} />
-            </div>
-          ) : versionMismatch ? (
+          {versionMismatch ? (
             <Tooltip>
               <TooltipTrigger
                 render={
@@ -1445,7 +1405,7 @@ function SavedBackendListRow({
               </TooltipPopup>
             </Tooltip>
           ) : null}
-          {environment.connection.error && !resumingServerUpdate ? (
+          {environment.connection.error ? (
             <p className="flex min-w-0 items-center gap-2 text-destructive text-xs">
               <span className="truncate">{connectionStatusText(environment.connection)}</span>
               {errorTraceId ? (
@@ -1461,27 +1421,17 @@ function SavedBackendListRow({
           ) : null}
         </div>
         <div className="flex w-full shrink-0 items-center gap-2 sm:w-auto sm:justify-end">
-          {versionMismatch &&
-          (serverUpdateState.status === "idle" || serverUpdateState.status === "failed") ? (
-            <ServerUpdateAction
-              environmentId={environmentId}
-              serverLabel={`${environment.label} server`}
-              selfUpdate={resolveServerSelfUpdateCapability(environment.serverConfig)}
-              targetVersion={versionMismatch.clientVersion}
-              label={serverUpdateState.status === "failed" ? "Retry" : "Update"}
-            />
-          ) : null}
-          {isWslEnvironment ? (
+          {isDesktopManagedEnvironment ? (
             <Tooltip>
               <TooltipTrigger
                 render={
                   <Button size="xs" variant="outline" disabled>
-                    Managed above
+                    Managed by the desktop app
                   </Button>
                 }
               />
               <TooltipPopup side="top" className="max-w-80 whitespace-pre-wrap leading-tight">
-                The WSL backend is managed by the WSL setting above — turn it on or off there.
+                This backend is started and stopped by the desktop app.
               </TooltipPopup>
             </Tooltip>
           ) : (
@@ -1565,7 +1515,7 @@ function CloudLinkSwitch({
   disabled,
   disabledReason,
   onCheckedChange,
-  ariaLabel = "Enable T3 Connect",
+  ariaLabel = "Enable cloud link",
 }: {
   readonly checked: boolean;
   readonly disabled: boolean;
@@ -1591,103 +1541,6 @@ function CloudLinkSwitch({
   );
 }
 
-function ConfiguredCloudLinkRow({ canManageRelay }: { readonly canManageRelay: boolean }) {
-  const {
-    isSignedIn,
-    linkState: primaryCloudLinkState,
-    managedTunnelActive,
-    publishAgentActivity,
-    operationError,
-    reconcileCloudState,
-  } = useCloudLinkController();
-  const [isUpdating, setIsUpdating] = useState(false);
-  const [isUpdatingPreference, setIsUpdatingPreference] = useState(false);
-
-  const disabledReason = !isSignedIn
-    ? "Sign in to T3 Connect to manage this environment."
-    : !canManageRelay
-      ? "Your session does not have permission to manage T3 Connect access."
-      : null;
-  const isBusy = isUpdating || isUpdatingPreference;
-
-  const updateManagedTunnel = async (enabled: boolean) => {
-    setIsUpdating(true);
-    const ok = await reconcileCloudState({ managedTunnel: enabled, publish: publishAgentActivity });
-    if (ok) {
-      // Turning the tunnel off while publishing stays on downgrades the link
-      // rather than removing it — say so instead of claiming an unlink.
-      toastManager.add({
-        type: "success",
-        title: enabled
-          ? "T3 Connect linked"
-          : publishAgentActivity
-            ? "T3 Connect tunnel disabled"
-            : "T3 Connect unlinked",
-        description: enabled
-          ? "This environment is available through T3 Connect."
-          : publishAgentActivity
-            ? "The managed tunnel was removed. Agent activity publishing stays on."
-            : "This environment is no longer available through T3 Connect.",
-      });
-    }
-    setIsUpdating(false);
-  };
-
-  const updatePublishAgentActivity = async (enabled: boolean) => {
-    setIsUpdatingPreference(true);
-    const ok = await reconcileCloudState({ managedTunnel: managedTunnelActive, publish: enabled });
-    if (ok) {
-      toastManager.add({
-        type: "success",
-        title: enabled ? "Agent activity enabled" : "Agent activity disabled",
-        description: enabled
-          ? "This environment publishes agent activity to your mobile clients."
-          : "This environment will stop publishing agent activity.",
-      });
-    }
-    setIsUpdatingPreference(false);
-  };
-
-  return (
-    <>
-      <SettingsRow
-        title="T3 Connect"
-        description={
-          managedTunnelActive
-            ? "This environment is available to your other devices through T3 Connect."
-            : "Make this environment available to your other devices through T3 Connect."
-        }
-        status={operationError ?? primaryCloudLinkState.error}
-        control={
-          <CloudLinkSwitch
-            checked={managedTunnelActive}
-            disabled={!canManageRelay || !isSignedIn || primaryCloudLinkState.isPending || isBusy}
-            disabledReason={disabledReason}
-            onCheckedChange={(enabled) => void updateManagedTunnel(enabled)}
-          />
-        }
-      />
-      <SettingsRow
-        title="Publish agent activity"
-        description="Send activity from this environment to your mobile clients for push notifications and Live Activities. Works without a T3 Connect tunnel."
-        control={
-          <CloudLinkSwitch
-            ariaLabel="Publish agent activity to mobile clients"
-            checked={publishAgentActivity}
-            disabled={!canManageRelay || !isSignedIn || primaryCloudLinkState.isPending || isBusy}
-            disabledReason={disabledReason}
-            onCheckedChange={(enabled) => void updatePublishAgentActivity(enabled)}
-          />
-        }
-      />
-    </>
-  );
-}
-
-function CloudLinkRow({ canManageRelay }: { readonly canManageRelay: boolean }) {
-  return hasCloudPublicConfig() ? <ConfiguredCloudLinkRow canManageRelay={canManageRelay} /> : null;
-}
-
 function EmptyRemoteEnvironments({ cloudEnabled = true }: { readonly cloudEnabled?: boolean }) {
   return (
     <Empty className="min-h-52">
@@ -1696,32 +1549,18 @@ function EmptyRemoteEnvironments({ cloudEnabled = true }: { readonly cloudEnable
       </EmptyMedia>
       <EmptyHeader>
         <EmptyTitle>No saved remote environments</EmptyTitle>
-        <EmptyDescription>
-          {cloudEnabled
-            ? "Click “Add environment” to pair another environment, or connect one from T3 Connect."
-            : "Click “Add environment” to pair another environment."}
-        </EmptyDescription>
+        <EmptyDescription>Click “Add environment” to pair another environment.</EmptyDescription>
       </EmptyHeader>
     </Empty>
   );
 }
 
 function CloudRemoteEnvironmentRows({
-  primaryEnvironmentId,
   savedEnvironments,
 }: {
-  readonly primaryEnvironmentId: EnvironmentId | null;
   readonly savedEnvironments: ReadonlyArray<EnvironmentPresentation>;
 }) {
-  return hasCloudPublicConfig() ? (
-    <CloudEnvironmentConnectRows
-      primaryEnvironmentId={primaryEnvironmentId}
-      savedEnvironments={savedEnvironments}
-      empty={<EmptyRemoteEnvironments />}
-    />
-  ) : savedEnvironments.length === 0 ? (
-    <EmptyRemoteEnvironments cloudEnabled={false} />
-  ) : null;
+  return savedEnvironments.length === 0 ? <EmptyRemoteEnvironments /> : null;
 }
 
 export function ConnectionsSettings() {
@@ -1814,30 +1653,6 @@ export function ConnectionsSettings() {
   const [isUpdatingDesktopServerExposure, setIsUpdatingDesktopServerExposure] = useState(false);
   const [isDesktopServerExposureDialogOpen, setIsDesktopServerExposureDialogOpen] = useState(false);
   const [isUpdatingTailscaleServe, setIsUpdatingTailscaleServe] = useState(false);
-  const [isUpdatingWslBackend, setIsUpdatingWslBackend] = useState(false);
-  const [desktopWslMutationError, setDesktopWslMutationError] = useState<string | null>(null);
-  // Pending WSL setting change waiting on user confirmation. Set when
-  // the user tries a destructive change (disable, switch distro,
-  // toggle wsl-only) while the WSL backend has saved-env state on this
-  // machine. Confirming applies the change; cancelling drops it
-  // without touching the persisted setting. Null when nothing is
-  // pending.
-  type PendingWslChange =
-    // wasWslOnly is true when the user picked Off while wsl-only mode
-    // was active. In that case "disable" also clears wsl-only and
-    // relaunches onto the Windows backend, because leaving wsl-only on
-    // with wslBackendEnabled off is a meaningless state (wsl-only is
-    // only honoured when the WSL backend is enabled).
-    | { readonly kind: "disable"; readonly wasWslOnly: boolean }
-    | { readonly kind: "distro"; readonly nextDistro: string | null }
-    // Asked at enable time so the user picks the mode upfront instead
-    // of being dropped into "both backends" and having to discover the
-    // wsl-only switch separately. Resolved through enable-mode action
-    // buttons on the dialog rather than a single Confirm.
-    | { readonly kind: "enable"; readonly nextDistro: string | null }
-    | { readonly kind: "wsl-only"; readonly nextValue: boolean };
-  const [pendingWslChange, setPendingWslChange] = useState<PendingWslChange | null>(null);
-  const isWslConfirmDialogOpen = pendingWslChange !== null;
   const [pendingTailscaleServeEndpoint, setPendingTailscaleServeEndpoint] =
     useState<AdvertisedEndpoint | null>(null);
   const [disableTailscaleServeDialogOpen, setDisableTailscaleServeDialogOpen] = useState(false);
@@ -1849,9 +1664,6 @@ export function ConnectionsSettings() {
   >(null);
   const primaryServerConfig = primaryEnvironment?.serverConfig ?? null;
   const primaryVersionMismatch = resolveServerConfigVersionMismatch(primaryServerConfig);
-  const primaryServerUpdateState = useAtomValue(
-    serverEnvironment.updateStateAtom(primaryEnvironmentId),
-  );
   const [isAdvertisedEndpointListExpanded, setIsAdvertisedEndpointListExpanded] = useState(false);
   const defaultAdvertisedEndpointKey = useUiStateStore(
     (state) => state.defaultAdvertisedEndpointKey,
@@ -1860,7 +1672,6 @@ export function ConnectionsSettings() {
     (state) => state.setDefaultAdvertisedEndpointKey,
   );
   const canManageLocalBackend = currentSessionScopes?.includes(AuthAccessWriteScope) ?? false;
-  const canManageRelay = currentSessionScopes?.includes(AuthRelayWriteScope) ?? false;
   const authAccessChanges = useEnvironmentQuery(
     canManageLocalBackend && primaryEnvironmentId !== null
       ? authEnvironment.accessChanges({
@@ -1877,12 +1688,6 @@ export function ConnectionsSettings() {
       ? desktopSshHostsStateAtom
       : null,
   );
-  const desktopWsl = useEnvironmentQuery(
-    canManageLocalBackend && desktopBridge ? desktopWslStateAtom : null,
-  );
-  const desktopWslState = desktopWsl.data;
-  const desktopWslError = desktopWslMutationError ?? desktopWsl.error;
-  const isLoadingWslState = desktopWsl.isPending && desktopWsl.data === null;
   const discoveredSshHosts = desktopSshHosts.data ?? EMPTY_DISCOVERED_SSH_HOSTS;
   const unsavedDiscoveredSshHosts = useMemo(
     () =>
@@ -2574,313 +2379,6 @@ export function ConnectionsSettings() {
           );
         })
       : null;
-  // Apply a setting change immediately. The orchestrator reconciles the
-  // pool in the background and the primary backend is untouched, so we
-  // don't gate this behind a confirmation dialog. After the desktop
-  // side persists the change and nudges its orchestrator, we trigger
-  // the renderer's reconciler so the WSL backend's saved-env-shaped
-  // entry catches up (registers/unregisters) without a reload.
-  const applyWslSettingChange = useCallback(
-    async (apply: () => Promise<DesktopWslState>) => {
-      if (!desktopBridge) return;
-      setIsUpdatingWslBackend(true);
-      setDesktopWslMutationError(null);
-      try {
-        await apply();
-        refreshDesktopWslState();
-        // The connection platform source polls the desktop bootstrap list and
-        // reconciles the environment catalog automatically, so toggling the WSL
-        // backend on/off or switching distros is picked up here without an
-        // explicit renderer reconcile.
-      } catch (error) {
-        const message = error instanceof Error ? error.message : "Failed to update WSL backend.";
-        setDesktopWslMutationError(message);
-        toastManager.add(
-          stackedThreadToast({
-            type: "error",
-            title: "Could not change WSL backend",
-            description: message,
-          }),
-        );
-        refreshDesktopWslState();
-      } finally {
-        setIsUpdatingWslBackend(false);
-      }
-    },
-    [desktopBridge],
-  );
-
-  // Reload the keep-alive WSL state atom. Clearing the mutation error before
-  // refresh lets the atom-owned load error become the visible retry state.
-  const loadWslState = useCallback(() => {
-    setDesktopWslMutationError(null);
-    refreshDesktopWslState();
-  }, []);
-
-  // True when a desktop-local WSL backend is currently registered as an
-  // environment on this machine. We use this as a proxy for "the user has work
-  // that lives on the WSL side": if WSL has connected in a way that registered
-  // the env, disabling or switching distros could disrupt open threads/projects.
-  // If WSL never connected (fresh install, toggled on then immediately off,
-  // etc.) there's no local environment, so we skip the confirmation dialog.
-  const hasWslRegistrationToLose = useMemo(() => {
-    return environments.some((environment) =>
-      isDesktopLocalConnectionTarget(environment.entry.target),
-    );
-  }, [environments]);
-
-  // Single picker for "WSL backend off" vs "running on distro X". The
-  // dropdown maps "Off" to disable and any distro entry to enable +
-  // run on that distro. Splitting these into a separate switch and
-  // dropdown was confusing — they're the same decision.
-  const handleSelectWslMode = useCallback(
-    (value: string) => {
-      if (!desktopBridge || !desktopWslState) return;
-      const defaultDistroName =
-        desktopWslState.distros.find((distro) => distro.isDefault)?.name ?? null;
-      if (value === BACKEND_VALUE_WSL_OFF) {
-        // Match the recovery row's visibility (`enabled || wslOnly`): when WSL
-        // went unavailable while wsl-only was persisted, `enabled` can be false
-        // while `wslOnly` is true, and the "Switch to Windows" button must
-        // still clear that state instead of silently no-op'ing.
-        if (!desktopWslState.enabled && !desktopWslState.wslOnly) return;
-        const wasWslOnly = desktopWslState.wslOnly;
-        // Confirm when there's WSL state to lose, OR when wsl-only is
-        // on (turning the only running backend off needs to switch
-        // back to Windows and restart — always consequential).
-        if (hasWslRegistrationToLose || wasWslOnly) {
-          setPendingWslChange({ kind: "disable", wasWslOnly });
-          return;
-        }
-        void applyWslSettingChange(() => desktopBridge.setWslBackendEnabled(false));
-        return;
-      }
-      const nextDistro = value === BACKEND_VALUE_DEFAULT_WSL ? null : value;
-      const resolvedNext = nextDistro ?? defaultDistroName;
-      if (!desktopWslState.enabled) {
-        // Was off, user picked a distro: ask whether to run both
-        // backends or only WSL. We always ask here so the user picks
-        // the mode upfront instead of having to discover the wsl-only
-        // switch afterwards.
-        setPendingWslChange({ kind: "enable", nextDistro });
-        return;
-      }
-      // Already enabled — treat as a distro switch. Skip the change if
-      // the user re-picked the row that's already selected.
-      const resolvedCurrent = desktopWslState.distro ?? defaultDistroName;
-      if (resolvedCurrent === resolvedNext) return;
-      // Confirm when there's WSL registration to lose, OR in wsl-only mode:
-      // there the primary IS the WSL backend, so a distro change relaunches
-      // the app (the IPC handler does this) rather than swapping a secondary,
-      // and the user should see that coming.
-      if (hasWslRegistrationToLose || desktopWslState.wslOnly) {
-        setPendingWslChange({ kind: "distro", nextDistro });
-        return;
-      }
-      void applyWslSettingChange(() => desktopBridge.setWslDistro(nextDistro));
-    },
-    [applyWslSettingChange, desktopBridge, desktopWslState, hasWslRegistrationToLose],
-  );
-
-  // Dispatched from the enable modal's two action buttons.
-  const handleConfirmEnableWsl = useCallback(
-    (mode: "both" | "wsl-only") => {
-      if (!desktopBridge || !pendingWslChange || pendingWslChange.kind !== "enable") return;
-      const nextDistro = pendingWslChange.nextDistro;
-      setPendingWslChange(null);
-      const persistedDistro = desktopWslState?.distro ?? null;
-      void applyWslSettingChange(() =>
-        applyWslEnableSelection({
-          bridge: desktopBridge,
-          mode,
-          nextDistro,
-          persistedDistro,
-        }),
-      );
-    },
-    [applyWslSettingChange, desktopBridge, desktopWslState, pendingWslChange],
-  );
-
-  const handleToggleWslOnly = useCallback(
-    (enabled: boolean) => {
-      if (!desktopBridge || !desktopWslState || desktopWslState.wslOnly === enabled) return;
-      // wsl-only changes which backend the pool uses as "primary",
-      // which is decided once at app launch. The desktop side persists
-      // the setting immediately but doesn't tear down or restart
-      // anything itself; the renderer warns the user to expect a
-      // restart and (in a follow-up) can trigger it automatically.
-      // Always prompt — even enabling is consequential here.
-      setPendingWslChange({ kind: "wsl-only", nextValue: enabled });
-    },
-    [desktopBridge, desktopWslState],
-  );
-
-  const handleConfirmWslChange = useCallback(() => {
-    if (!desktopBridge || !pendingWslChange) return;
-    const change = pendingWslChange;
-    // The enable kind resolves through handleConfirmEnableWsl, not
-    // this single Confirm path.
-    if (change.kind === "enable") return;
-    setPendingWslChange(null);
-    if (change.kind === "disable") {
-      void applyWslSettingChange(async () => {
-        const next = await desktopBridge.setWslBackendEnabled(false);
-        if (change.wasWslOnly) {
-          // Clearing wsl-only relaunches onto the Windows backend.
-          return await desktopBridge.setWslOnly(false);
-        }
-        return next;
-      });
-      return;
-    }
-    if (change.kind === "distro") {
-      void applyWslSettingChange(() => desktopBridge.setWslDistro(change.nextDistro));
-      return;
-    }
-    void applyWslSettingChange(() => desktopBridge.setWslOnly(change.nextValue));
-  }, [applyWslSettingChange, desktopBridge, pendingWslChange]);
-
-  const renderWslRow = () => {
-    if (!desktopWslState) {
-      // A load failed: keep a recovery row (with retry) visible instead of
-      // silently hiding the section. The error persists across an in-flight
-      // retry so the row doesn't flicker away, and the button reflects the
-      // loading state. With no error we simply haven't loaded yet (or WSL
-      // management isn't available), so render nothing.
-      if (desktopWslError && canManageLocalBackend) {
-        return (
-          <SettingsRow
-            title="WSL backend"
-            description="Couldn't load the WSL backend state."
-            status={<span className="block text-destructive">{desktopWslError}</span>}
-            control={
-              <Button
-                size="xs"
-                variant="outline"
-                onClick={loadWslState}
-                disabled={isLoadingWslState}
-              >
-                {isLoadingWslState ? "Retrying…" : "Retry"}
-              </Button>
-            }
-          />
-        );
-      }
-      return null;
-    }
-    // WSL went unavailable while the user still has the WSL backend persisted
-    // (it may have been uninstalled or its distro removed). The desktop side
-    // falls back to the Windows backend, but the normal distro picker needs a
-    // live distro list it no longer has. Without a control here the user would
-    // be stranded on a WSL preference they can't clear, so render a recovery
-    // row that switches back to Windows. When WSL is unavailable AND unused,
-    // there's nothing to recover — keep the section hidden as before.
-    if (!desktopWslState.available) {
-      if (!desktopWslState.enabled && !desktopWslState.wslOnly) return null;
-      return (
-        <SettingsRow
-          title="WSL backend"
-          description="WSL is no longer available, so the Windows backend is running instead. Switch off the WSL backend to clear this preference."
-          status={
-            desktopWslError ? (
-              <span className="block text-destructive">{desktopWslError}</span>
-            ) : null
-          }
-          control={
-            <Button
-              variant="outline"
-              disabled={isUpdatingWslBackend}
-              onClick={() => handleSelectWslMode(BACKEND_VALUE_WSL_OFF)}
-            >
-              Switch to Windows
-            </Button>
-          }
-        />
-      );
-    }
-    // Distro is null when the user wants the WSL default. Map it to the
-    // real default's name so the Select highlights a real option; fall
-    // back to the sentinel only when no distros are listed yet (the
-    // dropdown then renders a single placeholder that matches).
-    const defaultDistroName =
-      desktopWslState.distros.find((distro) => distro.isDefault)?.name ?? null;
-    const selectValue = !desktopWslState.enabled
-      ? BACKEND_VALUE_WSL_OFF
-      : (desktopWslState.distro ?? defaultDistroName ?? BACKEND_VALUE_DEFAULT_WSL);
-    const selectLabel =
-      selectValue === BACKEND_VALUE_WSL_OFF
-        ? "Off"
-        : selectValue === BACKEND_VALUE_DEFAULT_WSL
-          ? "Default distro"
-          : selectValue;
-    return (
-      <>
-        <SettingsRow
-          title="WSL backend"
-          description="Run a second backend inside a WSL distro alongside the Windows one. Pick a distro to start it; pick Off to stop it. Projects opened against the WSL backend live on the Linux side; Windows projects stay where they are."
-          status={
-            desktopWslError ? (
-              <span className="block text-destructive">{desktopWslError}</span>
-            ) : desktopWslState.preflightError ? (
-              <span className="block text-destructive">
-                WSL backend couldn't start: {desktopWslState.preflightError}
-              </span>
-            ) : null
-          }
-          control={
-            <Select
-              value={selectValue}
-              onValueChange={(value) => {
-                if (typeof value !== "string") return;
-                handleSelectWslMode(value);
-              }}
-            >
-              <SelectTrigger
-                className="w-full sm:w-56"
-                aria-label="WSL backend"
-                disabled={isUpdatingWslBackend}
-              >
-                <SelectValue>{selectLabel}</SelectValue>
-              </SelectTrigger>
-              <SelectPopup align="end" alignItemWithTrigger={false}>
-                <SelectItem hideIndicator value={BACKEND_VALUE_WSL_OFF}>
-                  Off
-                </SelectItem>
-                {desktopWslState.distros.length === 0 ? (
-                  <SelectItem hideIndicator value={BACKEND_VALUE_DEFAULT_WSL}>
-                    Default distro
-                  </SelectItem>
-                ) : (
-                  desktopWslState.distros.map((distro) => (
-                    <SelectItem hideIndicator key={distro.name} value={distro.name}>
-                      {distro.name}
-                      {distro.isDefault ? " (default)" : ""}
-                    </SelectItem>
-                  ))
-                )}
-              </SelectPopup>
-            </Select>
-          }
-        />
-        {desktopWslState.enabled ? (
-          <SettingsRow
-            title="WSL only"
-            description="Stop the Windows backend and run only the WSL backend. Useful if you develop entirely inside WSL and don't want a second backend process. T3 Code restarts when you change this."
-            className="bg-muted/20 pl-7 sm:pl-8"
-            control={
-              <Switch
-                checked={desktopWslState.wslOnly}
-                disabled={isUpdatingWslBackend}
-                onCheckedChange={(checked) => handleToggleWslOnly(checked)}
-                aria-label="Run WSL only"
-              />
-            }
-          />
-        ) : null}
-      </>
-    );
-  };
-
   const renderTailscaleRow = () => (
     <SettingsRow
       title="Tailscale HTTPS"
@@ -2998,19 +2496,11 @@ export function ConnectionsSettings() {
       {canManageLocalBackend ? (
         <>
           <SettingsSection title="This environment">
-            {primaryVersionMismatch || primaryServerUpdateState.status !== "idle" ? (
+            {primaryVersionMismatch ? (
               <SettingsRow
-                title={
-                  primaryServerUpdateState.status === "failed"
-                    ? "Update failed"
-                    : primaryServerUpdateState.status === "running"
-                      ? "Updating server"
-                      : "Server update available"
-                }
+                title="Server version differs"
                 description={
-                  primaryServerUpdateState.status !== "idle" ? (
-                    <ServerUpdateProgress state={primaryServerUpdateState} />
-                  ) : primaryVersionMismatch ? (
+                  primaryVersionMismatch ? (
                     <Tooltip>
                       <TooltipTrigger
                         render={
@@ -3026,19 +2516,6 @@ export function ConnectionsSettings() {
                     </Tooltip>
                   ) : null
                 }
-                control={
-                  primaryVersionMismatch &&
-                  primaryEnvironmentId !== null &&
-                  primaryServerUpdateState.status !== "running" ? (
-                    <ServerUpdateAction
-                      environmentId={primaryEnvironmentId}
-                      serverLabel={primaryEnvironment?.label ?? "this server"}
-                      selfUpdate={resolveServerSelfUpdateCapability(primaryServerConfig)}
-                      targetVersion={primaryVersionMismatch.clientVersion}
-                      label={primaryServerUpdateState.status === "failed" ? "Retry" : "Update"}
-                    />
-                  ) : undefined
-                }
               />
             ) : null}
             {desktopBridge ? (
@@ -3046,14 +2523,9 @@ export function ConnectionsSettings() {
                 {renderNetworkAccessRow()}
                 {renderEndpointRows("endpoint-rail")}
                 {renderTailscaleRow()}
-                {renderWslRow()}
-                <CloudLinkRow canManageRelay={canManageRelay} />
               </>
             ) : (
-              <>
-                {renderDisabledNetworkAccessRow()}
-                <CloudLinkRow canManageRelay={canManageRelay} />
-              </>
+              <>{renderDisabledNetworkAccessRow()}</>
             )}
           </SettingsSection>
 
@@ -3096,8 +2568,8 @@ export function ConnectionsSettings() {
                 </AlertDialogTitle>
                 <AlertDialogDescription>
                   {pendingDesktopServerExposureMode === "network-accessible"
-                    ? "T3 Code will restart to expose this environment over the network."
-                    : "T3 Code will restart and limit this environment back to this machine."}
+                    ? "Atlas will restart to expose this environment over the network."
+                    : "Atlas will restart and limit this environment back to this machine."}
                 </AlertDialogDescription>
               </AlertDialogHeader>
               <AlertDialogFooter>
@@ -3131,114 +2603,6 @@ export function ConnectionsSettings() {
             </AlertDialogPopup>
           </AlertDialog>
           <AlertDialog
-            open={isWslConfirmDialogOpen}
-            onOpenChange={(open) => {
-              if (isUpdatingWslBackend) return;
-              if (!open) setPendingWslChange(null);
-            }}
-          >
-            <AlertDialogPopup>
-              <AlertDialogHeader>
-                <AlertDialogTitle>
-                  {pendingWslChange?.kind === "disable"
-                    ? pendingWslChange.wasWslOnly
-                      ? "Turn off WSL and switch back to Windows?"
-                      : "Disable WSL backend?"
-                    : pendingWslChange?.kind === "distro"
-                      ? "Switch WSL distro?"
-                      : pendingWslChange?.kind === "enable"
-                        ? "Start the WSL backend"
-                        : pendingWslChange?.nextValue
-                          ? "Run only the WSL backend?"
-                          : "Re-enable the Windows backend?"}
-                </AlertDialogTitle>
-                <AlertDialogDescription>
-                  {pendingWslChange?.kind === "disable"
-                    ? pendingWslChange.wasWslOnly
-                      ? "T3 Code will restart on the Windows backend. Threads and projects opened against WSL stay safe inside the distro and become available again when you re-enable WSL."
-                      : "The WSL backend will stop. Threads and projects opened against WSL stay safe inside the distro, but they'll be unavailable in T3 Code until you re-enable WSL."
-                    : pendingWslChange?.kind === "distro"
-                      ? "T3 Code will restart the WSL backend on the new distro. Sessions still running on the current distro will be interrupted."
-                      : pendingWslChange?.kind === "enable"
-                        ? "Run the WSL backend alongside the Windows one, or stop the Windows backend and use only WSL? You can change this later from Settings."
-                        : pendingWslChange?.nextValue
-                          ? "T3 Code will restart and start only the WSL backend. Your Windows-side projects won't be accessible until you turn this off again."
-                          : "T3 Code will restart and bring the Windows backend back up alongside WSL."}
-                </AlertDialogDescription>
-              </AlertDialogHeader>
-              <AlertDialogFooter>
-                <AlertDialogClose
-                  disabled={isUpdatingWslBackend}
-                  render={<Button variant="outline" disabled={isUpdatingWslBackend} />}
-                >
-                  Cancel
-                </AlertDialogClose>
-                {pendingWslChange?.kind === "enable" ? (
-                  <>
-                    <Button
-                      variant="outline"
-                      onClick={() => handleConfirmEnableWsl("wsl-only")}
-                      disabled={isUpdatingWslBackend}
-                    >
-                      {isUpdatingWslBackend ? (
-                        <>
-                          <Spinner className="size-3.5" />
-                          Applying…
-                        </>
-                      ) : (
-                        "Use only WSL"
-                      )}
-                    </Button>
-                    <Button
-                      variant="default"
-                      onClick={() => handleConfirmEnableWsl("both")}
-                      disabled={isUpdatingWslBackend}
-                    >
-                      {isUpdatingWslBackend ? (
-                        <>
-                          <Spinner className="size-3.5" />
-                          Applying…
-                        </>
-                      ) : (
-                        "Run both backends"
-                      )}
-                    </Button>
-                  </>
-                ) : (
-                  <Button
-                    variant={
-                      pendingWslChange?.kind === "disable" ||
-                      (pendingWslChange?.kind === "wsl-only" && pendingWslChange.nextValue)
-                        ? "destructive"
-                        : "default"
-                    }
-                    onClick={handleConfirmWslChange}
-                    disabled={isUpdatingWslBackend}
-                  >
-                    {isUpdatingWslBackend ? (
-                      <>
-                        <Spinner className="size-3.5" />
-                        Applying…
-                      </>
-                    ) : pendingWslChange?.kind === "disable" ? (
-                      pendingWslChange.wasWslOnly ? (
-                        "Switch to Windows"
-                      ) : (
-                        "Disable WSL"
-                      )
-                    ) : pendingWslChange?.kind === "distro" ? (
-                      "Switch distro"
-                    ) : pendingWslChange?.nextValue ? (
-                      "Restart and enable"
-                    ) : (
-                      "Restart and disable"
-                    )}
-                  </Button>
-                )}
-              </AlertDialogFooter>
-            </AlertDialogPopup>
-          </AlertDialog>
-          <AlertDialog
             open={disableTailscaleServeDialogOpen}
             onOpenChange={(open) => {
               if (isUpdatingTailscaleServe) return;
@@ -3249,7 +2613,7 @@ export function ConnectionsSettings() {
               <AlertDialogHeader>
                 <AlertDialogTitle>Disable Tailscale HTTPS?</AlertDialogTitle>
                 <AlertDialogDescription>
-                  T3 Code will restart the local backend without Tailscale Serve.
+                  Atlas will restart the local backend without Tailscale Serve.
                 </AlertDialogDescription>
               </AlertDialogHeader>
               <AlertDialogFooter>
@@ -3287,7 +2651,7 @@ export function ConnectionsSettings() {
               <DialogHeader>
                 <DialogTitle>Set up Tailscale HTTPS?</DialogTitle>
                 <DialogDescription>
-                  T3 Code will restart the local backend with Tailscale Serve enabled and ask
+                  Atlas will restart the local backend with Tailscale Serve enabled and ask
                   Tailscale to proxy HTTPS traffic to this backend.
                 </DialogDescription>
               </DialogHeader>
@@ -3349,7 +2713,6 @@ export function ConnectionsSettings() {
             title="Administrative access"
             description="Pairing links and client-session management require the access:write scope for this backend."
           />
-          <CloudLinkRow canManageRelay={canManageRelay} />
         </SettingsSection>
       )}
 
@@ -3426,10 +2789,7 @@ export function ConnectionsSettings() {
             onRemove={handleRemoveSavedBackend}
           />
         ))}
-        <CloudRemoteEnvironmentRows
-          primaryEnvironmentId={primaryEnvironmentId}
-          savedEnvironments={savedEnvironments}
-        />
+        <CloudRemoteEnvironmentRows savedEnvironments={savedEnvironments} />
       </SettingsSection>
     </SettingsPageContainer>
   );

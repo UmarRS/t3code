@@ -8,7 +8,10 @@
  */
 import type {
   CheckpointRef,
+  IssueId,
   OrchestrationCheckpointSummary,
+  OrchestrationIssue,
+  OrchestrationIssueDetail,
   OrchestrationProject,
   OrchestrationProjectShell,
   OrchestrationReadModel,
@@ -186,6 +189,36 @@ export interface ProjectionSnapshotQueryShape {
     threadId: ThreadId,
     window?: OrchestrationThreadDetailWindow,
   ) => Effect.Effect<Option.Option<OrchestrationThreadDetailSnapshot>, ProjectionRepositoryError>;
+
+  /**
+   * Read a single live issue summary — everything but the markdown body.
+   */
+  readonly getIssueSummaryById: (
+    issueId: IssueId,
+  ) => Effect.Effect<Option.Option<OrchestrationIssue>, ProjectionRepositoryError>;
+
+  /**
+   * Read a single live issue including its markdown body. This is the only
+   * read that hydrates a description; list payloads deliberately omit it.
+   */
+  readonly getIssueDetailById: (
+    issueId: IssueId,
+  ) => Effect.Effect<Option.Option<OrchestrationIssueDetail>, ProjectionRepositoryError>;
+
+  /**
+   * Read the live issue a thread is reviewing, if any. Turn-completion
+   * ingestion uses this to tell a reviewer thread from a worker thread.
+   */
+  readonly getIssueByReviewerThreadId: (
+    reviewerThreadId: ThreadId,
+  ) => Effect.Effect<Option.Option<OrchestrationIssue>, ProjectionRepositoryError>;
+
+  /**
+   * Read a project's live backlog as summaries, in creation order.
+   */
+  readonly listIssuesByProjectId: (
+    projectId: ProjectId,
+  ) => Effect.Effect<ReadonlyArray<OrchestrationIssue>, ProjectionRepositoryError>;
 }
 
 /**

@@ -9,6 +9,8 @@ import {
   CheckpointRef,
   classifyTaskAgentKind,
   EventId,
+  IssueId,
+  type IssueReviewVerdict,
   isToolLifecycleItemType,
   ThreadId,
   type ThreadTokenUsageSnapshot,
@@ -33,6 +35,8 @@ import { ProviderService } from "../../provider/Services/ProviderService.ts";
 import { ProjectionTurnRepository } from "../../persistence/Services/ProjectionTurns.ts";
 import { ProjectionTurnRepositoryLive } from "../../persistence/Layers/ProjectionTurns.ts";
 import { isGitRepository } from "../../git/Utils.ts";
+import { parseIssueDecomposition, resolveIssueDecomposition } from "../issueDecomposition.ts";
+import { parseIssueReview } from "../issueReview.ts";
 import { ModelFailoverService } from "../Services/ModelFailover.ts";
 import { OrchestrationEngineService } from "../Services/OrchestrationEngine.ts";
 import { ThreadBackgroundLivenessService } from "../ThreadBackgroundLiveness.ts";
@@ -1443,6 +1447,153 @@ const make = Effect.gen(function* () {
     return yield* getSourceProposedPlanReferenceForPendingTurnStart(threadId);
   });
 
+  /**
+   * Story decomposition. When a turn finishes, its final assistant message may
+   * carry a ```t3-issues block; if it does, the stories in it become issues on
+   * the thread's project.
+   *
+   * This runs at turn completion (rather than on each assistant delta) because
+   * only then is the message text final, and it re-reads the thread instead of
+   * reusing the detail loaded earlier in the same event — the completion
+   * handler writes the last of the assistant text just above this call.
+   *
+   * A malformed block never fails the turn: it lands as an error activity on
+   * the thread so the user can see what the agent got wrong.
+   */
+  const ingestIssueDecomposition = Effect.fn("ingestIssueDecomposition")(function* (
+    event: ProviderRuntimeEvent,
+    threadId: ThreadId,
+    turnId: TurnId,
+    createdAt: string,
+  ) {
+    const thread = yield* resolveThreadDetail(threadId);
+    if (!thread) return;
+    // The block belongs to the turn's *final* assistant message; earlier
+    // segments of a multi-part answer are not the agent's last word.
+    const finalAssistantText = thread.messages.findLast(
+      (message) => message.role === "assistant" && message.turnId === turnId,
+    )?.text;
+    if (!finalAssistantText) return;
+
+    const appendDecompositionActivity = (input: {
+      readonly kind: string;
+      readonly summary: string;
+      readonly tone: "info" | "error";
+      readonly payload: Record<string, unknown>;
+    }) =>
+      Effect.gen(function* () {
+        const commandId = yield* providerCommandId(event, "issue-decomposition-activity");
+        const activityId = yield* crypto.randomUUIDv4;
+        yield* orchestrationEngine.dispatch({
+          type: "thread.activity.append",
+          commandId,
+          threadId,
+          activity: {
+            id: EventId.make(`issue-decomposition:${activityId}`),
+            tone: input.tone,
+            kind: input.kind,
+            summary: input.summary,
+            payload: input.payload,
+            turnId,
+            createdAt,
+          },
+          createdAt,
+        });
+      });
+
+    const parsed = yield* parseIssueDecomposition(finalAssistantText);
+    if (parsed.kind === "absent") return;
+    if (parsed.kind === "invalid") {
+      yield* appendDecompositionActivity({
+        kind: "issues.decomposition.failed",
+        summary: "Could not read the stories the agent produced",
+        tone: "error",
+        payload: { detail: parsed.detail },
+      });
+      return;
+    }
+
+    const issueIds: IssueId[] = [];
+    for (let index = 0; index < parsed.entries.length; index += 1) {
+      const uuid = yield* crypto.randomUUIDv4;
+      issueIds.push(IssueId.make(uuid));
+    }
+    // Entries arrive in dependency order, so each create sees the issues it
+    // depends on already present.
+    const resolved = resolveIssueDecomposition(parsed.entries, issueIds);
+    for (const entry of resolved) {
+      yield* orchestrationEngine.dispatch({
+        type: "issue.create",
+        commandId: yield* providerCommandId(event, `issue-create:${entry.issueId}`),
+        issueId: entry.issueId,
+        projectId: thread.projectId,
+        title: entry.title,
+        description: entry.description,
+        priority: entry.priority,
+        modelSelection: entry.modelSelection,
+        dependsOn: entry.dependsOn,
+        createdAt,
+      });
+    }
+
+    yield* appendDecompositionActivity({
+      kind: "issues.decomposition.created",
+      summary:
+        resolved.length === 1
+          ? "Created 1 issue from this plan"
+          : `Created ${resolved.length} issues from this plan`,
+      tone: "info",
+      payload: { issueIds: resolved.map((entry) => entry.issueId) },
+    });
+    yield* orchestrationEngine.dispatch({
+      type: "thread.settle",
+      commandId: yield* providerCommandId(event, "issue-decomposition-settle"),
+      threadId,
+    });
+  });
+
+  /**
+   * Reviewer verdicts. A reviewer thread closes with a ```t3-review block; when
+   * its turn completes we turn that into `issue.review.record`, which both
+   * lands the notes on the issue and releases the merge queue for the next one.
+   *
+   * Same seam and same shape as story decomposition, with one difference: a
+   * missing or malformed block is not merely reported, it *becomes* a
+   * needs-attention verdict. A reviewer that cannot say whether it merged has
+   * not established that the work is safe, and silence must never stall the
+   * queue.
+   */
+  const ingestIssueReview = Effect.fn("ingestIssueReview")(function* (
+    event: ProviderRuntimeEvent,
+    threadId: ThreadId,
+    turnId: TurnId,
+  ) {
+    const issue = yield* projectionSnapshotQuery
+      .getIssueByReviewerThreadId(threadId)
+      .pipe(Effect.map(Option.getOrUndefined));
+    if (!issue || issue.reviewVerdict != null) return;
+
+    const thread = yield* resolveThreadDetail(threadId);
+    const finalAssistantText =
+      thread?.messages.findLast(
+        (message) => message.role === "assistant" && message.turnId === turnId,
+      )?.text ?? "";
+
+    const parsed = yield* parseIssueReview(finalAssistantText);
+    const verdict: IssueReviewVerdict =
+      parsed.kind === "parsed" ? parsed.verdict : "needs_attention";
+    const notes = parsed.kind === "parsed" ? parsed.notes : parsed.detail;
+
+    yield* orchestrationEngine.dispatch({
+      type: "issue.review.record",
+      commandId: yield* providerCommandId(event, "issue-review-record"),
+      issueId: issue.id,
+      reviewerThreadId: threadId,
+      verdict,
+      notes,
+    });
+  });
+
   const markSourceProposedPlanImplemented = Effect.fn("markSourceProposedPlanImplemented")(
     function* (
       sourceThreadId: ThreadId,
@@ -1879,6 +2030,28 @@ const make = Effect.gen(function* () {
             turnId,
             updatedAt: now,
           });
+
+          // Both run last: the assistant text is final only after the
+          // finalize dispatches above have landed. A thread is either a
+          // reviewer or an ordinary thread, so at most one of these does work.
+          yield* ingestIssueDecomposition(event, thread.id, turnId, now).pipe(
+            Effect.catchCause((cause) =>
+              Effect.logWarning("issue decomposition ingestion failed", {
+                threadId: thread.id,
+                turnId,
+                cause: Cause.pretty(cause),
+              }),
+            ),
+          );
+          yield* ingestIssueReview(event, thread.id, turnId).pipe(
+            Effect.catchCause((cause) =>
+              Effect.logWarning("issue review ingestion failed", {
+                threadId: thread.id,
+                turnId,
+                cause: Cause.pretty(cause),
+              }),
+            ),
+          );
         }
       }
 

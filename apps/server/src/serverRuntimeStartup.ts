@@ -36,7 +36,6 @@ import * as EnvironmentAuth from "./auth/EnvironmentAuth.ts";
 import * as ProviderSessionReaper from "./provider/Services/ProviderSessionReaper.ts";
 import * as WorktreeSweeper from "./vcs/WorktreeSweeper.ts";
 import { forkParked } from "./serverActivation.ts";
-import * as ServiceLauncherClient from "./cloud/serviceLauncherClient.ts";
 import {
   formatHeadlessServeOutput,
   formatHostForUrl,
@@ -308,7 +307,6 @@ export const make = (options?: StartupOptions) =>
     const serverSettings = yield* ServerSettings.ServerSettingsService;
     const serverEnvironment = yield* ServerEnvironment.ServerEnvironment;
     const crypto = yield* Crypto.Crypto;
-    const launcher = yield* ServiceLauncherClient.ServiceLauncherClient;
 
     const commandGate = yield* makeCommandGate;
     const httpListening = yield* Deferred.make<void>();
@@ -420,7 +418,7 @@ export const make = (options?: StartupOptions) =>
             const startupBrowserTarget = yield* resolveStartupBrowserTarget;
             if (serverConfig.mode !== "desktop") {
               yield* Effect.logInfo(
-                "Authentication required. Open T3 Code using the pairing URL.",
+                "Authentication required. Open Atlas using the pairing URL.",
               ).pipe(Effect.annotateLogs({ pairingUrl: startupBrowserTarget }));
             }
             yield* runStartupPhase("browser.open", maybeOpenBrowser(startupBrowserTarget));
@@ -437,7 +435,6 @@ export const make = (options?: StartupOptions) =>
 
       // This is the prepared boundary. Every dependency has been acquired and
       // every runtime root has confirmed that it is parked before this request.
-      const updateOutcome = yield* launcher.prepareTrial;
       yield* runStartupPhase(
         "welcome.publish",
         lifecycleEvents.publish({
@@ -458,7 +455,6 @@ export const make = (options?: StartupOptions) =>
           payload: {
             at: DateTime.formatIso(yield* DateTime.now),
             environment,
-            ...(updateOutcome === undefined ? {} : { updateOutcome }),
           },
         }),
       );

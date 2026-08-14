@@ -3,7 +3,7 @@ export * from "./background.ts";
 export * from "./auth.ts";
 export * from "./environment.ts";
 export * from "./environmentHttp.ts";
-export * from "./relayClient.ts";
+
 export * from "./desktopBootstrap.ts";
 export * from "./remoteAccess.ts";
 export * from "./ipc.ts";
@@ -18,7 +18,9 @@ export * from "./settings.ts";
 export * from "./git.ts";
 export * from "./vcs.ts";
 export * from "./sourceControl.ts";
+export * from "./issues.ts";
 export * from "./orchestration.ts";
+export * from "./threadScope.ts";
 export * from "./t3ProjectFile.ts";
 export * from "./editor.ts";
 export * from "./project.ts";

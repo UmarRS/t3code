@@ -34,7 +34,6 @@ import * as ElectronWindow from "./electron/ElectronWindow.ts";
 import * as DesktopApp from "./app/DesktopApp.ts";
 import * as DesktopAppIdentity from "./app/DesktopAppIdentity.ts";
 import * as DesktopConnectionCatalogStore from "./app/DesktopConnectionCatalogStore.ts";
-import * as DesktopClerk from "./app/DesktopClerk.ts";
 import * as DesktopApplicationMenu from "./window/DesktopApplicationMenu.ts";
 import * as DesktopAssets from "./app/DesktopAssets.ts";
 import * as DesktopBackendConfiguration from "./backend/DesktopBackendConfiguration.ts";
@@ -60,8 +59,6 @@ import * as DesktopUpdates from "./updates/DesktopUpdates.ts";
 import * as BrowserSession from "./preview/BrowserSession.ts";
 import * as PreviewManager from "./preview/Manager.ts";
 import * as DesktopWindow from "./window/DesktopWindow.ts";
-import * as DesktopWslBackend from "./wsl/DesktopWslBackend.ts";
-import * as DesktopWslEnvironment from "./wsl/DesktopWslEnvironment.ts";
 
 const desktopEnvironmentLayer = Layer.unwrap(
   Effect.gen(function* () {
@@ -156,24 +153,14 @@ const desktopWindowLayer = DesktopWindow.layer.pipe(
   Layer.provideMerge(desktopPreviewLayer),
 );
 
-// Pool layer instantiates the backend factory once for the Windows
-// primary instance and exposes it via pool.primary. Consumers go through
-// the pool now; the legacy DesktopBackendManager service is gone. The
-// WSL second instance gets registered later in the migration. See
-// DesktopBackendPool.ts header for the full rollout plan.
+// Pool layer instantiates the backend factory once for the primary
+// instance and exposes it via pool.primary. Consumers go through the pool;
+// the legacy DesktopBackendManager service is gone.
 const desktopBackendLayer = DesktopBackendPool.layer.pipe(
   Layer.provideMerge(DesktopAppIdentity.layer),
   Layer.provideMerge(DesktopBackendConfiguration.layer),
-  Layer.provideMerge(DesktopWslEnvironment.layer),
   Layer.provideMerge(DesktopTelemetryPublisher.layer),
   Layer.provideMerge(desktopWindowLayer),
-);
-
-// WSL orchestrator hangs off the backend layer because it needs the
-// pool + configuration + serverExposure; it pulls NetService and the
-// foundation services through the same provideMerge chain.
-const desktopWslBackendLayer = DesktopWslBackend.layer.pipe(
-  Layer.provideMerge(desktopBackendLayer),
 );
 
 const desktopLocalEnvironmentAuthLayer = DesktopLocalEnvironmentAuth.layer.pipe(
@@ -188,14 +175,8 @@ const desktopApplicationLayer = Layer.mergeAll(
   desktopSshLayer,
 ).pipe(
   Layer.provideMerge(DesktopUpdates.layer),
-  Layer.provideMerge(desktopWslBackendLayer),
+  Layer.provideMerge(desktopBackendLayer),
   Layer.provideMerge(desktopLocalEnvironmentAuthLayer),
-);
-
-const desktopClerkLayer = DesktopClerk.layer.pipe(
-  Layer.provideMerge(desktopEnvironmentLayer),
-  Layer.provideMerge(NodeServices.layer),
-  Layer.provideMerge(ElectronApp.layer),
 );
 
 const desktopApplicationRuntimeLayer = desktopApplicationLayer.pipe(
@@ -205,12 +186,9 @@ const desktopApplicationRuntimeLayer = desktopApplicationLayer.pipe(
   Layer.provideMerge(electronLayer),
 );
 
-// Acquire strict pre-ready setup before Clerk, whose userData resolution can
-// yield and let Electron emit ready.
-const desktopRuntimeLayer = desktopClerkLayer.pipe(
-  Layer.flatMap((clerkContext) =>
-    desktopApplicationRuntimeLayer.pipe(Layer.provideMerge(Layer.succeedContext(clerkContext))),
-  ),
+// Strict pre-ready setup is acquired as a dependency so it lands before
+// Electron emits `ready`.
+const desktopRuntimeLayer = desktopApplicationRuntimeLayer.pipe(
   Layer.provideMerge(DesktopPreReadyPlatform.layer),
 );
 
