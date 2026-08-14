@@ -1,12 +1,18 @@
 import { describe, expect, it } from "vite-plus/test";
+import * as Schema from "effect/Schema";
 
 import {
   buildBranchNamePrompt,
   buildCommitMessagePrompt,
   buildPrContentPrompt,
+  buildReviewComplexityPrompt,
   buildThreadTitlePrompt,
 } from "./TextGenerationPrompts.ts";
-import { normalizeCliError, sanitizeThreadTitle } from "./TextGenerationUtils.ts";
+import {
+  normalizeCliError,
+  sanitizeThreadTitle,
+  toJsonSchemaObject,
+} from "./TextGenerationUtils.ts";
 import { TextGenerationError } from "@t3tools/contracts";
 
 describe("buildCommitMessagePrompt", () => {
@@ -233,6 +239,55 @@ describe("buildThreadTitlePrompt", () => {
       `Thread contents:\n[Earlier content truncated]\n\n${retainedContext}`,
     );
     expect(result.prompt.match(/\[Earlier content truncated\]/g)).toHaveLength(1);
+  });
+});
+
+describe("buildReviewComplexityPrompt", () => {
+  it("includes the issue text and the diff shape", () => {
+    const result = buildReviewComplexityPrompt({
+      issueTitle: "Fix the settings copy",
+      issueDescription: "One string changes in the connections panel.",
+      diffSummary: " settings.ts | 2 +-\n 1 file changed, 1 insertion(+), 1 deletion(-)",
+    });
+
+    expect(result.prompt).toContain("Issue title:");
+    expect(result.prompt).toContain("Fix the settings copy");
+    expect(result.prompt).toContain("Issue description:");
+    expect(result.prompt).toContain("One string changes in the connections panel.");
+    expect(result.prompt).toContain("Diff stat:");
+    expect(result.prompt).toContain("1 file changed");
+    expect(result.prompt).toContain('When unsure, choose "complex".');
+  });
+
+  it("truncates an oversized description rather than shipping the whole body", () => {
+    const result = buildReviewComplexityPrompt({
+      issueTitle: "Big issue",
+      issueDescription: "x".repeat(9_000),
+      diffSummary: "1 file changed",
+    });
+
+    expect(result.prompt).toContain("[truncated]");
+  });
+
+  // The classifier's only defence against a cheap model improvising is the
+  // structured-output schema: it must reach the CLI as a three-value enum, and
+  // it must reject anything else on the way back.
+  it("constrains the answer to the three tiers, in and out", () => {
+    const { outputSchema } = buildReviewComplexityPrompt({
+      issueTitle: "Fix the settings copy",
+      issueDescription: "One string changes.",
+      diffSummary: "1 file changed",
+    });
+
+    expect(JSON.stringify(toJsonSchemaObject(outputSchema))).toContain("trivial");
+
+    const decode = Schema.decodeUnknownSync(outputSchema);
+    expect(decode({ tier: "trivial" })).toEqual({ tier: "trivial" });
+    expect(decode({ tier: "standard" })).toEqual({ tier: "standard" });
+    expect(decode({ tier: "complex" })).toEqual({ tier: "complex" });
+    expect(() => decode({ tier: "Trivial" })).toThrow();
+    expect(() => decode({ tier: "moderate" })).toThrow();
+    expect(() => decode({})).toThrow();
   });
 });
 

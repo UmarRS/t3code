@@ -1,7 +1,9 @@
 import { ProviderInstanceId, TextGenerationError } from "@t3tools/contracts";
 import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
+import { TestClock } from "effect/testing";
 
 import * as GitWorkflowService from "../../git/GitWorkflowService.ts";
 import { makeProviderRegistryLayer } from "../../provider/testUtils/providerRegistryMock.ts";
@@ -115,6 +117,18 @@ describe("ReviewComplexityClassifier", () => {
       expect(yield* classifier.classify(INPUT)).toBe("complex");
       expect(harness.classifications).toEqual([]);
     }).pipe(Effect.provide(harness.layer));
+  });
+
+  // The merge queue is serial, so a classifier that never answers would hold
+  // every waiting review behind it; the timeout is what stops that.
+  it.effect("defaults to complex when the classifier never answers", () => {
+    const harness = makeHarness({ classify: () => Effect.never });
+    return Effect.gen(function* () {
+      const classifier = yield* ReviewComplexityClassifier;
+      const running = yield* Effect.forkChild(classifier.classify(INPUT));
+      yield* TestClock.adjust("2 minutes");
+      expect(yield* Fiber.join(running)).toBe("complex");
+    }).pipe(Effect.scoped, Effect.provide(harness.layer), Effect.provide(TestClock.layer()));
   });
 
   it.effect("still classifies from the issue text when the diff cannot be read", () => {
