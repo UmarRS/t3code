@@ -3,6 +3,7 @@ import { ProjectId, ThreadId } from "@t3tools/contracts";
 import * as Clock from "effect/Clock";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
+import * as TestClock from "effect/testing/TestClock";
 
 import {
   isPathInsideDirectory,
@@ -16,6 +17,12 @@ import {
 } from "./WorktreeSweeper.ts";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
+/**
+ * The test clock starts at the epoch, which would make every "settled 15 days
+ * ago" timestamp land in 1969. Sweeps run against ordinary dates, so pin the
+ * clock somewhere ordinary too.
+ */
+const NOW_MS = Date.UTC(2026, 4, 12, 9, 0, 0);
 const MIN_AGE_MS = 14 * DAY_MS;
 const WORKTREES_DIR = "/home/dev/.t3/worktrees";
 const WORKSPACE_ROOT = "/home/dev/code/t3code";
@@ -117,6 +124,7 @@ describe("parseWorktreeList", () => {
 describe("selectWorktreeSweepCandidates", () => {
   it.effect("selects a worktree settled past the threshold", () =>
     Effect.gen(function* () {
+      yield* TestClock.setTime(NOW_MS);
       const nowMs = yield* Clock.currentTimeMillis;
       const selection = select({
         nowMs,
@@ -133,6 +141,7 @@ describe("selectWorktreeSweepCandidates", () => {
 
   it.effect("treats an archived thread as parked even when it never settled", () =>
     Effect.gen(function* () {
+      yield* TestClock.setTime(NOW_MS);
       const nowMs = yield* Clock.currentTimeMillis;
       const selection = select({
         nowMs,
@@ -145,6 +154,7 @@ describe("selectWorktreeSweepCandidates", () => {
 
   it.effect("uses the most recent parking event, so a fresh archive holds the worktree", () =>
     Effect.gen(function* () {
+      yield* TestClock.setTime(NOW_MS);
       const nowMs = yield* Clock.currentTimeMillis;
       const selection = select({
         nowMs,
@@ -164,8 +174,23 @@ describe("selectWorktreeSweepCandidates", () => {
     }),
   );
 
+  it.effect("treats the threshold itself as old enough", () =>
+    Effect.gen(function* () {
+      yield* TestClock.setTime(NOW_MS);
+      const nowMs = yield* Clock.currentTimeMillis;
+      const selection = select({
+        nowMs,
+        threads: [thread("boundary", settledDaysAgo(nowMs, 14))],
+      });
+
+      assert.equal(selection.candidates.length, 1);
+      assert.deepStrictEqual(selection.skips, []);
+    }),
+  );
+
   it.effect("keeps worktrees settled inside the threshold", () =>
     Effect.gen(function* () {
+      yield* TestClock.setTime(NOW_MS);
       const nowMs = yield* Clock.currentTimeMillis;
       const selection = select({
         nowMs,
@@ -182,6 +207,7 @@ describe("selectWorktreeSweepCandidates", () => {
 
   it.effect("keeps active, un-settled, pinned, and busy threads", () =>
     Effect.gen(function* () {
+      yield* TestClock.setTime(NOW_MS);
       const nowMs = yield* Clock.currentTimeMillis;
       const selection = select({
         nowMs,
@@ -214,6 +240,7 @@ describe("selectWorktreeSweepCandidates", () => {
 
   it.effect("keeps a shared worktree while any thread on it is active", () =>
     Effect.gen(function* () {
+      yield* TestClock.setTime(NOW_MS);
       const nowMs = yield* Clock.currentTimeMillis;
       const sharedPath = `${WORKTREES_DIR}/t3code/shared`;
       const selection = select({
@@ -234,6 +261,7 @@ describe("selectWorktreeSweepCandidates", () => {
 
   it.effect("never selects the project workspace root", () =>
     Effect.gen(function* () {
+      yield* TestClock.setTime(NOW_MS);
       const nowMs = yield* Clock.currentTimeMillis;
       const selection = select({
         nowMs,
@@ -252,6 +280,7 @@ describe("selectWorktreeSweepCandidates", () => {
 
   it.effect("never selects a path outside the worktrees directory", () =>
     Effect.gen(function* () {
+      yield* TestClock.setTime(NOW_MS);
       const nowMs = yield* Clock.currentTimeMillis;
       const selection = select({
         nowMs,
@@ -277,6 +306,7 @@ describe("selectWorktreeSweepCandidates", () => {
 
   it.effect("skips worktrees whose project is missing from the snapshot", () =>
     Effect.gen(function* () {
+      yield* TestClock.setTime(NOW_MS);
       const nowMs = yield* Clock.currentTimeMillis;
       const selection = select({
         nowMs,
@@ -412,6 +442,7 @@ const makeFakeSweep = (input: {
 describe("sweepWorktrees", () => {
   it.effect("removes a merged worktree and clears the thread's recorded path", () =>
     Effect.gen(function* () {
+      yield* TestClock.setTime(NOW_MS);
       const nowMs = yield* Clock.currentTimeMillis;
       const worktreePath = `${WORKTREES_DIR}/t3code/merged`;
       const fake = makeFakeSweep({
@@ -432,6 +463,7 @@ describe("sweepWorktrees", () => {
 
   it.effect("removes a clean, fully pushed worktree that was never merged", () =>
     Effect.gen(function* () {
+      yield* TestClock.setTime(NOW_MS);
       const nowMs = yield* Clock.currentTimeMillis;
       const worktreePath = `${WORKTREES_DIR}/t3code/pushed`;
       const fake = makeFakeSweep({
@@ -450,6 +482,7 @@ describe("sweepWorktrees", () => {
 
   it.effect("skips an unmerged worktree with uncommitted changes", () =>
     Effect.gen(function* () {
+      yield* TestClock.setTime(NOW_MS);
       const nowMs = yield* Clock.currentTimeMillis;
       const worktreePath = `${WORKTREES_DIR}/t3code/dirty`;
       const fake = makeFakeSweep({
@@ -471,6 +504,7 @@ describe("sweepWorktrees", () => {
 
   it.effect("skips a clean worktree that still has unpushed commits", () =>
     Effect.gen(function* () {
+      yield* TestClock.setTime(NOW_MS);
       const nowMs = yield* Clock.currentTimeMillis;
       const worktreePath = `${WORKTREES_DIR}/t3code/ahead`;
       const fake = makeFakeSweep({
@@ -491,6 +525,7 @@ describe("sweepWorktrees", () => {
 
   it.effect("skips when there is no upstream and no base branch to compare against", () =>
     Effect.gen(function* () {
+      yield* TestClock.setTime(NOW_MS);
       const nowMs = yield* Clock.currentTimeMillis;
       const worktreePath = `${WORKTREES_DIR}/t3code/no-base`;
       const fake = makeFakeSweep({
@@ -508,6 +543,7 @@ describe("sweepWorktrees", () => {
 
   it.effect("skips locked, unregistered, and missing worktrees", () =>
     Effect.gen(function* () {
+      yield* TestClock.setTime(NOW_MS);
       const nowMs = yield* Clock.currentTimeMillis;
       const locked = `${WORKTREES_DIR}/t3code/locked`;
       const unregistered = `${WORKTREES_DIR}/t3code/unregistered`;
@@ -541,6 +577,7 @@ describe("sweepWorktrees", () => {
 
   it.effect("refuses a recorded path that resolves outside the worktrees directory", () =>
     Effect.gen(function* () {
+      yield* TestClock.setTime(NOW_MS);
       const nowMs = yield* Clock.currentTimeMillis;
       const worktreePath = `${WORKTREES_DIR}/t3code/symlinked`;
       const fake = makeFakeSweep({
@@ -561,6 +598,7 @@ describe("sweepWorktrees", () => {
 
   it.effect("isolates a failing candidate from the rest of the sweep", () =>
     Effect.gen(function* () {
+      yield* TestClock.setTime(NOW_MS);
       const nowMs = yield* Clock.currentTimeMillis;
       const failing = `${WORKTREES_DIR}/t3code/failing`;
       const healthy = `${WORKTREES_DIR}/t3code/healthy`;
@@ -593,6 +631,7 @@ describe("sweepWorktrees", () => {
 
   it.effect("still counts a removal whose thread update fails", () =>
     Effect.gen(function* () {
+      yield* TestClock.setTime(NOW_MS);
       const nowMs = yield* Clock.currentTimeMillis;
       const worktreePath = `${WORKTREES_DIR}/t3code/stubborn`;
       const fake = makeFakeSweep({
@@ -614,6 +653,7 @@ describe("sweepWorktrees", () => {
 
   it.effect("does nothing at all when the setting is off", () =>
     Effect.gen(function* () {
+      yield* TestClock.setTime(NOW_MS);
       const nowMs = yield* Clock.currentTimeMillis;
       const worktreePath = `${WORKTREES_DIR}/t3code/merged`;
       const fake = makeFakeSweep({
@@ -633,6 +673,7 @@ describe("sweepWorktrees", () => {
 
   it.effect("reports removals and skips per project", () =>
     Effect.gen(function* () {
+      yield* TestClock.setTime(NOW_MS);
       const nowMs = yield* Clock.currentTimeMillis;
       const otherProjectId = ProjectId.make("project-2");
       const otherRoot = "/home/dev/code/other";

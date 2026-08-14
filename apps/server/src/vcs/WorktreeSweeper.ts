@@ -177,10 +177,10 @@ const parseIsoMillis = (value: string | null | undefined): number | null =>
 function parkedAtMillis(thread: WorktreeSweepThread): number | null {
   const settledAt = thread.settledOverride === "settled" ? parseIsoMillis(thread.settledAt) : null;
   const archivedAt = parseIsoMillis(thread.archivedAt);
-  if (settledAt === null && archivedAt === null) {
-    return null;
-  }
-  return Math.max(settledAt ?? 0, archivedAt ?? 0);
+  // Not `Math.max(a ?? 0, b ?? 0)`: zero is a real epoch millisecond, not a
+  // neutral element, so a missing half must drop out rather than floor the max.
+  const parked = [settledAt, archivedAt].filter((value) => value !== null);
+  return parked.length === 0 ? null : Math.max(...parked);
 }
 
 type ThreadVerdict =
@@ -271,11 +271,13 @@ export function selectWorktreeSweepCandidates(input: {
       });
     };
 
-    const reasons = group.threads.flatMap((thread) => {
-      const verdict = judgeThread({ thread, nowMs: input.nowMs, minAgeMs: input.minAgeMs });
-      return verdict.eligible ? [] : [verdict.reason];
-    });
-    const lifecycleReason = SKIP_REASON_PRECEDENCE.find((reason) => reasons.includes(reason));
+    const reasons = new Set(
+      group.threads.flatMap((thread) => {
+        const verdict = judgeThread({ thread, nowMs: input.nowMs, minAgeMs: input.minAgeMs });
+        return verdict.eligible ? [] : [verdict.reason];
+      }),
+    );
+    const lifecycleReason = SKIP_REASON_PRECEDENCE.find((reason) => reasons.has(reason));
     if (lifecycleReason) {
       skip(lifecycleReason);
       continue;
