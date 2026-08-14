@@ -3561,4 +3561,253 @@ describe("ProviderRuntimeIngestion", () => {
     expect(thread.session?.status).toBe("error");
     expect(thread.session?.lastError).toBe("runtime still processed");
   });
+
+  describe("model failover", () => {
+    const seededAt = "2026-01-01T00:00:00.000Z";
+
+    async function seedClaudeThread(harness: Awaited<ReturnType<typeof createHarness>>) {
+      await harness.dispatch({
+        type: "thread.meta.update",
+        commandId: CommandId.make("cmd-failover-claude-meta"),
+        threadId: ThreadId.make("thread-1"),
+        modelSelection: {
+          instanceId: ProviderInstanceId.make("claudeAgent"),
+          model: "claude-opus-5",
+        },
+      });
+      await harness.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.make("cmd-failover-user-turn"),
+        threadId: ThreadId.make("thread-1"),
+        message: {
+          messageId: asMessageId("msg-failover-user"),
+          role: "user",
+          text: "Implement the issue",
+          attachments: [],
+        },
+        runtimeMode: "approval-required",
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        createdAt: seededAt,
+      });
+      await harness.dispatch({
+        type: "thread.session.set",
+        commandId: CommandId.make("cmd-failover-claude-session"),
+        threadId: ThreadId.make("thread-1"),
+        session: {
+          threadId: ThreadId.make("thread-1"),
+          status: "running",
+          providerName: "claudeAgent",
+          runtimeMode: "approval-required",
+          activeTurnId: asTurnId("turn-claude-1"),
+          updatedAt: seededAt,
+          lastError: null,
+        },
+        createdAt: seededAt,
+      });
+      harness.setProviderSession({
+        provider: ProviderDriverKind.make("claudeAgent"),
+        status: "running",
+        runtimeMode: "approval-required",
+        threadId: ThreadId.make("thread-1"),
+        createdAt: seededAt,
+        updatedAt: seededAt,
+      });
+    }
+
+    function emitClaudeTurnFailure(
+      harness: Awaited<ReturnType<typeof createHarness>>,
+      errorMessage: string,
+    ) {
+      harness.emit({
+        type: "turn.completed",
+        eventId: asEventId("evt-failover-turn-failed"),
+        provider: ProviderDriverKind.make("claudeAgent"),
+        createdAt: seededAt,
+        threadId: asThreadId("thread-1"),
+        turnId: asTurnId("turn-claude-1"),
+        payload: {
+          state: "failed",
+          errorMessage,
+        },
+      });
+    }
+
+    const failoverActivities = (thread: ProviderRuntimeTestThread) =>
+      thread.activities.filter(
+        (activity: ProviderRuntimeTestActivity) => activity.kind === "model.failover",
+      );
+
+    it("restarts an exhausted Claude turn on the mapped codex backup and records the switch", async () => {
+      const harness = await createHarness();
+      await seedClaudeThread(harness);
+
+      emitClaudeTurnFailure(
+        harness,
+        "Claude usage limit reached. Your limit will reset at 3am (UTC).",
+      );
+
+      const thread = await waitForThread(
+        harness.readModel,
+        (entry) =>
+          entry.modelSelection.model === "gpt-5.6-sol" && failoverActivities(entry).length > 0,
+      );
+      expect(thread.modelSelection).toEqual({
+        instanceId: ProviderInstanceId.make("codex"),
+        model: "gpt-5.6-sol",
+      });
+      const [activity] = failoverActivities(thread);
+      expect(activity?.summary).toContain("claude-opus-5");
+      expect(activity?.summary).toContain("gpt-5.6-sol");
+      const payload =
+        activity?.payload && typeof activity.payload === "object"
+          ? (activity.payload as Record<string, unknown>)
+          : undefined;
+      expect(payload?.reason).toBe("rate-limit");
+      expect(payload?.from).toEqual({
+        instanceId: ProviderInstanceId.make("claudeAgent"),
+        model: "claude-opus-5",
+      });
+      expect(payload?.to).toEqual({
+        instanceId: ProviderInstanceId.make("codex"),
+        model: "gpt-5.6-sol",
+      });
+    });
+
+    it("keeps ordinary Claude failures on the normal error path", async () => {
+      const harness = await createHarness();
+      await seedClaudeThread(harness);
+
+      emitClaudeTurnFailure(harness, "Tool execution failed: spawn ENOENT");
+
+      await waitForThread(
+        harness.readModel,
+        (entry) =>
+          entry.session?.status === "error" &&
+          entry.session?.lastError === "Tool execution failed: spawn ENOENT",
+      );
+      // Drain, then re-read: a failover would dispatch after the error state
+      // lands, so the post-drain snapshot is the authoritative "no failover".
+      await harness.drain();
+      const snapshot = await harness.readModel();
+      const thread = snapshot.threads.find((entry) => entry.id === asThreadId("thread-1"));
+      expect(thread).toBeDefined();
+      if (!thread) return;
+      expect(thread.modelSelection).toEqual({
+        instanceId: ProviderInstanceId.make("claudeAgent"),
+        model: "claude-opus-5",
+      });
+      expect(failoverActivities(thread)).toHaveLength(0);
+    });
+
+    it("does not fail over twice and surfaces both attempts when the backup fails", async () => {
+      const harness = await createHarness();
+      await seedClaudeThread(harness);
+
+      emitClaudeTurnFailure(harness, "Claude usage limit reached. Resets at 3am.");
+      await waitForThread(
+        harness.readModel,
+        (entry) => entry.modelSelection.model === "gpt-5.6-sol",
+      );
+
+      // The backup turn runs on codex now; it hits its own rate limit.
+      await harness.dispatch({
+        type: "thread.session.set",
+        commandId: CommandId.make("cmd-failover-codex-session"),
+        threadId: ThreadId.make("thread-1"),
+        session: {
+          threadId: ThreadId.make("thread-1"),
+          status: "running",
+          providerName: "codex",
+          runtimeMode: "approval-required",
+          activeTurnId: asTurnId("turn-codex-1"),
+          updatedAt: seededAt,
+          lastError: null,
+        },
+        createdAt: seededAt,
+      });
+      harness.setProviderSession({
+        provider: ProviderDriverKind.make("codex"),
+        status: "running",
+        runtimeMode: "approval-required",
+        threadId: ThreadId.make("thread-1"),
+        createdAt: seededAt,
+        updatedAt: seededAt,
+      });
+      harness.emit({
+        type: "turn.completed",
+        eventId: asEventId("evt-failover-backup-turn-failed"),
+        provider: ProviderDriverKind.make("codex"),
+        createdAt: seededAt,
+        threadId: asThreadId("thread-1"),
+        turnId: asTurnId("turn-codex-1"),
+        payload: {
+          state: "failed",
+          errorMessage: "Rate limit exceeded for gpt-5.6-sol.",
+        },
+      });
+
+      await waitForThread(
+        harness.readModel,
+        (entry) =>
+          entry.session?.status === "error" &&
+          (entry.session?.lastError ?? "").includes("Automatic failover history"),
+      );
+      await harness.drain();
+      const snapshot = await harness.readModel();
+      const thread = snapshot.threads.find((entry) => entry.id === asThreadId("thread-1"));
+      expect(thread).toBeDefined();
+      if (!thread) return;
+      expect(thread.session?.lastError).toContain("Rate limit exceeded for gpt-5.6-sol.");
+      expect(thread.session?.lastError).toContain("claude-opus-5");
+      expect(thread.session?.lastError).toContain("gpt-5.6-sol");
+      // Still on the backup — no second failover, no ping-pong back to Claude.
+      expect(thread.modelSelection).toEqual({
+        instanceId: ProviderInstanceId.make("codex"),
+        model: "gpt-5.6-sol",
+      });
+      expect(failoverActivities(thread)).toHaveLength(1);
+    });
+
+    it("never fails over a user-chosen codex primary, even for rate-limit errors", async () => {
+      const harness = await createHarness();
+
+      harness.emit({
+        type: "turn.started",
+        eventId: asEventId("evt-failover-codex-primary-started"),
+        provider: ProviderDriverKind.make("codex"),
+        createdAt: seededAt,
+        threadId: asThreadId("thread-1"),
+        turnId: asTurnId("turn-codex-primary"),
+      });
+      harness.emit({
+        type: "turn.completed",
+        eventId: asEventId("evt-failover-codex-primary-failed"),
+        provider: ProviderDriverKind.make("codex"),
+        createdAt: seededAt,
+        threadId: asThreadId("thread-1"),
+        turnId: asTurnId("turn-codex-primary"),
+        payload: {
+          state: "failed",
+          errorMessage: "Rate limit exceeded. Too many requests.",
+        },
+      });
+
+      await waitForThread(
+        harness.readModel,
+        (entry) =>
+          entry.session?.status === "error" &&
+          entry.session?.lastError === "Rate limit exceeded. Too many requests.",
+      );
+      await harness.drain();
+      const snapshot = await harness.readModel();
+      const thread = snapshot.threads.find((entry) => entry.id === asThreadId("thread-1"));
+      expect(thread).toBeDefined();
+      if (!thread) return;
+      expect(thread.modelSelection).toEqual({
+        instanceId: ProviderInstanceId.make("codex"),
+        model: "gpt-5-codex",
+      });
+      expect(failoverActivities(thread)).toHaveLength(0);
+    });
+  });
 });
