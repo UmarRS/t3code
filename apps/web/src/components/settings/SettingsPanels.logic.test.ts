@@ -1,6 +1,7 @@
 import {
   DEFAULT_SERVER_SETTINGS,
   DEFAULT_UNIFIED_SETTINGS,
+  EnvironmentId,
   ProviderDriverKind,
   ProviderInstanceId,
   type ProviderInstanceConfig,
@@ -12,6 +13,7 @@ import {
   backgroundActivitySharedPolicySettings,
   buildProviderInstanceUpdatePatch,
   formatDiagnosticsDescription,
+  groupArchivedThreadsByProject,
   hasChangedBackgroundActivitySettings,
   isProjectGroupingEnabled,
   projectGroupingModeFromToggle,
@@ -226,5 +228,75 @@ describe("buildProviderInstanceUpdatePatch", () => {
 
     expect(patch.providerInstances?.[instanceId]).toEqual(nextInstance);
     expect(patch.providers).toBeUndefined();
+  });
+});
+
+describe("groupArchivedThreadsByProject", () => {
+  const envA = EnvironmentId.make("env-a");
+  const projectA = {
+    id: "project-a",
+    environmentId: envA,
+    name: "Project A",
+    cwd: "/repo/a",
+    faviconPath: null,
+  };
+  const projectB = {
+    id: "project-b",
+    environmentId: envA,
+    name: "Project B",
+    cwd: "/repo/b",
+    faviconPath: null,
+  };
+  const thread = (input: {
+    id: string;
+    projectId: string;
+    archivedAt?: string | null;
+    createdAt?: string;
+  }) => ({
+    id: input.id,
+    environmentId: envA,
+    projectId: input.projectId,
+    archivedAt: input.archivedAt ?? null,
+    createdAt: input.createdAt ?? "2026-03-01T00:00:00.000Z",
+  });
+
+  it("groups threads under their project, most recently archived first", () => {
+    const groups = groupArchivedThreadsByProject(
+      [
+        thread({ id: "1", projectId: "project-a", archivedAt: "2026-03-01T10:00:00.000Z" }),
+        thread({ id: "2", projectId: "project-a", archivedAt: "2026-03-05T10:00:00.000Z" }),
+      ],
+      [projectA],
+    );
+
+    expect(groups).toHaveLength(1);
+    expect(groups[0]?.project.name).toBe("Project A");
+    expect(groups[0]?.threads.map((t) => t.id)).toEqual(["2", "1"]);
+  });
+
+  it("produces one section per project, skipping projects with no archived threads", () => {
+    const groups = groupArchivedThreadsByProject(
+      [thread({ id: "1", projectId: "project-a" }), thread({ id: "2", projectId: "project-b" })],
+      [projectA, projectB],
+    );
+
+    expect(groups.map((group) => group.project.name)).toEqual(["Project A", "Project B"]);
+  });
+
+  it("pools threads whose project no longer exists into a trailing Unknown project group", () => {
+    const groups = groupArchivedThreadsByProject(
+      [
+        thread({ id: "1", projectId: "project-a" }),
+        thread({ id: "2", projectId: "deleted-project" }),
+      ],
+      [projectA],
+    );
+
+    expect(groups.map((group) => group.project.name)).toEqual(["Project A", "Unknown project"]);
+    expect(groups.at(-1)?.threads.map((t) => t.id)).toEqual(["2"]);
+  });
+
+  it("returns no groups when there are no archived threads", () => {
+    expect(groupArchivedThreadsByProject([], [projectA])).toEqual([]);
   });
 });

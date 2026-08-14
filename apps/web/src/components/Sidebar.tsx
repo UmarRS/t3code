@@ -126,6 +126,7 @@ import {
   buildBulkTitleRegenerationContextMenuItem,
   formatWorkingDurationLabel,
   firstValidTimestampMs,
+  groupSettledThreadsByProject,
   hasUnseenCompletion,
   isTrailingDoubleClick,
   orderItemsByPreferredIds,
@@ -1785,6 +1786,23 @@ export default function Sidebar() {
       ),
     [projectGroups],
   );
+  // Settled grouping resolves through the logical project, so every member of
+  // a merged cross-environment project shares one key (and one header).
+  const settledProjectIdentityByKey = useMemo(
+    () =>
+      new Map<string, { key: string; name: string }>(
+        projectGroups.flatMap((group) =>
+          group.memberProjects.map(
+            (project) =>
+              [
+                `${project.environmentId}:${project.id}`,
+                { key: group.projectKey, name: group.displayName },
+              ] as const,
+          ),
+        ),
+      ),
+    [projectGroups],
+  );
 
   // now is quantized to the minute so effectiveSettled memoization doesn't
   // churn on every render; auto-settle thresholds are day-granular anyway.
@@ -2080,6 +2098,26 @@ export default function Sidebar() {
     );
     return routeThread === undefined ? [] : [routeThread];
   }, [routeThreadKey, settledShelfExpanded, visibleSettledThreads]);
+  // Scoped to one project, every settled row is already that project — a
+  // header would just repeat the shelf's own context. Unscoped, cluster the
+  // (already recency-sorted) tail by project so history from several
+  // projects doesn't read as one undifferentiated pile. A lone group is left
+  // ungrouped: its header would only restate the shelf.
+  const settledProjectGroups = useMemo(() => {
+    if (scopedProjectGroup !== null) return null;
+    const groups = groupSettledThreadsByProject(
+      renderedSettledThreads,
+      (projectKey) => settledProjectIdentityByKey.get(projectKey) ?? null,
+    );
+    return groups.length > 1 ? groups : null;
+  }, [renderedSettledThreads, scopedProjectGroup, settledProjectIdentityByKey]);
+  // Grouping re-orders the rows on screen, and every keyboard affordance
+  // reads the rendered order: traversal, the numbered jump hints and
+  // shift-range select all key off the flattened list below.
+  const orderedSettledThreads = useMemo(
+    () => settledProjectGroups?.flatMap((group) => group.threads) ?? renderedSettledThreads,
+    [renderedSettledThreads, settledProjectGroups],
+  );
 
   // The snoozed shelf is collapsed by default: out of the way, never gone.
   // Collapsed threads don't render (and so don't participate in jump
@@ -2101,8 +2139,8 @@ export default function Sidebar() {
   }, [routeThreadKey, snoozedShelfExpanded, snoozedThreads]);
 
   const orderedThreads = useMemo(
-    () => [...pinnedThreads, ...activeThreads, ...visibleSnoozedThreads, ...renderedSettledThreads],
-    [pinnedThreads, activeThreads, visibleSnoozedThreads, renderedSettledThreads],
+    () => [...pinnedThreads, ...activeThreads, ...visibleSnoozedThreads, ...orderedSettledThreads],
+    [pinnedThreads, activeThreads, visibleSnoozedThreads, orderedSettledThreads],
   );
   const orderedThreadKeys = useMemo(
     () =>
@@ -3671,8 +3709,50 @@ export default function Sidebar() {
                       </li>,
                     );
                   }
-                  for (const thread of renderedSettledThreads) {
-                    items.push(renderThreadRow(thread, "settled"));
+                  if (settledProjectGroups !== null) {
+                    for (const group of settledProjectGroups) {
+                      // Any member thread identifies the group's project; the
+                      // "Unknown project" pool has none to look up, so it goes
+                      // headline-only rather than requesting a favicon for a
+                      // workspace root nobody knows.
+                      const headerThread = group.threads[0];
+                      const headerProjectKey =
+                        headerThread === undefined
+                          ? null
+                          : (`${headerThread.environmentId}:${headerThread.projectId}` as const);
+                      const headerProjectCwd =
+                        headerProjectKey === null
+                          ? undefined
+                          : projectCwdByKey.get(headerProjectKey);
+                      items.push(
+                        <li
+                          key={`settled-project-header-${group.projectKey}`}
+                          data-thread-selection-safe
+                          className="list-none"
+                        >
+                          <div className="mt-2 mb-0.5 flex items-center gap-1.5 px-2.5 text-[11px] font-medium text-muted-foreground/40">
+                            {headerThread !== undefined &&
+                            headerProjectKey !== null &&
+                            headerProjectCwd !== undefined ? (
+                              <ProjectFavicon
+                                environmentId={headerThread.environmentId}
+                                cwd={headerProjectCwd}
+                                faviconPath={projectFaviconPathByKey.get(headerProjectKey) ?? null}
+                                className="size-3"
+                              />
+                            ) : null}
+                            <span className="truncate">{group.projectName}</span>
+                          </div>
+                        </li>,
+                      );
+                      for (const thread of group.threads) {
+                        items.push(renderThreadRow(thread, "settled"));
+                      }
+                    }
+                  } else {
+                    for (const thread of orderedSettledThreads) {
+                      items.push(renderThreadRow(thread, "settled"));
+                    }
                   }
                   return items;
                 })()}

@@ -1,6 +1,7 @@
 import type {
   BackgroundActivityProfile,
   BackgroundActivitySettings,
+  EnvironmentId,
   ProviderDriverKind,
   ProviderInstanceConfig,
   ProviderInstanceId,
@@ -246,4 +247,72 @@ export function backgroundActivityOverrideSettings(
       overrides: nextOverrides as BackgroundActivitySettings["overrides"],
     },
   };
+}
+
+export type ArchivedThreadGroupProject = {
+  readonly id: string;
+  readonly environmentId: EnvironmentId;
+  readonly name: string;
+  readonly cwd: string;
+  readonly faviconPath: string | null | undefined;
+};
+
+export type ArchivedThreadGroup<T> = {
+  readonly project: ArchivedThreadGroupProject;
+  readonly threads: readonly T[];
+};
+
+type ArchivedGroupableThread = {
+  readonly id: string;
+  readonly environmentId: EnvironmentId;
+  readonly projectId: string;
+  readonly archivedAt: string | null;
+  readonly createdAt: string;
+};
+
+/** Buckets archived threads by their current project, one section per
+    project, most recently archived first within each. Threads whose project
+    was deleted since archiving would otherwise vanish from the list — they
+    surface instead in one trailing "Unknown project" section. */
+export function groupArchivedThreadsByProject<T extends ArchivedGroupableThread>(
+  threads: readonly T[],
+  projects: readonly ArchivedThreadGroupProject[],
+): ArchivedThreadGroup<T>[] {
+  const sortByArchivedRecency = (left: T, right: T) => {
+    const leftKey = left.archivedAt ?? left.createdAt;
+    const rightKey = right.archivedAt ?? right.createdAt;
+    return rightKey.localeCompare(leftKey) || right.id.localeCompare(left.id);
+  };
+
+  const groups: ArchivedThreadGroup<T>[] = [];
+  const matchedThreadKeys = new Set<string>();
+  for (const project of projects) {
+    const projectThreads = threads.filter(
+      (thread) => thread.projectId === project.id && thread.environmentId === project.environmentId,
+    );
+    if (projectThreads.length > 0) {
+      for (const thread of projectThreads) {
+        matchedThreadKeys.add(`${thread.environmentId}:${thread.id}`);
+      }
+      groups.push({ project, threads: projectThreads.toSorted(sortByArchivedRecency) });
+    }
+  }
+
+  const orphanedThreads = threads.filter(
+    (thread) => !matchedThreadKeys.has(`${thread.environmentId}:${thread.id}`),
+  );
+  if (orphanedThreads.length > 0) {
+    const firstOrphan = orphanedThreads[0]!;
+    groups.push({
+      project: {
+        id: "unknown",
+        environmentId: firstOrphan.environmentId,
+        name: "Unknown project",
+        cwd: "",
+        faviconPath: null,
+      },
+      threads: orphanedThreads.toSorted(sortByArchivedRecency),
+    });
+  }
+  return groups;
 }
