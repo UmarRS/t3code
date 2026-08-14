@@ -53,6 +53,7 @@ import { OrchestrationProjectionSnapshotQueryLive } from "../src/orchestration/L
 import * as ThreadBackgroundLiveness from "../src/orchestration/ThreadBackgroundLiveness.ts";
 import * as ThreadPlanProgress from "../src/orchestration/ThreadPlanProgress.ts";
 import { RuntimeReceiptBusTest } from "../src/orchestration/Layers/RuntimeReceiptBus.ts";
+import { ModelFailoverLive } from "../src/orchestration/Layers/ModelFailover.ts";
 import { OrchestrationReactorLive } from "../src/orchestration/Layers/OrchestrationReactor.ts";
 import { ProviderCommandReactorLive } from "../src/orchestration/Layers/ProviderCommandReactor.ts";
 import { ProviderRuntimeIngestionLive } from "../src/orchestration/Layers/ProviderRuntimeIngestion.ts";
@@ -316,7 +317,11 @@ export const makeOrchestrationIntegrationHarness = (
       Layer.provideMerge(ThreadPlanProgress.layer),
     );
     const serverSettingsLayer = ServerSettingsService.layerTest();
+    // One shared instance for ingestion and the command reactor: both must
+    // see the same per-thread failover state (layer memoization by reference).
+    const modelFailoverLayer = ModelFailoverLive.pipe(Layer.provide(runtimeServicesLayer));
     const runtimeIngestionLayer = ProviderRuntimeIngestionLive.pipe(
+      Layer.provideMerge(modelFailoverLayer),
       Layer.provideMerge(runtimeServicesLayer),
       Layer.provideMerge(serverSettingsLayer),
     );
@@ -332,6 +337,7 @@ export const makeOrchestrationIntegrationHarness = (
       generateThreadTitle: () => Effect.succeed({ title: "New thread" }),
     } as unknown as TextGenerationShape);
     const providerCommandReactorLayer = ProviderCommandReactorLive.pipe(
+      Layer.provideMerge(modelFailoverLayer),
       Layer.provideMerge(runtimeServicesLayer),
       Layer.provideMerge(gitWorkflowLayer),
       Layer.provideMerge(textGenerationLayer),
