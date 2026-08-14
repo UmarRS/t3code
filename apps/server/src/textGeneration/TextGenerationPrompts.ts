@@ -7,7 +7,7 @@
  * @module textGenerationPrompts
  */
 import * as Schema from "effect/Schema";
-import type { ChatAttachment } from "@t3tools/contracts";
+import { IssueReviewComplexityTier, type ChatAttachment } from "@t3tools/contracts";
 
 import { limitSection } from "./TextGenerationUtils.ts";
 import type { TextGenerationPolicy } from "./TextGenerationPolicy.ts";
@@ -312,6 +312,44 @@ export function buildThreadTitlePrompt(input: ThreadTitlePromptInput) {
   }
   const outputSchema = Schema.Struct({
     title: Schema.String,
+  });
+
+  return { prompt, outputSchema };
+}
+
+// ---------------------------------------------------------------------------
+// Review complexity
+// ---------------------------------------------------------------------------
+
+export interface ReviewComplexityPromptInput {
+  issueTitle: string;
+  issueDescription: string;
+  /** `git diff --stat` shape of the branch under review: files, +/- counts. */
+  diffSummary: string;
+}
+
+export function buildReviewComplexityPrompt(input: ReviewComplexityPromptInput) {
+  const prompt = [
+    "You size code reviews. Classify how demanding a careful review of this change will be.",
+    'Return a JSON object with exactly one key: tier, one of "trivial", "standard", "complex".',
+    "Rules:",
+    '- "trivial": mechanical or cosmetic work a cheap model can safely verify — typo fixes, copy changes, config tweaks, small isolated edits.',
+    '- "standard": ordinary feature or fix work of moderate size with limited blast radius.',
+    '- "complex": anything large, cross-cutting, concurrency- or security-sensitive, or touching core infrastructure. When unsure, choose "complex".',
+    "- Judge from the issue text and the diff shape together; a small diff to a critical area is still complex.",
+    "",
+    "Issue title:",
+    limitSection(input.issueTitle, 500),
+    "",
+    "Issue description:",
+    limitSection(input.issueDescription, 8_000),
+    "",
+    "Diff stat:",
+    limitSection(input.diffSummary, 8_000),
+  ].join("\n");
+
+  const outputSchema = Schema.Struct({
+    tier: IssueReviewComplexityTier,
   });
 
   return { prompt, outputSchema };

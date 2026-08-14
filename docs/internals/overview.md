@@ -98,7 +98,9 @@ and dispatches `issue.create` for each story. See [Glossary](./glossary.md#issue
 starts every startable issue in parallel, opens each one's pull request through the same
 `git.runStackedAction` the PR button uses when its worker's turn ends, and funnels reviews through
 a serial merge queue so each reviewer rebases onto a base branch that already contains its landed
-siblings. Reviewers run on Opus in the worker's worktree and report a `t3-review` verdict; anything
+siblings. Reviewers run in the worker's worktree on a model sized to the work — a cheap classifier
+pass tiers each review as trivial, standard, or complex, and anything unclassifiable reviews on the
+strongest model — and report a `t3-review` verdict; anything
 that fails along the way flags the issue needs-attention and the run continues without it. Every
 decision is derived from projected state, so a restart resumes rather than double-starting, and a
 run with nothing left to advance disables itself. See

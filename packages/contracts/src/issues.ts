@@ -79,6 +79,20 @@ export const IssueReviewNotes = Schema.String.check(
 export type IssueReviewNotes = typeof IssueReviewNotes.Type;
 
 /**
+ * How demanding a review is expected to be, decided by a cheap classifier
+ * pass before the reviewer is dispatched. The tier picks the reviewer's model
+ * class: `trivial` reviews on the cheapest capable model, `standard` on a
+ * mid-tier one, `complex` on the strongest available. `complex` is also the
+ * fallback whenever classification cannot happen — the safe tier is the one
+ * that reviews hardest.
+ */
+export const IssueReviewComplexityTier = Schema.Literals(["trivial", "standard", "complex"]);
+export type IssueReviewComplexityTier = typeof IssueReviewComplexityTier.Type;
+
+/** The tier used when the classifier is unavailable or returns garbage. */
+export const FALLBACK_REVIEW_COMPLEXITY_TIER: IssueReviewComplexityTier = "complex";
+
+/**
  * An issue as it rides in list payloads and the command read model: everything
  * except the markdown body and the reviewer's notes. Those two are the only
  * unbounded fields on an issue, so they are fetched per issue

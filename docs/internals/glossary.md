@@ -138,9 +138,13 @@ landed before it. The queue holds on a reviewer until its verdict is recorded.
 
 #### Reviewer
 
-A thread the merge queue opens inside the worker's own worktree, on the
-strongest Opus the Claude adapter exposes (`reviewerModelSelection.ts` reads the
-adapter's catalog order rather than hard-coding a slug). Its brief is
+A thread the merge queue opens inside the worker's own worktree, on a model
+sized to the work: a cheap classifier pass (`ReviewComplexityClassifier`) tiers
+the review as trivial (Haiku-class), standard (Sonnet-class), or complex (the
+strongest Opus the Claude adapter exposes). A missing model class falls upward
+to the next stronger one, never downward, and any classification failure is the
+complex tier (`reviewerModelSelection.ts` reads the adapter's catalog order
+rather than hard-coding slugs). Its brief is
 fix-then-merge: read the diff, run the touched tests, fix what it finds, rebase,
 and merge the pull request. It closes with a fenced ` ```t3-review ` block
 carrying `{ verdict, notes }`, parsed by

@@ -1,7 +1,12 @@
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
-import type { ChatAttachment, ModelSelection, ProviderInstanceId } from "@t3tools/contracts";
+import type {
+  ChatAttachment,
+  IssueReviewComplexityTier,
+  ModelSelection,
+  ProviderInstanceId,
+} from "@t3tools/contracts";
 import { TextGenerationError } from "@t3tools/contracts";
 
 import * as ProviderInstanceRegistry from "../provider/Services/ProviderInstanceRegistry.ts";
@@ -73,6 +78,20 @@ export interface ThreadTitleGenerationResult {
   title: string;
 }
 
+export interface ReviewComplexityClassificationInput {
+  cwd: string;
+  issueTitle: string;
+  issueDescription: string;
+  /** `git diff --stat` shape of the branch under review. */
+  diffSummary: string;
+  /** What model and provider to use for classification. */
+  modelSelection: ModelSelection;
+}
+
+export interface ReviewComplexityClassificationResult {
+  tier: IssueReviewComplexityTier;
+}
+
 export interface TextGenerationService {
   generateCommitMessage(
     input: CommitMessageGenerationInput,
@@ -80,6 +99,9 @@ export interface TextGenerationService {
   generatePrContent(input: PrContentGenerationInput): Promise<PrContentGenerationResult>;
   generateBranchName(input: BranchNameGenerationInput): Promise<BranchNameGenerationResult>;
   generateThreadTitle(input: ThreadTitleGenerationInput): Promise<ThreadTitleGenerationResult>;
+  classifyReviewComplexity(
+    input: ReviewComplexityClassificationInput,
+  ): Promise<ReviewComplexityClassificationResult>;
 }
 
 /**
@@ -113,6 +135,11 @@ export class TextGeneration extends Context.Service<
     readonly generateThreadTitle: (
       input: ThreadTitleGenerationInput,
     ) => Effect.Effect<ThreadTitleGenerationResult, TextGenerationError>;
+
+    /** Classify how demanding a review of an issue's branch will be. */
+    readonly classifyReviewComplexity: (
+      input: ReviewComplexityClassificationInput,
+    ) => Effect.Effect<ReviewComplexityClassificationResult, TextGenerationError>;
   }
 >()("t3/textGeneration/TextGeneration") {}
 
@@ -123,7 +150,8 @@ type TextGenerationOp =
   | "generateCommitMessage"
   | "generatePrContent"
   | "generateBranchName"
-  | "generateThreadTitle";
+  | "generateThreadTitle"
+  | "classifyReviewComplexity";
 
 const resolveInstance = (
   registry: ProviderInstanceRegistry.ProviderInstanceRegistry["Service"],
@@ -162,6 +190,10 @@ export const makeTextGenerationFromRegistry = (
     generateThreadTitle: (input) =>
       resolveInstance(registry, "generateThreadTitle", input.modelSelection.instanceId).pipe(
         Effect.flatMap((textGeneration) => textGeneration.generateThreadTitle(input)),
+      ),
+    classifyReviewComplexity: (input) =>
+      resolveInstance(registry, "classifyReviewComplexity", input.modelSelection.instanceId).pipe(
+        Effect.flatMap((textGeneration) => textGeneration.classifyReviewComplexity(input)),
       ),
   });
 

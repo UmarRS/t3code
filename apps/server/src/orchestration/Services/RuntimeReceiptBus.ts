@@ -18,6 +18,8 @@ import {
   CheckpointRef,
   IsoDateTime,
   IssueId,
+  IssueReviewComplexityTier,
+  ModelSelection,
   NonNegativeInt,
   ProjectId,
   ThreadId,
@@ -84,6 +86,10 @@ export const AutonomousReviewStartedReceipt = Schema.Struct({
   type: Schema.Literal("autonomous.review.started"),
   issueId: IssueId,
   reviewerThreadId: ThreadId,
+  /** The classified complexity of the work under review. */
+  complexityTier: IssueReviewComplexityTier,
+  /** The reviewer model the tier resolved to, after any upward fallback. */
+  modelSelection: ModelSelection,
   createdAt: IsoDateTime,
 });
 export type AutonomousReviewStartedReceipt = typeof AutonomousReviewStartedReceipt.Type;
