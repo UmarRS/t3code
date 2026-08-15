@@ -1,3 +1,4 @@
+// @effect-diagnostics globalDate:off -- Schedules fire on local wall-clock instants, so the tests build them the same way.
 import { describe, expect, it } from "vite-plus/test";
 
 import {
