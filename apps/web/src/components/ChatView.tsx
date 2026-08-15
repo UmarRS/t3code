@@ -476,6 +476,14 @@ function shouldTypeToFocusComposer(event: KeyboardEvent): boolean {
   if (eventPathContainsSelector(event, TYPE_TO_FOCUS_INTERACTIVE_SELECTOR)) return false;
   if (document.querySelector(TYPE_TO_FOCUS_FLOATING_LAYER_SELECTOR)) return false;
 
+  // The right-panel surface launcher claims its shortcut letters while it is
+  // visible (data attribute set in RightPanelTabs); those keys open surfaces
+  // instead of typing into the composer.
+  const launcherKeys = document
+    .querySelector("[data-surface-launcher-keys]")
+    ?.getAttribute("data-surface-launcher-keys");
+  if (launcherKeys && launcherKeys.toLowerCase().includes(event.key.toLowerCase())) return false;
+
   return true;
 }
 
@@ -6434,7 +6442,11 @@ function ChatViewContent(props: ChatViewProps) {
         <RightPanelSheet open onClose={closePreviewPanel}>
           <RightPanelTabs
             mode="sheet"
-            layoutControls={panelToggleControls}
+            // Same effective inset as the closed-state titlebar controls
+            // (pr-3 in the tab bar plus this pixel equals the absolute
+            // right inset plus mr-px), so the cluster does not creep when
+            // the sheet opens.
+            layoutControls={<div className="mr-px flex items-center">{panelToggleControls}</div>}
             surfaces={rightPanelState.surfaces}
             activeSurfaceId={activeRightPanelSurface?.id ?? null}
             pendingSurfaceIds={pendingFileSurfaceIds}
