@@ -181,6 +181,18 @@ export interface ProjectionSnapshotQueryShape {
   ) => Effect.Effect<Option.Option<ThreadId>, ProjectionRepositoryError>;
 
   /**
+   * The live companion thread a parent already owns in `targetProjectId`, if
+   * any. Delegating twice to the same linked project continues that agent's
+   * conversation rather than starting a stranger with no memory of the first
+   * task. Newest first, so a hand-archived companion steps aside for its
+   * replacement.
+   */
+  readonly getCompanionThreadId: (input: {
+    readonly parentThreadId: ThreadId;
+    readonly targetProjectId: ProjectId;
+  }) => Effect.Effect<Option.Option<ThreadId>, ProjectionRepositoryError>;
+
+  /**
    * Read the checkpoint context needed to resolve a single thread diff.
    */
   readonly getThreadCheckpointContext: (

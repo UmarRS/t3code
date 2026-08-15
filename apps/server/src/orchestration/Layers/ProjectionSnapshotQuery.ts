@@ -208,6 +208,10 @@ const ProjectIdLookupInput = Schema.Struct({
 const ThreadIdLookupInput = Schema.Struct({
   threadId: ThreadId,
 });
+const CompanionThreadLookupInput = Schema.Struct({
+  parentThreadId: ThreadId,
+  targetProjectId: ProjectId,
+});
 // Windowed reads order turns by the stable keyset (anchor, turn key), where
 // anchor is requested_at and turn key is
 // COALESCE(turn_id, ''). Both are event-derived, so cursors survive the
@@ -1173,6 +1177,25 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           AND deleted_at IS NULL
           AND archived_at IS NULL
         ORDER BY created_at ASC, thread_id ASC
+        LIMIT 1
+      `,
+  });
+
+  // Newest first: an older companion may have been archived by hand, and the
+  // most recent live one is the conversation the parent has been working with.
+  const getCompanionThreadIdFor = SqlSchema.findOneOption({
+    Request: CompanionThreadLookupInput,
+    Result: ProjectionThreadIdLookupRowSchema,
+    execute: ({ parentThreadId, targetProjectId }) =>
+      sql`
+        SELECT
+          thread_id AS "threadId"
+        FROM projection_threads
+        WHERE parent_thread_id = ${parentThreadId}
+          AND project_id = ${targetProjectId}
+          AND deleted_at IS NULL
+          AND archived_at IS NULL
+        ORDER BY created_at DESC, thread_id DESC
         LIMIT 1
       `,
   });
@@ -2622,6 +2645,17 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
         Effect.map(Option.map((row) => row.threadId)),
       );
 
+  const getCompanionThreadId: ProjectionSnapshotQueryShape["getCompanionThreadId"] = (input) =>
+    getCompanionThreadIdFor(input).pipe(
+      Effect.mapError(
+        toPersistenceSqlOrDecodeError(
+          "ProjectionSnapshotQuery.getCompanionThreadId:query",
+          "ProjectionSnapshotQuery.getCompanionThreadId:decodeRow",
+        ),
+      ),
+      Effect.map(Option.map((row) => row.threadId)),
+    );
+
   const getThreadCheckpointContext: ProjectionSnapshotQueryShape["getThreadCheckpointContext"] = (
     threadId,
   ) =>
@@ -3152,6 +3186,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
     getProjectLinksById,
     listScheduledProjects,
     getFirstActiveThreadIdByProjectId,
+    getCompanionThreadId,
     getThreadCheckpointContext,
     getFullThreadDiffContext,
     getThreadShellById,
