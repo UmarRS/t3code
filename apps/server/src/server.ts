@@ -49,6 +49,7 @@ import * as ServerRuntimeStartup from "./serverRuntimeStartup.ts";
 import { AutonomousRunReactorLive } from "./orchestration/Layers/AutonomousRunReactor.ts";
 import { AutonomousScheduleReactorLive } from "./orchestration/Layers/AutonomousScheduleReactor.ts";
 import { IssueStartCoordinatorLive } from "./orchestration/Layers/IssueStartCoordinator.ts";
+import { LinkedProjectCoordinatorLive } from "./orchestration/Layers/LinkedProjectCoordinator.ts";
 import { OrchestrationReactorLive } from "./orchestration/Layers/OrchestrationReactor.ts";
 import { RuntimeReceiptBusLive } from "./orchestration/Layers/RuntimeReceiptBus.ts";
 import { ModelFailoverLive } from "./orchestration/Layers/ModelFailover.ts";
@@ -222,6 +223,9 @@ const ReactorLayerLive = Layer.empty.pipe(
   // Provided after the reactor that consumes it, and re-exported so the RPC
   // layer can start issues on a client's behalf too.
   Layer.provideMerge(IssueStartCoordinatorLive),
+  // Re-exported for the same reason: the MCP toolkit delegates on an agent's
+  // behalf, so the tool handlers need it from outside the reactor stack.
+  Layer.provideMerge(LinkedProjectCoordinatorLive),
   Layer.provideMerge(ProviderRuntimeIngestionLive),
   Layer.provideMerge(ProviderCommandReactorLive),
   Layer.provideMerge(CheckpointReactorLive),

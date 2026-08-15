@@ -19,6 +19,8 @@ import * as Queue from "effect/Queue";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 
+import { normalizeProjectPathForComparison } from "@t3tools/shared/path";
+
 import { OrchestrationEngineService } from "../Services/OrchestrationEngine.ts";
 import { ProjectionSnapshotQuery } from "../Services/ProjectionSnapshotQuery.ts";
 import {
@@ -94,6 +96,39 @@ const make = Effect.gen(function* () {
         });
       }
       return routable;
+    });
+
+  const listLinksForThread: LinkedProjectCoordinatorShape["listLinksForThread"] = (threadId) =>
+    Effect.gen(function* () {
+      const thread = yield* requireThread(threadId);
+      const [links, routable] = yield* Effect.all([
+        projectionSnapshotQuery.getProjectLinksById(thread.projectId),
+        listRoutableLinks(thread.projectId),
+      ]);
+      const byRoot = new Map(
+        routable.map((entry) => [normalizeProjectPathForComparison(entry.workspaceRoot), entry]),
+      );
+      return links.map((link) => {
+        const target = byRoot.get(normalizeProjectPathForComparison(link.path));
+        return {
+          path: link.path,
+          // A context-only folder has no project to take a title from, so its
+          // own path is the most useful thing to call it.
+          title: target?.title ?? link.path,
+          description: link.description,
+          routable: target !== undefined,
+        };
+      });
+    });
+
+  const resolveTarget: LinkedProjectCoordinatorShape["resolveTarget"] = (input) =>
+    Effect.gen(function* () {
+      const thread = yield* requireThread(input.parentThreadId);
+      const routable = yield* listRoutableLinks(thread.projectId);
+      const wanted = normalizeProjectPathForComparison(input.path);
+      return Option.fromNullishOr(
+        routable.find((entry) => normalizeProjectPathForComparison(entry.workspaceRoot) === wanted),
+      );
     });
 
   const requireThread = (threadId: ThreadId) =>
@@ -340,7 +375,13 @@ const make = Effect.gen(function* () {
       };
     });
 
-  return { listRoutableLinks, delegate, readDelegation } satisfies LinkedProjectCoordinatorShape;
+  return {
+    listRoutableLinks,
+    listLinksForThread,
+    resolveTarget,
+    delegate,
+    readDelegation,
+  } satisfies LinkedProjectCoordinatorShape;
 });
 
 export const LinkedProjectCoordinatorLive = Layer.effect(LinkedProjectCoordinator, make);

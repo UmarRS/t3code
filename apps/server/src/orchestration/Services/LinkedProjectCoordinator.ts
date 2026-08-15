@@ -17,11 +17,13 @@
  */
 import type {
   LinkedProjectDelegationStatus,
+  LinkedProjectSummary,
   OrchestrationDispatchCommandError,
   ProjectId,
   ThreadId,
 } from "@t3tools/contracts";
 import * as Context from "effect/Context";
+import type * as Option from "effect/Option";
 import type * as Effect from "effect/Effect";
 
 import type { ProjectionRepositoryError } from "../../persistence/Errors.ts";
@@ -55,6 +57,31 @@ export interface LinkedProjectCoordinatorShape {
   readonly listRoutableLinks: (
     projectId: ProjectId,
   ) => Effect.Effect<ReadonlyArray<RoutableLinkedProject>, ProjectionRepositoryError>;
+
+  /**
+   * Every link the thread's project sees, routable or not, shaped for the
+   * agent-facing tool. Keeps path matching and the routable predicate in one
+   * place instead of spreading them across callers.
+   */
+  readonly listLinksForThread: (
+    threadId: ThreadId,
+  ) => Effect.Effect<
+    ReadonlyArray<LinkedProjectSummary>,
+    OrchestrationDispatchCommandError | ProjectionRepositoryError
+  >;
+
+  /**
+   * Resolve a workspace-root path to a routable linked project of this
+   * thread's own project. `None` when nothing matches — the caller decides
+   * whether that is "unknown" or "context only".
+   */
+  readonly resolveTarget: (input: {
+    readonly parentThreadId: ThreadId;
+    readonly path: string;
+  }) => Effect.Effect<
+    Option.Option<RoutableLinkedProject>,
+    OrchestrationDispatchCommandError | ProjectionRepositoryError
+  >;
 
   /**
    * Run `task` as an agent in `targetProjectId` on behalf of `parentThreadId`,

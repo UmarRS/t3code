@@ -94,3 +94,61 @@ export const LinkedProjectAgentActivityPayload = Schema.Struct({
   result: Schema.optional(Schema.String),
 });
 export type LinkedProjectAgentActivityPayload = typeof LinkedProjectAgentActivityPayload.Type;
+
+/**
+ * Tool surface for handing work to an agent in a linked project.
+ *
+ * Targets are named by workspace root rather than project id: the id is an
+ * internal identifier an agent has no way to learn, while the path is what
+ * `list_linked_projects` hands back and what the agent already sees on disk.
+ */
+export const LinkedProjectSummary = Schema.Struct({
+  path: ProjectLinkPath,
+  title: TrimmedNonEmptyString,
+  description: ProjectLinkDescription,
+  /**
+   * False for a folder no project is rooted at. Those are readable context
+   * only — there is no project to open a thread in, so they cannot take work.
+   */
+  routable: Schema.Boolean,
+});
+export type LinkedProjectSummary = typeof LinkedProjectSummary.Type;
+
+export const LinkedProjectListResult = Schema.Struct({
+  projects: Schema.Array(LinkedProjectSummary),
+});
+export type LinkedProjectListResult = typeof LinkedProjectListResult.Type;
+
+export const LinkedProjectDelegateInput = Schema.Struct({
+  /** Workspace root of the linked project, exactly as `list_linked_projects` reports it. */
+  path: ProjectLinkPath,
+  /**
+   * The task, written for an agent that cannot see this conversation. It runs
+   * in its own repository with no view of the caller's context, so anything it
+   * needs has to be stated here.
+   */
+  task: TrimmedNonEmptyString,
+});
+export type LinkedProjectDelegateInput = typeof LinkedProjectDelegateInput.Type;
+
+export const LinkedProjectCheckInput = Schema.Struct({
+  companionThreadId: TrimmedNonEmptyString,
+});
+export type LinkedProjectCheckInput = typeof LinkedProjectCheckInput.Type;
+
+export const LinkedProjectDelegationResult = Schema.Struct({
+  companionThreadId: TrimmedNonEmptyString,
+  status: LinkedProjectDelegationStatus,
+  targetProjectTitle: TrimmedNonEmptyString,
+  targetWorkspaceRoot: TrimmedNonEmptyString,
+  result: Schema.optional(Schema.String),
+});
+export type LinkedProjectDelegationResult = typeof LinkedProjectDelegationResult.Type;
+
+export class LinkedProjectToolError extends Schema.TaggedErrorClass<LinkedProjectToolError>()(
+  "LinkedProjectToolError",
+  {
+    reason: Schema.Literals(["unavailable", "unknown-project", "not-routable", "failed"]),
+    message: Schema.String,
+  },
+) {}
