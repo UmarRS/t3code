@@ -36,6 +36,7 @@ import {
   useSidebarVisibility,
 } from "./ui/sidebar";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "./ui/tooltip";
+import { DesktopAttentionBridge } from "./DesktopAttentionBridge";
 import { GlobalAgentStatus } from "./GlobalAgentStatus";
 
 const MACOS_TRAFFIC_LIGHTS_LEFT_INSET = "90px";
@@ -215,6 +216,7 @@ export function AppSidebarLayout({ children }: { children: ReactNode }) {
       {children}
       <SidebarControl />
       <GlobalAgentStatus />
+      <DesktopAttentionBridge />
     </SidebarProvider>
   );
 }

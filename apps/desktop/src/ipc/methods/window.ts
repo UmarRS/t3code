@@ -1,6 +1,7 @@
 import {
   ContextMenuItemSchema,
   DesktopAppBrandingSchema,
+  DesktopAttentionStateSchema,
   DesktopEnvironmentBootstrapSchema,
   DesktopThemeSchema,
   PickedThemeFileSchema,
@@ -18,6 +19,7 @@ import * as Schema from "effect/Schema";
 
 import * as DesktopBackendPool from "../../backend/DesktopBackendPool.ts";
 import * as DesktopLocalEnvironmentAuth from "../../backend/DesktopLocalEnvironmentAuth.ts";
+import * as DesktopAttention from "../../window/DesktopAttention.ts";
 import * as DesktopEnvironment from "../../app/DesktopEnvironment.ts";
 import * as ElectronDialog from "../../electron/ElectronDialog.ts";
 import * as ElectronMenu from "../../electron/ElectronMenu.ts";
@@ -188,6 +190,16 @@ export const showContextMenu = DesktopIpc.makeIpcMethod({
       position: Option.fromNullishOr(input.position),
     });
     return Option.getOrNull(selectedItemId);
+  }),
+});
+
+export const publishAttention = DesktopIpc.makeIpcMethod({
+  channel: IpcChannels.ATTENTION_PUBLISH_CHANNEL,
+  payload: DesktopAttentionStateSchema,
+  result: Schema.Void,
+  handler: Effect.fn("desktop.ipc.window.publishAttention")(function* (state) {
+    const attention = yield* DesktopAttention.DesktopAttention;
+    yield* attention.publish(state);
   }),
 });
 

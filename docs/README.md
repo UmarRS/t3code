@@ -5,6 +5,7 @@
 - [Permission modes](./user/permission-modes.md)
 - [Keyboard shortcuts](./user/keybindings.md)
 - [Organizing threads](./user/thread-sidebar.md)
+- [Notifications and the dock badge](./user/notifications.md)
 - [Plan work with issues](./user/issues.md)
 - [Scope a thread to a folder](./user/thread-scope.md)
 - [Link a project to another codebase](./user/linked-projects.md)
