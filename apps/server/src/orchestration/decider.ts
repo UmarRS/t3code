@@ -504,6 +504,28 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         command,
         threadId: command.threadId,
       });
+      if (command.parentThreadId != null) {
+        const parent = yield* requireThread({
+          readModel,
+          command,
+          threadId: command.parentThreadId,
+        });
+        // One level deep, as documented on ThreadCompanionFields: a companion
+        // that could delegate onward would fan out without bound and produce a
+        // timeline no one can follow.
+        if (parent.parentThreadId != null) {
+          return yield* new OrchestrationCommandInvariantError({
+            commandType: command.type,
+            detail: `Thread '${command.parentThreadId}' is itself a companion and cannot own companions.`,
+          });
+        }
+        if (parent.projectId === command.projectId) {
+          return yield* new OrchestrationCommandInvariantError({
+            commandType: command.type,
+            detail: `Companion thread '${command.threadId}' must run in a different project than its parent.`,
+          });
+        }
+      }
       return {
         ...(yield* withEventBase({
           aggregateKind: "thread",
@@ -525,6 +547,8 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           linkedPaths: normalizeThreadScopeLinkedPaths(command.linkedPaths, {
             focusPath: command.focusPath,
           }),
+          parentThreadId: command.parentThreadId ?? null,
+          originLinkId: command.originLinkId ?? null,
           createdAt: command.createdAt,
           updatedAt: command.createdAt,
         },

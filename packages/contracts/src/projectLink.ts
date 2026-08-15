@@ -63,3 +63,34 @@ export const ProjectLink = Schema.Struct({
   createdAt: IsoDateTime,
 });
 export type ProjectLink = typeof ProjectLink.Type;
+
+/**
+ * Activity kind for the summary a companion agent folds back into the thread
+ * that delegated to it. Rides the existing `thread.activity.append` channel,
+ * like `model.failover`, so it streams to an open thread without widening the
+ * thread-detail event allowlist in `ws.ts`.
+ */
+export const LINKED_PROJECT_AGENT_ACTIVITY_KIND = "linked-project.agent";
+
+/**
+ * How a delegated run ended. `timed-out` is not a failure: the companion is
+ * still working and the delegating agent can poll it by thread id.
+ */
+export const LinkedProjectDelegationStatus = Schema.Literals(["completed", "failed", "timed-out"]);
+export type LinkedProjectDelegationStatus = typeof LinkedProjectDelegationStatus.Type;
+
+/**
+ * Payload of the {@link LINKED_PROJECT_AGENT_ACTIVITY_KIND} activity. Typed
+ * rather than left as free-form JSON because the thread timeline renders it
+ * and needs the companion's id to offer "open this agent's thread".
+ */
+export const LinkedProjectAgentActivityPayload = Schema.Struct({
+  companionThreadId: TrimmedNonEmptyString,
+  targetProjectTitle: TrimmedNonEmptyString,
+  targetWorkspaceRoot: TrimmedNonEmptyString,
+  status: LinkedProjectDelegationStatus,
+  task: TrimmedNonEmptyString,
+  /** Absent while running, and on a run that produced no closing message. */
+  result: Schema.optional(Schema.String),
+});
+export type LinkedProjectAgentActivityPayload = typeof LinkedProjectAgentActivityPayload.Type;

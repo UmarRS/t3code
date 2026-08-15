@@ -364,6 +364,8 @@ export function projectEvent(
             worktreePath: payload.worktreePath,
             focusPath: payload.focusPath,
             linkedPaths: payload.linkedPaths,
+            parentThreadId: payload.parentThreadId,
+            originLinkId: payload.originLinkId,
             latestTurn: null,
             createdAt: payload.createdAt,
             updatedAt: payload.updatedAt,

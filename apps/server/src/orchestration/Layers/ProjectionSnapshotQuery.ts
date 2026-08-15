@@ -656,6 +656,8 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           worktree_path AS "worktreePath",
           focus_path AS "focusPath",
           linked_paths_json AS "linkedPaths",
+          parent_thread_id AS "parentThreadId",
+          origin_link_id AS "originLinkId",
           latest_turn_id AS "latestTurnId",
           created_at AS "createdAt",
           updated_at AS "updatedAt",
@@ -694,6 +696,8 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           worktree_path AS "worktreePath",
           focus_path AS "focusPath",
           linked_paths_json AS "linkedPaths",
+          parent_thread_id AS "parentThreadId",
+          origin_link_id AS "originLinkId",
           latest_turn_id AS "latestTurnId",
           created_at AS "createdAt",
           updated_at AS "updatedAt",
@@ -734,6 +738,8 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           worktree_path AS "worktreePath",
           focus_path AS "focusPath",
           linked_paths_json AS "linkedPaths",
+          parent_thread_id AS "parentThreadId",
+          origin_link_id AS "originLinkId",
           latest_turn_id AS "latestTurnId",
           created_at AS "createdAt",
           updated_at AS "updatedAt",
@@ -1206,6 +1212,8 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           worktree_path AS "worktreePath",
           focus_path AS "focusPath",
           linked_paths_json AS "linkedPaths",
+          parent_thread_id AS "parentThreadId",
+          origin_link_id AS "originLinkId",
           latest_turn_id AS "latestTurnId",
           created_at AS "createdAt",
           updated_at AS "updatedAt",
@@ -1860,6 +1868,8 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
                 ...(row.linkedPaths && row.linkedPaths.length > 0
                   ? { linkedPaths: row.linkedPaths }
                   : {}),
+                ...(row.parentThreadId ? { parentThreadId: row.parentThreadId } : {}),
+                ...(row.originLinkId ? { originLinkId: row.originLinkId } : {}),
                 latestTurn: latestTurnByThread.get(row.threadId) ?? null,
                 createdAt: row.createdAt,
                 updatedAt: row.updatedAt,
@@ -2100,6 +2110,8 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
                   ...(row.linkedPaths && row.linkedPaths.length > 0
                     ? { linkedPaths: row.linkedPaths }
                     : {}),
+                  ...(row.parentThreadId ? { parentThreadId: row.parentThreadId } : {}),
+                  ...(row.originLinkId ? { originLinkId: row.originLinkId } : {}),
                   latestTurn: latestTurnByThread.get(row.threadId) ?? null,
                   createdAt: row.createdAt,
                   updatedAt: row.updatedAt,
@@ -2254,6 +2266,8 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
                         ...(row.linkedPaths && row.linkedPaths.length > 0
                           ? { linkedPaths: row.linkedPaths }
                           : {}),
+                        ...(row.parentThreadId ? { parentThreadId: row.parentThreadId } : {}),
+                        ...(row.originLinkId ? { originLinkId: row.originLinkId } : {}),
                         latestTurn: latestTurnByThread.get(row.threadId) ?? null,
                         createdAt: row.createdAt,
                         updatedAt: row.updatedAt,
@@ -2404,6 +2418,8 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
                   ...(row.linkedPaths && row.linkedPaths.length > 0
                     ? { linkedPaths: row.linkedPaths }
                     : {}),
+                  ...(row.parentThreadId ? { parentThreadId: row.parentThreadId } : {}),
+                  ...(row.originLinkId ? { originLinkId: row.originLinkId } : {}),
                   latestTurn: latestTurnByThread.get(row.threadId) ?? null,
                   createdAt: row.createdAt,
                   updatedAt: row.updatedAt,
@@ -2725,6 +2741,10 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
         ...(threadRow.value.linkedPaths && threadRow.value.linkedPaths.length > 0
           ? { linkedPaths: threadRow.value.linkedPaths }
           : {}),
+        ...(threadRow.value.parentThreadId
+          ? { parentThreadId: threadRow.value.parentThreadId }
+          : {}),
+        ...(threadRow.value.originLinkId ? { originLinkId: threadRow.value.originLinkId } : {}),
         latestTurn: Option.isSome(latestTurnRow) ? mapLatestTurn(latestTurnRow.value) : null,
         createdAt: threadRow.value.createdAt,
         updatedAt: threadRow.value.updatedAt,
@@ -2850,6 +2870,10 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
         ...(threadRow.value.linkedPaths && threadRow.value.linkedPaths.length > 0
           ? { linkedPaths: threadRow.value.linkedPaths }
           : {}),
+        ...(threadRow.value.parentThreadId
+          ? { parentThreadId: threadRow.value.parentThreadId }
+          : {}),
+        ...(threadRow.value.originLinkId ? { originLinkId: threadRow.value.originLinkId } : {}),
         latestTurn: Option.isSome(latestTurnRow) ? mapLatestTurn(latestTurnRow.value) : null,
         createdAt: threadRow.value.createdAt,
         updatedAt: threadRow.value.updatedAt,
