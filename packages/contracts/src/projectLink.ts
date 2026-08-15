@@ -9,9 +9,12 @@ import { IsoDateTime, TrimmedNonEmptyString } from "./baseSchemas.ts";
  * (`threadScope.ts`), which narrows a single thread *inside* one workspace:
  * these paths are absolute, cross-repository, and outlive any one thread.
  *
- * The target folder does not have to be a registered project. When it is, the
- * link is mirrored onto that project (see `@t3tools/shared/projectLinks`);
- * when it is not, the link is read-only context and nothing more.
+ * The target folder does not have to be a registered project, but whether it
+ * is decides what the link can carry. When it is, the link is mirrored onto
+ * that project (see `@t3tools/shared/projectLinks`) and work can be routed to
+ * it: an agent there runs on the caller's model with its own write access
+ * (see `LinkedProjectCoordinator`). When it is not, the link is read-only
+ * context and nothing more — there is no project to open a thread in.
  */
 
 const PROJECT_LINK_ID_MAX_LENGTH = 128;

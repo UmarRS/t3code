@@ -5,12 +5,13 @@ import {
   ProviderInstanceId,
   ThreadId,
   type OrchestrationThread,
-  type ProjectLinkView,
 } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Stream from "effect/Stream";
+
+import type { ProjectLinkView } from "@t3tools/shared/projectLinks";
 
 import { OrchestrationEngineService } from "../Services/OrchestrationEngine.ts";
 import { LinkedProjectCoordinator } from "../Services/LinkedProjectCoordinator.ts";
@@ -82,7 +83,7 @@ const projectShell = (id: ProjectId, workspaceRoot: string, title: string) => ({
 const makeLayer = (input: {
   readonly links: ReadonlyArray<ProjectLinkView>;
   readonly companion?: ThreadId | undefined;
-  readonly dispatched: Array<{ readonly type: string; readonly [key: string]: unknown }>;
+  readonly dispatched: Array<Record<string, unknown>>;
 }) =>
   LinkedProjectCoordinatorLive.pipe(
     Layer.provide(
@@ -149,7 +150,7 @@ const makeLayer = (input: {
 describe("LinkedProjectCoordinator", () => {
   it.effect("reports a registered link as routable and a plain folder as not", () =>
     Effect.gen(function* () {
-      const dispatched: Array<{ readonly type: string }> = [];
+      const dispatched: Array<Record<string, unknown>> = [];
       const coordinator = yield* Effect.provide(
         LinkedProjectCoordinator,
         makeLayer({
@@ -175,7 +176,7 @@ describe("LinkedProjectCoordinator", () => {
 
   it.effect("resolves a routable target by workspace root and refuses the rest", () =>
     Effect.gen(function* () {
-      const dispatched: Array<{ readonly type: string }> = [];
+      const dispatched: Array<Record<string, unknown>> = [];
       const coordinator = yield* Effect.provide(
         LinkedProjectCoordinator,
         makeLayer({
