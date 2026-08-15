@@ -47,10 +47,12 @@ import * as GitManager from "./git/GitManager.ts";
 import * as Keybindings from "./keybindings.ts";
 import * as ServerRuntimeStartup from "./serverRuntimeStartup.ts";
 import { AutonomousRunReactorLive } from "./orchestration/Layers/AutonomousRunReactor.ts";
+import { AutonomousScheduleReactorLive } from "./orchestration/Layers/AutonomousScheduleReactor.ts";
 import { IssueStartCoordinatorLive } from "./orchestration/Layers/IssueStartCoordinator.ts";
 import { OrchestrationReactorLive } from "./orchestration/Layers/OrchestrationReactor.ts";
 import { RuntimeReceiptBusLive } from "./orchestration/Layers/RuntimeReceiptBus.ts";
 import { ModelFailoverLive } from "./orchestration/Layers/ModelFailover.ts";
+import { ReviewComplexityClassifierLive } from "./orchestration/Layers/ReviewComplexityClassifier.ts";
 import { ProviderRuntimeIngestionLive } from "./orchestration/Layers/ProviderRuntimeIngestion.ts";
 import { ProviderCommandReactorLive } from "./orchestration/Layers/ProviderCommandReactor.ts";
 import { CheckpointReactorLive } from "./orchestration/Layers/CheckpointReactor.ts";
@@ -215,6 +217,7 @@ const PlatformServicesLive = Layer.unwrap(
 const ReactorLayerLive = Layer.empty.pipe(
   Layer.provideMerge(OrchestrationReactorLive),
   Layer.provideMerge(AutonomousRunReactorLive),
+  Layer.provideMerge(AutonomousScheduleReactorLive),
   // Provided after the reactor that consumes it, and re-exported so the RPC
   // layer can start issues on a client's behalf too.
   Layer.provideMerge(IssueStartCoordinatorLive),
@@ -229,6 +232,8 @@ const ReactorLayerLive = Layer.empty.pipe(
   // Not an event reactor, but the same kind of runtime root: a background
   // loop parked at activation that reclaims disk from long-settled worktrees.
   Layer.provideMerge(WorktreeSweeperLive),
+  // Sizes autonomous reviews before the run reactor dispatches a reviewer.
+  Layer.provideMerge(ReviewComplexityClassifierLive),
 );
 
 const ProviderSessionDirectoryLayerLive = ProviderSessionDirectoryLive.pipe(

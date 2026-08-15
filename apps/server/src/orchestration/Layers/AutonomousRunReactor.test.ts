@@ -4,6 +4,7 @@ import {
   ProjectId,
   ProviderInstanceId,
   ThreadId,
+  type IssueReviewComplexityTier,
   type ModelSelection,
   type OrchestrationCommand,
 } from "@t3tools/contracts";
@@ -40,6 +41,10 @@ import {
   type IssueStartOptions,
 } from "../Services/IssueStartCoordinator.ts";
 import { AutonomousRunReactor } from "../Services/AutonomousRunReactor.ts";
+import {
+  ReviewComplexityClassifier,
+  type ReviewComplexityInput,
+} from "../Services/ReviewComplexityClassifier.ts";
 import { AutonomousRunReactorLive } from "./AutonomousRunReactor.ts";
 
 const NOW = "2026-01-01T00:00:00.000Z";
@@ -54,7 +59,12 @@ interface StartedIssue {
   readonly options: IssueStartOptions | undefined;
 }
 
-const providerSnapshots = [
+const CLAUDE_MODELS = [
+  { slug: "claude-fable-5", name: "Claude Fable 5", isCustom: false },
+  { slug: "claude-opus-5", name: "Claude Opus 5", isCustom: false },
+];
+
+const makeProviderSnapshots = (models: ReadonlyArray<{ slug: string }> = CLAUDE_MODELS) => [
   {
     instanceId: ProviderInstanceId.make("claude"),
     driver: "claudeAgent",
@@ -64,10 +74,7 @@ const providerSnapshots = [
     status: "ready",
     auth: { status: "authenticated" },
     checkedAt: NOW,
-    models: [
-      { slug: "claude-fable-5", name: "Claude Fable 5", isCustom: false },
-      { slug: "claude-opus-5", name: "Claude Opus 5", isCustom: false },
-    ],
+    models,
     slashCommands: [],
     skills: [],
   },
@@ -80,11 +87,17 @@ const providerSnapshots = [
  * coordinator stub still dispatches the same `issue.start` the real one does,
  * so the projected state the reactor reads back is genuine.
  */
-function makeHarness(options?: { readonly pullRequestFails?: boolean }) {
+function makeHarness(options?: {
+  readonly pullRequestFails?: boolean;
+  /** The tier the stubbed classifier answers with. Defaults to the safe tier. */
+  readonly reviewTier?: IssueReviewComplexityTier;
+  readonly providers?: ReadonlyArray<unknown>;
+}) {
   const started: StartedIssue[] = [];
   const reviews: IssueReviewStartInput[] = [];
   const stackedActions: Array<{ readonly cwd: string; readonly action: string }> = [];
   const resolvedPullRequests: Array<{ readonly cwd: string; readonly reference: string }> = [];
+  const classified: ReviewComplexityInput[] = [];
   let pullRequestFails = options?.pullRequestFails ?? false;
   let pullRequestState: "open" | "merged" = "open";
 
@@ -155,12 +168,26 @@ function makeHarness(options?: { readonly pullRequestFails?: boolean }) {
       }),
   } as never);
 
+  // The classifier's own failure modes (timeouts, garbled output) resolve to
+  // "complex" inside its layer, which has its own tests; here it is a plain
+  // stub so scenarios can pick the tier under test.
+  const classifierLayer = Layer.succeed(ReviewComplexityClassifier, {
+    classify: (input: ReviewComplexityInput) =>
+      Effect.sync(() => {
+        classified.push(input);
+        return options?.reviewTier ?? "complex";
+      }),
+  });
+
   const layer = AutonomousRunReactorLive.pipe(
+    Layer.provide(classifierLayer),
     Layer.provideMerge(coordinatorLayer),
     Layer.provideMerge(orchestrationLayer),
     Layer.provideMerge(projectionSnapshotLayer),
     Layer.provideMerge(RuntimeReceiptBusTest),
-    Layer.provideMerge(makeProviderRegistryLayer(providerSnapshots as never)),
+    Layer.provideMerge(
+      makeProviderRegistryLayer((options?.providers ?? makeProviderSnapshots()) as never),
+    ),
     Layer.provideMerge(gitLayer),
     Layer.provideMerge(ServerConfig.layerTest(process.cwd(), process.cwd())),
     Layer.provideMerge(NodeServices.layer),
@@ -172,6 +199,7 @@ function makeHarness(options?: { readonly pullRequestFails?: boolean }) {
     reviews,
     stackedActions,
     resolvedPullRequests,
+    classified,
     allowPullRequests: () => {
       pullRequestFails = false;
     },
@@ -268,15 +296,19 @@ const bootRun = Effect.fn("bootRun")(function* () {
    * subscription exists before the work that publishes them — the alternative
    * would be a sleep, which is what receipts exist to avoid.
    */
-  const receiptsWhile = <A, E, R>(count: number, body: Effect.Effect<A, E, R>) =>
+  const collectReceiptsWhile = <A, E, R>(count: number, body: Effect.Effect<A, E, R>) =>
     Effect.gen(function* () {
       const collector = yield* Effect.forkChild(
         Stream.take(receipts.streamEventsForTest, count).pipe(Stream.runCollect),
       );
       yield* body;
-      const collected = yield* Fiber.join(collector);
-      return Array.from(collected).map((receipt) => receipt.type);
+      return Array.from(yield* Fiber.join(collector));
     });
+
+  const receiptsWhile = <A, E, R>(count: number, body: Effect.Effect<A, E, R>) =>
+    collectReceiptsWhile(count, body).pipe(
+      Effect.map((collected) => collected.map((receipt) => receipt.type)),
+    );
 
   const findIssue = (id: string) =>
     snapshotQuery
@@ -294,6 +326,7 @@ const bootRun = Effect.fn("bootRun")(function* () {
     createWorkerThread,
     endTurn,
     receiptsWhile,
+    collectReceiptsWhile,
     findIssue,
   };
 });
@@ -478,6 +511,94 @@ describe("AutonomousRunReactor", () => {
       // Claimed before the review runs, so ingestion can recognise the thread
       // and a restart cannot review it twice.
       expect(issue?.reviewerThreadId).toBe(harness.reviews[0]?.threadId);
+    }).pipe(Effect.scoped, Effect.provide(harness.layer));
+  });
+
+  it.effect("reviews trivial work on the cheapest capable model and stamps the receipt", () => {
+    const harness = makeHarness({
+      reviewTier: "trivial",
+      providers: makeProviderSnapshots([
+        ...CLAUDE_MODELS,
+        { slug: "claude-sonnet-5", name: "Claude Sonnet 5", isCustom: false },
+        { slug: "claude-haiku-4-5", name: "Claude Haiku 4.5", isCustom: false },
+      ]),
+    });
+    return Effect.gen(function* () {
+      const run = yield* bootRun();
+      yield* run.createProject();
+      yield* run.createIssue("issue-a");
+      yield* run.enableAutonomous();
+      yield* run.reactor.drain;
+
+      const threadId = harness.started[0]?.command.threadId;
+      if (!threadId) throw new Error("expected the issue to have started");
+      yield* run.createWorkerThread(threadId, "/tmp/acme-worktrees/issue-a", "issue/issue-a");
+      const seen = yield* run.collectReceiptsWhile(2, run.endTurn(threadId, "idle"));
+
+      // The classifier saw the issue text and the worker's worktree.
+      expect(harness.classified).toHaveLength(1);
+      expect(harness.classified[0]?.issueTitle).toBe("Issue issue-a");
+      expect(harness.classified[0]?.issueDescription).toBe("Body of issue-a");
+      expect(harness.classified[0]?.worktreePath).toBe("/tmp/acme-worktrees/issue-a");
+
+      // The trivial tier reviews on the Haiku, and the receipt records both
+      // the tier and the resolved model for the UI.
+      expect(harness.reviews[0]?.modelSelection.model).toBe("claude-haiku-4-5");
+      const reviewStarted = seen.find((receipt) => receipt.type === "autonomous.review.started");
+      expect(reviewStarted).toMatchObject({
+        complexityTier: "trivial",
+        modelSelection: {
+          instanceId: ProviderInstanceId.make("claude"),
+          model: "claude-haiku-4-5",
+        },
+      });
+    }).pipe(Effect.scoped, Effect.provide(harness.layer));
+  });
+
+  it.effect("falls back up the chain when the tier's model class is unavailable", () => {
+    // The catalog exposes no Haiku and no Sonnet, so trivial work climbs all
+    // the way to the strongest Opus rather than reviewing on nothing.
+    const harness = makeHarness({ reviewTier: "trivial" });
+    return Effect.gen(function* () {
+      const run = yield* bootRun();
+      yield* run.createProject();
+      yield* run.createIssue("issue-a");
+      yield* run.enableAutonomous();
+      yield* run.reactor.drain;
+
+      const threadId = harness.started[0]?.command.threadId;
+      if (!threadId) throw new Error("expected the issue to have started");
+      yield* run.createWorkerThread(threadId, "/tmp/acme-worktrees/issue-a", "issue/issue-a");
+      const seen = yield* run.collectReceiptsWhile(2, run.endTurn(threadId, "idle"));
+
+      expect(harness.reviews[0]?.modelSelection.model).toBe("claude-opus-5");
+      const reviewStarted = seen.find((receipt) => receipt.type === "autonomous.review.started");
+      expect(reviewStarted).toMatchObject({
+        complexityTier: "trivial",
+        modelSelection: { model: "claude-opus-5" },
+      });
+    }).pipe(Effect.scoped, Effect.provide(harness.layer));
+  });
+
+  it.effect("still parks the issue when no provider can review, whatever the tier", () => {
+    const harness = makeHarness({ reviewTier: "trivial", providers: [] });
+    return Effect.gen(function* () {
+      const run = yield* bootRun();
+      yield* run.createProject();
+      yield* run.createIssue("issue-a");
+      yield* run.enableAutonomous();
+      yield* run.reactor.drain;
+
+      const threadId = harness.started[0]?.command.threadId;
+      if (!threadId) throw new Error("expected the issue to have started");
+      yield* run.createWorkerThread(threadId, "/tmp/acme-worktrees/issue-a", "issue/issue-a");
+      const seen = yield* run.receiptsWhile(2, run.endTurn(threadId, "idle"));
+      expect(seen).toContain("autonomous.issue.flagged");
+
+      yield* run.reactor.drain;
+      expect(harness.reviews).toEqual([]);
+      const issue = yield* run.findIssue("issue-a");
+      expect(issue?.needsAttentionReason).toContain("No Claude provider is available");
     }).pipe(Effect.scoped, Effect.provide(harness.layer));
   });
 

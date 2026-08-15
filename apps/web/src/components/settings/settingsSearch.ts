@@ -202,6 +202,11 @@ export const SETTINGS_SEARCH_ITEMS = [
     to: "/settings/projects",
   },
   {
+    id: "project-scheduled-runs",
+    title: "Project scheduled runs",
+    to: "/settings/projects",
+  },
+  {
     id: "project-checkouts",
     title: "Project checkouts",
     to: "/settings/projects",

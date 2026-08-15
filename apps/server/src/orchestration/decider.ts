@@ -1913,6 +1913,44 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
       };
     }
 
+    case "project.autonomous.schedule.set": {
+      const project = yield* requireProject({
+        readModel,
+        command,
+        projectId: command.projectId,
+      });
+      if (project.deletedAt !== null) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: `Project '${command.projectId}' is deleted and cannot hold a schedule.`,
+        });
+      }
+      const duplicateId = command.schedule.find(
+        (entry, index) => command.schedule.findIndex((other) => other.id === entry.id) !== index,
+      );
+      if (duplicateId !== undefined) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: `Schedule entry id '${duplicateId.id}' appears more than once.`,
+        });
+      }
+      const occurredAt = yield* nowIso;
+      return {
+        ...(yield* withEventBase({
+          aggregateKind: "project",
+          aggregateId: command.projectId,
+          occurredAt,
+          commandId: command.commandId,
+        })),
+        type: "project.autonomous-schedule-set",
+        payload: {
+          projectId: command.projectId,
+          schedule: command.schedule,
+          updatedAt: occurredAt,
+        },
+      };
+    }
+
     default: {
       command satisfies never;
       const fallback = command as never as { type: string };

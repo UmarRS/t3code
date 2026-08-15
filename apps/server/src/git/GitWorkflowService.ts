@@ -62,6 +62,11 @@ export class GitWorkflowService extends Context.Service<
     readonly listRefs: (
       input: VcsListRefsInput,
     ) => Effect.Effect<VcsListRefsResult, GitCommandError>;
+    /** Commit/diff context for `baseRef..HEAD`, including the diff stat shape. */
+    readonly readRangeContext: (input: {
+      readonly cwd: string;
+      readonly baseRef: string;
+    }) => Effect.Effect<GitVcsDriver.GitRangeContext, GitCommandError>;
     readonly createWorktree: (
       input: VcsCreateWorktreeInput,
     ) => Effect.Effect<VcsCreateWorktreeResult, GitCommandError>;
@@ -302,6 +307,10 @@ export const make = Effect.gen(function* () {
     createWorktree: (input) =>
       ensureGitCommand("GitWorkflowService.createWorktree", input.cwd).pipe(
         Effect.andThen(git.createWorktree(input)),
+      ),
+    readRangeContext: (input) =>
+      ensureGitCommand("GitWorkflowService.readRangeContext", input.cwd).pipe(
+        Effect.andThen(git.readRangeContext(input.cwd, input.baseRef)),
       ),
     fetchRemote: (input) =>
       ensureGitCommand("GitWorkflowService.fetchRemote", input.cwd).pipe(

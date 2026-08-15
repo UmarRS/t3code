@@ -16,6 +16,7 @@ import {
   OrchestrationShellSnapshot,
   OrchestrationThread,
   OrchestrationThreadDetailSnapshot,
+  ProjectAutonomousScheduleEntry,
   ProjectScript,
   TurnId,
   type OrchestrationCheckpointSummary,
@@ -80,9 +81,16 @@ const decodeThread = Schema.decodeUnknownEffect(OrchestrationThread);
 const ProjectionProjectDbRowSchema = ProjectionProject.mapFields(
   Struct.assign({
     defaultModelSelection: Schema.NullOr(Schema.fromJsonString(ModelSelection)),
+    autonomousSchedule: Schema.fromJsonString(Schema.Array(ProjectAutonomousScheduleEntry)),
     scripts: Schema.fromJsonString(Schema.Array(ProjectScript)),
   }),
 );
+const ProjectionScheduledProjectDbRowSchema = Schema.Struct({
+  projectId: ProjectId,
+  autonomousStartedAt: Schema.NullOr(IsoDateTime),
+  autonomousSchedule: Schema.fromJsonString(Schema.Array(ProjectAutonomousScheduleEntry)),
+});
+
 // Summary rows are the issue minus its markdown body — everything the shell
 // payloads and the decider need. The detail row adds the body back for the
 // single-issue read.
@@ -384,6 +392,7 @@ function mapProjectShellRow(
     autonomousStartedAt: row.autonomousStartedAt ?? null,
     autonomousFinishedAt: row.autonomousFinishedAt ?? null,
     autonomousFinishedReason: row.autonomousFinishedReason ?? null,
+    autonomousSchedule: row.autonomousSchedule,
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
   };
@@ -463,6 +472,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           autonomous_started_at AS "autonomousStartedAt",
           autonomous_finished_at AS "autonomousFinishedAt",
           autonomous_finished_reason AS "autonomousFinishedReason",
+          autonomous_schedule_json AS "autonomousSchedule",
           scripts_json AS "scripts",
           created_at AS "createdAt",
           updated_at AS "updatedAt",
@@ -1080,6 +1090,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           autonomous_started_at AS "autonomousStartedAt",
           autonomous_finished_at AS "autonomousFinishedAt",
           autonomous_finished_reason AS "autonomousFinishedReason",
+          autonomous_schedule_json AS "autonomousSchedule",
           scripts_json AS "scripts",
           created_at AS "createdAt",
           updated_at AS "updatedAt",
@@ -1107,6 +1118,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           autonomous_started_at AS "autonomousStartedAt",
           autonomous_finished_at AS "autonomousFinishedAt",
           autonomous_finished_reason AS "autonomousFinishedReason",
+          autonomous_schedule_json AS "autonomousSchedule",
           scripts_json AS "scripts",
           created_at AS "createdAt",
           updated_at AS "updatedAt",
@@ -1115,6 +1127,24 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
         WHERE project_id = ${projectId}
           AND deleted_at IS NULL
         LIMIT 1
+      `,
+  });
+
+  // Projects with an empty schedule are filtered in SQL: on most environments
+  // that is every project, and the ticker then reads nothing at all.
+  const listScheduledProjectRows = SqlSchema.findAll({
+    Request: Schema.Void,
+    Result: ProjectionScheduledProjectDbRowSchema,
+    execute: () =>
+      sql`
+        SELECT
+          project_id AS "projectId",
+          autonomous_started_at AS "autonomousStartedAt",
+          autonomous_schedule_json AS "autonomousSchedule"
+        FROM projection_projects
+        WHERE deleted_at IS NULL
+          AND autonomous_schedule_json <> '[]'
+        ORDER BY created_at ASC, project_id ASC
       `,
   });
 
@@ -1803,6 +1833,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
                 autonomousStartedAt: row.autonomousStartedAt ?? null,
                 autonomousFinishedAt: row.autonomousFinishedAt ?? null,
                 autonomousFinishedReason: row.autonomousFinishedReason ?? null,
+                autonomousSchedule: row.autonomousSchedule,
                 createdAt: row.createdAt,
                 updatedAt: row.updatedAt,
                 deletedAt: row.deletedAt,
@@ -1958,6 +1989,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
                   autonomousStartedAt: row.autonomousStartedAt ?? null,
                   autonomousFinishedAt: row.autonomousFinishedAt ?? null,
                   autonomousFinishedReason: row.autonomousFinishedReason ?? null,
+                  autonomousSchedule: row.autonomousSchedule,
                   createdAt: row.createdAt,
                   updatedAt: row.updatedAt,
                   deletedAt: row.deletedAt,
@@ -2485,6 +2517,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
                     defaultThreadEnvMode: option.value.defaultThreadEnvMode,
                     faviconPath: option.value.faviconPath ?? null,
                     scripts: option.value.scripts,
+                    autonomousSchedule: option.value.autonomousSchedule,
                     createdAt: option.value.createdAt,
                     updatedAt: option.value.updatedAt,
                     deletedAt: option.value.deletedAt,
@@ -2512,6 +2545,16 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
                   Option.some(mapProjectShellRow(option.value, repositoryIdentity)),
                 ),
               ),
+      ),
+    );
+
+  const listScheduledProjects: ProjectionSnapshotQueryShape["listScheduledProjects"] = () =>
+    listScheduledProjectRows().pipe(
+      Effect.mapError(
+        toPersistenceSqlOrDecodeError(
+          "ProjectionSnapshotQuery.listScheduledProjects:query",
+          "ProjectionSnapshotQuery.listScheduledProjects:decodeRow",
+        ),
       ),
     );
 
@@ -3046,6 +3089,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
     getCounts,
     getActiveProjectByWorkspaceRoot,
     getProjectShellById,
+    listScheduledProjects,
     getFirstActiveThreadIdByProjectId,
     getThreadCheckpointContext,
     getFullThreadDiffContext,

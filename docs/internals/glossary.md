@@ -110,6 +110,21 @@ Everything it spawns is forced to `runtimeMode: "full-access"` and
 `interactionMode: "default"`: a run with nobody watching cannot answer an
 approval prompt, so an interactive mode would simply hang.
 
+#### Scheduled run
+
+A per-project list of wall-clock times at which the server enables autonomous
+mode by itself: `{ time: "HH:MM", daysOfWeek, enabled }` entries on the project
+(`autonomousSchedule`), set with `project.autonomous.schedule.set` and edited in
+Settings → Projects. `AutonomousScheduleReactor` wakes on every minute boundary,
+reads the server's own timezone, and dispatches the same
+`project.autonomous.enable` the UI sends. It only ever looks at the minute it
+woke into — a slot the server slept through is skipped rather than caught up —
+it skips a project whose run is already live, and the enable it dispatches
+carries a command id derived from project, date and entry, so the persisted
+command receipt makes a repeat inside the same minute a no-op. Matching lives in
+`packages/contracts/src/autonomousSchedule.ts` so the ticker and the settings UI
+cannot disagree.
+
 #### Startable
 
 An issue autonomous mode may pick up right now: status `backlog`, not flagged
@@ -138,9 +153,13 @@ landed before it. The queue holds on a reviewer until its verdict is recorded.
 
 #### Reviewer
 
-A thread the merge queue opens inside the worker's own worktree, on the
-strongest Opus the Claude adapter exposes (`reviewerModelSelection.ts` reads the
-adapter's catalog order rather than hard-coding a slug). Its brief is
+A thread the merge queue opens inside the worker's own worktree, on a model
+sized to the work: a cheap classifier pass (`ReviewComplexityClassifier`) tiers
+the review as trivial (Haiku-class), standard (Sonnet-class), or complex (the
+strongest Opus the Claude adapter exposes). A missing model class falls upward
+to the next stronger one, never downward, and any classification failure is the
+complex tier (`reviewerModelSelection.ts` reads the adapter's catalog order
+rather than hard-coding slugs). Its brief is
 fix-then-merge: read the diff, run the touched tests, fix what it finds, rebase,
 and merge the pull request. It closes with a fenced ` ```t3-review ` block
 carrying `{ verdict, notes }`, parsed by

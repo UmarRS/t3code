@@ -198,6 +198,93 @@ it.layer(NodeServices.layer)("autonomous mode decider", (it) => {
     );
   });
 
+  describe("project.autonomous.schedule.set", () => {
+    const morning = {
+      id: "morning",
+      time: "09:00",
+      daysOfWeek: [1, 2, 3, 4, 5],
+      enabled: true,
+    } as const;
+
+    it.effect("replaces the schedule wholesale", () =>
+      Effect.gen(function* () {
+        const events = yield* decide(
+          {
+            type: "project.autonomous.schedule.set",
+            commandId: CommandId.make("cmd-schedule"),
+            projectId: PROJECT_ID,
+            schedule: [morning],
+          },
+          makeReadModel({
+            projects: [
+              project({
+                autonomousSchedule: [
+                  { id: "evening", time: "18:00", daysOfWeek: [], enabled: true },
+                ],
+              }),
+            ],
+          }),
+        );
+        expect(events[0]?.type).toBe("project.autonomous-schedule-set");
+        if (events[0]?.type === "project.autonomous-schedule-set") {
+          expect(events[0].payload.schedule).toEqual([morning]);
+          expect(events[0].aggregateKind).toBe("project");
+        }
+      }),
+    );
+
+    it.effect("clears the schedule with an empty list", () =>
+      Effect.gen(function* () {
+        const events = yield* decide(
+          {
+            type: "project.autonomous.schedule.set",
+            commandId: CommandId.make("cmd-schedule"),
+            projectId: PROJECT_ID,
+            schedule: [],
+          },
+          makeReadModel({ projects: [project({ autonomousSchedule: [morning] })] }),
+        );
+        if (events[0]?.type === "project.autonomous-schedule-set") {
+          expect(events[0].payload.schedule).toEqual([]);
+        }
+      }),
+    );
+
+    it.effect("rejects two entries sharing an id", () =>
+      Effect.gen(function* () {
+        const error = yield* Effect.flip(
+          decide(
+            {
+              type: "project.autonomous.schedule.set",
+              commandId: CommandId.make("cmd-schedule"),
+              projectId: PROJECT_ID,
+              schedule: [morning, { ...morning, time: "18:00" }],
+            },
+            makeReadModel({}),
+          ),
+        );
+        expect(invariantDetail(error)).toContain("more than once");
+      }),
+    );
+
+    it.effect("rejects scheduling a deleted project", () =>
+      Effect.gen(function* () {
+        const error = yield* Effect.flip(
+          decide(
+            {
+              type: "project.autonomous.schedule.set",
+              commandId: CommandId.make("cmd-schedule"),
+              projectId: PROJECT_ID,
+              schedule: [morning],
+            },
+            makeReadModel({ projects: [project({ deletedAt: NOW })] }),
+          ),
+        );
+        expect(invariantDetail(error)).toContain("deleted");
+      }),
+    );
+  });
+
   describe("needs attention", () => {
     it.effect("flags an issue with its reason", () =>
       Effect.gen(function* () {

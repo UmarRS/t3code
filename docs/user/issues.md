@@ -135,6 +135,27 @@ Two ways out, from the card menu or the Review tab:
 - **Clear & retry** also unlinks the thread and returns the issue to the backlog, so it is fresh
   work again. A live run picks it up on its next pass; if the run already finished, start it again.
 
+### Runs on a schedule
+
+A project can start its own runs. In **Settings → Projects**, the **Scheduled runs** section takes a
+list of times: add a time, pick the days it applies to (no days selected means every day), and leave
+the switch on. At each of those times Atlas starts a run on that project exactly as the header
+button does.
+
+Times are read on the clock of the machine running the server, not the device you are looking at.
+Three rules keep a schedule from surprising you:
+
+- **A missed time is skipped, never caught up.** If the server was off or asleep at 09:00, opening it
+  at 14:00 does not start the 09:00 run; the schedule waits for its next time.
+- **A live run is left alone.** If yesterday's run is still working when today's time comes round,
+  nothing happens — the schedule never restarts work that is already going.
+- **A scheduled run is an ordinary run.** It starts, reviews, merges and turns itself off exactly as
+  one you started by hand, and **Stop** ends it the same way.
+
+The switch on each entry keeps a time you have configured without firing it, which is easier than
+deleting and re-adding one. Schedules belong to the project, so a grouped project applies them to
+every checkout in the group.
+
 ### Stopping
 
 **Stop** stops the run from starting anything new and from running any more reviews. It does not

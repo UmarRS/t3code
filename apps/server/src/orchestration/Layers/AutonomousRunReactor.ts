@@ -34,7 +34,11 @@ import {
   AutonomousRunReactor,
   type AutonomousRunReactorShape,
 } from "../Services/AutonomousRunReactor.ts";
-import { resolveReviewerModelSelection } from "../reviewerModelSelection.ts";
+import { ReviewComplexityClassifier } from "../Services/ReviewComplexityClassifier.ts";
+import {
+  resolveReviewerModelSelection,
+  resolveTieredReviewerModelSelection,
+} from "../reviewerModelSelection.ts";
 
 /**
  * The autonomous run loop.
@@ -77,6 +81,7 @@ const make = Effect.gen(function* () {
   const gitWorkflow = yield* GitWorkflowService;
   const providerRegistry = yield* ProviderRegistry;
   const receipts = yield* RuntimeReceiptBus;
+  const reviewComplexityClassifier = yield* ReviewComplexityClassifier;
 
   const nowIso = Effect.map(DateTime.now, DateTime.formatIso);
   const serverCommandId = (tag: string) =>
@@ -468,7 +473,23 @@ const make = Effect.gen(function* () {
       return;
     }
 
-    const modelSelection = resolveReviewerModelSelection(yield* providerRegistry.getProviders);
+    // Size the review with a cheap classifier pass, then pick the reviewer's
+    // model for that tier. Classification never fails — every failure mode is
+    // the safe `complex` tier — so the only way not to review is still the
+    // no-provider null below, exactly as before the tiers existed.
+    const issueDetail = yield* projectionSnapshotQuery
+      .getIssueDetailById(issue.id)
+      .pipe(Effect.orElseSucceed(() => Option.none()));
+    const complexityTier = yield* reviewComplexityClassifier.classify({
+      issueTitle: issue.title,
+      issueDescription: Option.isSome(issueDetail) ? issueDetail.value.description : "",
+      worktreePath: workerThread.value.worktreePath,
+      baseBranch: "main",
+    });
+    const modelSelection = resolveTieredReviewerModelSelection(
+      yield* providerRegistry.getProviders,
+      complexityTier,
+    );
     if (modelSelection === null) {
       yield* flagNeedsAttention(issue.id, "No Claude provider is available to review this issue.");
       return;
@@ -524,6 +545,8 @@ const make = Effect.gen(function* () {
       type: "autonomous.review.started",
       issueId: issue.id,
       reviewerThreadId,
+      complexityTier,
+      modelSelection,
       createdAt,
     });
 
