@@ -71,6 +71,8 @@ export function applyThreadDetailEvent(
     case "project.created":
     case "project.meta-updated":
     case "project.deleted":
+    case "project.link-added":
+    case "project.link-removed":
       return { kind: "unchanged" };
 
     // ── Thread lifecycle ────────────────────────────────────────────

@@ -26,6 +26,7 @@ import type {
   ProjectId,
   ThreadId,
 } from "@t3tools/contracts";
+import type { ProjectLinkView } from "@t3tools/shared/projectLinks";
 import * as Context from "effect/Context";
 import type * as Option from "effect/Option";
 import type * as Effect from "effect/Effect";
@@ -156,6 +157,21 @@ export interface ProjectionSnapshotQueryShape {
   readonly getProjectShellById: (
     projectId: ProjectId,
   ) => Effect.Effect<Option.Option<OrchestrationProjectShell>, ProjectionRepositoryError>;
+
+  /**
+   * Every cross-project link a project sees — the edges it owns plus the
+   * mirrors of edges other projects pointed at it — with each link's path
+   * already resolved against the environment's registered project roots.
+   *
+   * `targetProjectId` is null for a folder no project is rooted at: a valid
+   * link that is read-only context and cannot take writes. Callers that route
+   * work across projects read this rather than matching paths themselves.
+   *
+   * Empty for an unknown or deleted project.
+   */
+  readonly getProjectLinksById: (
+    projectId: ProjectId,
+  ) => Effect.Effect<ReadonlyArray<ProjectLinkView>, ProjectionRepositoryError>;
 
   /**
    * Read the earliest active thread for a project.

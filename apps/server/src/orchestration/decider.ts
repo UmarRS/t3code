@@ -3,10 +3,13 @@ import {
   EventId,
   issueNeedsAttention,
   normalizeThreadScopeLinkedPaths,
+  PROJECT_LINK_MAX_PER_PROJECT,
   type OrchestrationCommand,
   type OrchestrationEvent,
   type OrchestrationReadModel,
 } from "@t3tools/contracts";
+import { normalizeProjectPathForComparison } from "@t3tools/shared/path";
+import { projectsAreLinked } from "@t3tools/shared/projectLinks";
 import * as DateTime from "effect/DateTime";
 import * as Crypto from "effect/Crypto";
 import * as Effect from "effect/Effect";
@@ -15,7 +18,9 @@ import type * as PlatformError from "effect/PlatformError";
 import { OrchestrationCommandInvariantError } from "./Errors.ts";
 import {
   findActiveIssueByThreadId,
+  findProjectLinkOwner,
   listActiveIssuesByProjectId,
+  listActiveProjects,
   listThreadsByProjectId,
   requireActiveProjectWorkspaceRootAbsent,
   requireIssue,
@@ -365,6 +370,125 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         payload: {
           projectId: command.projectId,
           deletedAt: occurredAt,
+        },
+      };
+    }
+
+    case "project.link.add": {
+      const project = yield* requireProject({
+        readModel,
+        command,
+        projectId: command.projectId,
+      });
+      if (project.deletedAt !== null) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: `Project '${command.projectId}' is deleted and cannot be linked.`,
+        });
+      }
+
+      const activeProjects = listActiveProjects(readModel);
+      const links = project.links ?? [];
+      if (links.length >= PROJECT_LINK_MAX_PER_PROJECT) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: `Project '${command.projectId}' already has the maximum of ${PROJECT_LINK_MAX_PER_PROJECT} links.`,
+        });
+      }
+      if (findProjectLinkOwner(activeProjects, command.linkId) !== undefined) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: `Project link '${command.linkId}' already exists.`,
+        });
+      }
+
+      const normalizedPath = normalizeProjectPathForComparison(command.path);
+      if (normalizedPath === normalizeProjectPathForComparison(project.workspaceRoot)) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: `Project '${command.projectId}' cannot link its own workspace root.`,
+        });
+      }
+      if (links.some((link) => normalizeProjectPathForComparison(link.path) === normalizedPath)) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: `Project '${command.projectId}' is already linked to '${command.path}'.`,
+        });
+      }
+      // A pair of registered projects gets exactly one edge. Without this, the
+      // link the user is adding would collide with the mirror they can already
+      // see, and removing one would leave the other behind.
+      const targetProject = activeProjects.find(
+        (candidate) =>
+          normalizeProjectPathForComparison(candidate.workspaceRoot) === normalizedPath,
+      );
+      if (targetProject !== undefined && projectsAreLinked(project, targetProject)) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: `Project '${command.projectId}' and project '${targetProject.id}' are already linked.`,
+        });
+      }
+
+      return {
+        ...(yield* withEventBase({
+          aggregateKind: "project",
+          aggregateId: command.projectId,
+          occurredAt: command.createdAt,
+          commandId: command.commandId,
+        })),
+        type: "project.link-added",
+        payload: {
+          projectId: command.projectId,
+          link: {
+            id: command.linkId,
+            path: command.path,
+            description: command.description,
+            createdAt: command.createdAt,
+          },
+          updatedAt: command.createdAt,
+        },
+      };
+    }
+
+    case "project.link.remove": {
+      const project = yield* requireProject({
+        readModel,
+        command,
+        projectId: command.projectId,
+      });
+      const activeProjects = listActiveProjects(readModel);
+      // Removing from the mirrored side is the same operation: resolve back to
+      // whichever project stores the edge and delete it there, once.
+      const owner = findProjectLinkOwner(activeProjects, command.linkId);
+      const removableFromCommandProject =
+        owner !== undefined &&
+        (owner.id === project.id ||
+          (owner.links ?? []).some(
+            (link) =>
+              link.id === command.linkId &&
+              normalizeProjectPathForComparison(link.path) ===
+                normalizeProjectPathForComparison(project.workspaceRoot),
+          ));
+      if (owner === undefined || !removableFromCommandProject) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: `Project link '${command.linkId}' does not exist for project '${command.projectId}'.`,
+        });
+      }
+
+      const occurredAt = yield* nowIso;
+      return {
+        ...(yield* withEventBase({
+          aggregateKind: "project",
+          aggregateId: owner.id,
+          occurredAt,
+          commandId: command.commandId,
+        })),
+        type: "project.link-removed",
+        payload: {
+          projectId: owner.id,
+          linkId: command.linkId,
+          updatedAt: occurredAt,
         },
       };
     }

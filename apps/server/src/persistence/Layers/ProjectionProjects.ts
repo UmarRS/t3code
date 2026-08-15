@@ -5,7 +5,12 @@ import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
 import * as Struct from "effect/Struct";
 
-import { ModelSelection, ProjectAutonomousScheduleEntry, ProjectScript } from "@t3tools/contracts";
+import {
+  ModelSelection,
+  ProjectAutonomousScheduleEntry,
+  ProjectLink,
+  ProjectScript,
+} from "@t3tools/contracts";
 import { toPersistenceSqlError } from "../Errors.ts";
 import {
   DeleteProjectionProjectInput,
@@ -20,6 +25,7 @@ const ProjectionProjectDbRow = ProjectionProject.mapFields(
     defaultModelSelection: Schema.NullOr(Schema.fromJsonString(ModelSelection)),
     autonomousSchedule: Schema.fromJsonString(Schema.Array(ProjectAutonomousScheduleEntry)),
     scripts: Schema.fromJsonString(Schema.Array(ProjectScript)),
+    links: Schema.fromJsonString(Schema.Array(ProjectLink)),
   }),
 );
 type ProjectionProjectDbRow = typeof ProjectionProjectDbRow.Type;
@@ -43,6 +49,7 @@ const makeProjectionProjectRepository = Effect.gen(function* () {
           autonomous_finished_reason,
           autonomous_schedule_json,
           scripts_json,
+          project_links_json,
           created_at,
           updated_at,
           deleted_at
@@ -59,6 +66,7 @@ const makeProjectionProjectRepository = Effect.gen(function* () {
           ${row.autonomousFinishedReason ?? null},
           ${JSON.stringify(row.autonomousSchedule)},
           ${JSON.stringify(row.scripts)},
+          ${JSON.stringify(row.links)},
           ${row.createdAt},
           ${row.updatedAt},
           ${row.deletedAt}
@@ -75,6 +83,7 @@ const makeProjectionProjectRepository = Effect.gen(function* () {
           autonomous_finished_reason = excluded.autonomous_finished_reason,
           autonomous_schedule_json = excluded.autonomous_schedule_json,
           scripts_json = excluded.scripts_json,
+          project_links_json = excluded.project_links_json,
           created_at = excluded.created_at,
           updated_at = excluded.updated_at,
           deleted_at = excluded.deleted_at
@@ -98,6 +107,7 @@ const makeProjectionProjectRepository = Effect.gen(function* () {
           autonomous_finished_reason AS "autonomousFinishedReason",
           autonomous_schedule_json AS "autonomousSchedule",
           scripts_json AS "scripts",
+          project_links_json AS "links",
           created_at AS "createdAt",
           updated_at AS "updatedAt",
           deleted_at AS "deletedAt"
@@ -123,6 +133,7 @@ const makeProjectionProjectRepository = Effect.gen(function* () {
           autonomous_finished_reason AS "autonomousFinishedReason",
           autonomous_schedule_json AS "autonomousSchedule",
           scripts_json AS "scripts",
+          project_links_json AS "links",
           created_at AS "createdAt",
           updated_at AS "updatedAt",
           deleted_at AS "deletedAt"

@@ -35,6 +35,12 @@ import {
 } from "./issues.ts";
 import { ProviderInstanceId } from "./providerInstance.ts";
 import { ProjectAutonomousSchedule } from "./autonomousSchedule.ts";
+import {
+  ProjectLink,
+  ProjectLinkDescription,
+  ProjectLinkId,
+  ProjectLinkPath,
+} from "./projectLink.ts";
 import { ThreadScopeFields } from "./threadScope.ts";
 
 export const ORCHESTRATION_WS_METHODS = {
@@ -175,6 +181,20 @@ export const ProjectScript = Schema.Struct({
 });
 export type ProjectScript = typeof ProjectScript.Type;
 
+/**
+ * Folders in other repositories this project is linked to, in the order the
+ * user added them. Only the edges this project created are stored here: when a
+ * link points at another registered project, that project's mirror is derived
+ * from this list (see `@t3tools/shared/projectLinks`) rather than stored a
+ * second time, so removing the link from either side removes it for both.
+ *
+ * Optional on the wire so cached snapshots from older servers still decode;
+ * absent means "no links", same as an empty list.
+ */
+const ProjectLinksField = {
+  links: Schema.optional(Schema.Array(ProjectLink)),
+} as const;
+
 export const ProjectFaviconPath = TrimmedNonEmptyString.check(
   Schema.isMaxLength(1024),
   Schema.isPattern(/\.(?:avif|gif|ico|jpe?g|png|svg|webp)$/i),
@@ -193,6 +213,7 @@ export const OrchestrationProject = Schema.Struct({
   // Optional on the wire so cached snapshots from older servers still decode.
   faviconPath: Schema.optional(Schema.NullOr(ProjectFaviconPath)),
   scripts: Schema.Array(ProjectScript),
+  ...ProjectLinksField,
   /**
    * Autonomous mode: the server works this project's backlog to done without a
    * human. Non-null `autonomousStartedAt` means a run is live. When a run ends
@@ -412,6 +433,7 @@ export const OrchestrationProjectShell = Schema.Struct({
   // Optional on the wire so cached snapshots from older servers still decode.
   faviconPath: Schema.optional(Schema.NullOr(ProjectFaviconPath)),
   scripts: Schema.Array(ProjectScript),
+  ...ProjectLinksField,
   /**
    * Autonomous mode: the server works this project's backlog to done without a
    * human. Non-null `autonomousStartedAt` means a run is live. When a run ends
@@ -948,6 +970,38 @@ const ProjectAutonomousDisableCommand = Schema.Struct({
 });
 
 /**
+ * Link this project to a folder elsewhere on the environment. The description
+ * is required because it is the whole point: it is what an agent reads to know
+ * what the folder is. `path` must be an existing directory — clients check
+ * that before dispatching, since the decider is pure and never touches disk.
+ *
+ * Rejected when the path is already linked from either end, so a pair of
+ * projects can never accumulate two edges that disagree.
+ */
+const ProjectLinkAddCommand = Schema.Struct({
+  type: Schema.Literal("project.link.add"),
+  commandId: CommandId,
+  projectId: ProjectId,
+  linkId: ProjectLinkId,
+  path: ProjectLinkPath,
+  description: ProjectLinkDescription,
+  createdAt: IsoDateTime,
+});
+
+/**
+ * Remove a link by id. `projectId` is the project the user removed it *from*,
+ * which may be the project that stores the edge or the one that only sees the
+ * derived mirror — either way the single stored edge goes, and the link
+ * disappears from both sides.
+ */
+const ProjectLinkRemoveCommand = Schema.Struct({
+  type: Schema.Literal("project.link.remove"),
+  commandId: CommandId,
+  projectId: ProjectId,
+  linkId: ProjectLinkId,
+});
+
+/**
  * Replace a project's schedule wholesale. The list is short and always edited
  * as a whole in settings, so a field-wise merge would only add a way for two
  * clients to disagree about what the list is.
@@ -1060,6 +1114,8 @@ const DispatchableClientOrchestrationCommand = Schema.Union([
   ProjectCreateCommand,
   ProjectMetaUpdateCommand,
   ProjectDeleteCommand,
+  ProjectLinkAddCommand,
+  ProjectLinkRemoveCommand,
   ThreadCreateCommand,
   ThreadDeleteCommand,
   ThreadArchiveCommand,
@@ -1098,6 +1154,8 @@ export const ClientOrchestrationCommand = Schema.Union([
   ProjectCreateCommand,
   ProjectMetaUpdateCommand,
   ProjectDeleteCommand,
+  ProjectLinkAddCommand,
+  ProjectLinkRemoveCommand,
   ThreadCreateCommand,
   ThreadDeleteCommand,
   ThreadArchiveCommand,
@@ -1282,6 +1340,8 @@ export const OrchestrationEventType = Schema.Literals([
   "project.created",
   "project.meta-updated",
   "project.deleted",
+  "project.link-added",
+  "project.link-removed",
   "thread.created",
   "thread.deleted",
   "thread.archived",
@@ -1357,6 +1417,24 @@ export const ProjectMetaUpdatedPayload = Schema.Struct({
 export const ProjectDeletedPayload = Schema.Struct({
   projectId: ProjectId,
   deletedAt: IsoDateTime,
+});
+
+/** `projectId` is always the project that stores the edge, never a mirror. */
+export const ProjectLinkAddedPayload = Schema.Struct({
+  projectId: ProjectId,
+  link: ProjectLink,
+  updatedAt: IsoDateTime,
+});
+
+/**
+ * `projectId` is the project the edge was stored on, which is not necessarily
+ * the project the user pressed remove on — the decider resolves a mirror back
+ * to its owner so one event settles both sides.
+ */
+export const ProjectLinkRemovedPayload = Schema.Struct({
+  projectId: ProjectId,
+  linkId: ProjectLinkId,
+  updatedAt: IsoDateTime,
 });
 
 export const ThreadCreatedPayload = Schema.Struct({
@@ -1709,6 +1787,16 @@ export const OrchestrationEvent = Schema.Union([
     ...EventBaseFields,
     type: Schema.Literal("project.deleted"),
     payload: ProjectDeletedPayload,
+  }),
+  Schema.Struct({
+    ...EventBaseFields,
+    type: Schema.Literal("project.link-added"),
+    payload: ProjectLinkAddedPayload,
+  }),
+  Schema.Struct({
+    ...EventBaseFields,
+    type: Schema.Literal("project.link-removed"),
+    payload: ProjectLinkRemovedPayload,
   }),
   Schema.Struct({
     ...EventBaseFields,

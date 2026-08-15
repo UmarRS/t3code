@@ -11,6 +11,7 @@ import {
   ModelSelection,
   ProjectAutonomousSchedule,
   ProjectId,
+  ProjectLink,
   ProjectScript,
   ThreadEnvMode,
 } from "@t3tools/contracts";
@@ -35,6 +36,8 @@ export const ProjectionProject = Schema.Struct({
   ),
   autonomousSchedule: ProjectAutonomousSchedule,
   scripts: Schema.Array(ProjectScript),
+  // Only the link edges this project owns. Mirrors are derived on read.
+  links: Schema.Array(ProjectLink),
   createdAt: IsoDateTime,
   updatedAt: IsoDateTime,
   deletedAt: Schema.NullOr(IsoDateTime),

@@ -92,6 +92,7 @@ import {
   SettingsSection,
 } from "./settingsLayout";
 import { ProjectFaviconPickerDialog } from "./ProjectFaviconPickerDialog";
+import { ProjectLinksSection } from "./ProjectLinksSection";
 
 /** Sunday-first, matching `Date.prototype.getDay` and every calendar UI. */
 const SCHEDULE_DAYS = [
@@ -964,6 +965,8 @@ function ProjectDetail({
           }
         />
       </SettingsSection>
+
+      <ProjectLinksSection group={group} reportFailure={reportFailure} />
 
       <SettingsSection
         id="project-scripts"

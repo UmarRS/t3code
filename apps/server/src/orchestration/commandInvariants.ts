@@ -35,6 +35,24 @@ export function findProjectById(
   return readModel.projects.find((project) => project.id === projectId);
 }
 
+/** Projects that still exist, which is the only set links may point at. */
+export function listActiveProjects(
+  readModel: OrchestrationReadModel,
+): ReadonlyArray<OrchestrationProject> {
+  return readModel.projects.filter((project) => project.deletedAt === null);
+}
+
+/**
+ * The project that stores a link edge. There is exactly one, whichever side of
+ * the link the caller is looking from.
+ */
+export function findProjectLinkOwner(
+  projects: ReadonlyArray<OrchestrationProject>,
+  linkId: string,
+): OrchestrationProject | undefined {
+  return projects.find((project) => (project.links ?? []).some((link) => link.id === linkId));
+}
+
 export function listThreadsByProjectId(
   readModel: OrchestrationReadModel,
   projectId: ProjectId,

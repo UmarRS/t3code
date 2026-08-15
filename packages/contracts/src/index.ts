@@ -22,6 +22,7 @@ export * from "./issues.ts";
 export * from "./autonomousSchedule.ts";
 export * from "./orchestration.ts";
 export * from "./threadScope.ts";
+export * from "./projectLink.ts";
 export * from "./t3ProjectFile.ts";
 export * from "./editor.ts";
 export * from "./project.ts";

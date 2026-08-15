@@ -31,6 +31,8 @@ type CommandInput<T extends CommandType> = Omit<
 export type CreateProjectInput = CommandInput<"project.create">;
 export type UpdateProjectInput = CommandInput<"project.meta.update">;
 export type DeleteProjectInput = CommandInput<"project.delete">;
+export type AddProjectLinkInput = CommandInput<"project.link.add">;
+export type RemoveProjectLinkInput = CommandInput<"project.link.remove">;
 export type EnableProjectAutonomousInput = CommandInput<"project.autonomous.enable">;
 export type DisableProjectAutonomousInput = Omit<
   CommandInput<"project.autonomous.disable">,
@@ -127,6 +129,28 @@ export const deleteProject: (input: DeleteProjectInput) => CommandEffect = Effec
   return yield* dispatch({
     ...input,
     type: "project.delete",
+    commandId: yield* commandId(input),
+  });
+});
+
+export const addProjectLink: (input: AddProjectLinkInput) => CommandEffect = Effect.fn(
+  "EnvironmentCommands.addProjectLink",
+)(function* (input) {
+  const metadata = yield* timestampedCommandMetadata(input);
+  return yield* dispatch({
+    ...input,
+    type: "project.link.add",
+    commandId: metadata.commandId,
+    createdAt: metadata.createdAt,
+  });
+});
+
+export const removeProjectLink: (input: RemoveProjectLinkInput) => CommandEffect = Effect.fn(
+  "EnvironmentCommands.removeProjectLink",
+)(function* (input) {
+  return yield* dispatch({
+    ...input,
+    type: "project.link.remove",
     commandId: yield* commandId(input),
   });
 });

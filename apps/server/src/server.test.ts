@@ -788,6 +788,7 @@ const buildAppUnderTest = (options?: {
           searchThreads: () => Effect.succeed({ matches: [] }),
           getSnapshotSequence: () => Effect.succeed({ snapshotSequence: 0 }),
           getProjectShellById: () => Effect.succeed(Option.none()),
+          getProjectLinksById: () => Effect.succeed([]),
           getThreadShellById: () => Effect.succeed(Option.none()),
           getThreadDetailById: () => Effect.succeed(Option.none()),
           getThreadDetailSnapshot: () => Effect.succeed(Option.none()),
@@ -5198,6 +5199,7 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
           },
           projectionSnapshotQuery: {
             getProjectShellById: () => Effect.succeed(Option.none()),
+            getProjectLinksById: () => Effect.succeed([]),
           },
         },
       });

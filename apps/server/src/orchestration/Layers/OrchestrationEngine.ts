@@ -65,6 +65,8 @@ function commandToAggregateRef(command: OrchestrationCommand): {
     case "project.create":
     case "project.meta.update":
     case "project.delete":
+    case "project.link.add":
+    case "project.link.remove":
     case "project.autonomous.enable":
     case "project.autonomous.disable":
     case "project.autonomous.schedule.set":

@@ -314,6 +314,7 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
               runOnWorktreeCreate: false,
             },
           ],
+          links: [],
           defaultThreadEnvMode: null,
           autonomousStartedAt: null,
           autonomousFinishedAt: null,
@@ -438,6 +439,7 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
               runOnWorktreeCreate: false,
             },
           ],
+          links: [],
           defaultThreadEnvMode: null,
           autonomousStartedAt: null,
           autonomousFinishedAt: null,
@@ -2370,6 +2372,92 @@ projectionSnapshotLayer("ProjectionSnapshotQuery windowed thread detail", (it) =
         assert.equal(snapshot.value.page?.hasMore, false);
         assert.equal(snapshot.value.page?.beforeCursor, null);
       }
+    }),
+  );
+});
+
+projectionSnapshotLayer("ProjectionSnapshotQuery project links", (it) => {
+  const seedLinkedProjects = Effect.fnUntraced(function* () {
+    const sql = yield* SqlClient.SqlClient;
+    yield* sql`DELETE FROM projection_projects`;
+
+    // Only the frontend stores an edge; the backend's view of it is derived.
+    yield* sql`
+      INSERT INTO projection_projects (
+        project_id,
+        title,
+        workspace_root,
+        default_model_selection_json,
+        scripts_json,
+        project_links_json,
+        created_at,
+        updated_at,
+        deleted_at
+      )
+      VALUES
+        (
+          'project-frontend',
+          'smartcanvass-fe',
+          '/tmp/smartcanvass-fe',
+          NULL,
+          '[]',
+          '[{"id":"link-1","path":"/tmp/smartcanvass-be","description":"backend for all smartcanvass APIs","createdAt":"2026-02-24T00:00:00.000Z"},{"id":"link-2","path":"/tmp/design-tokens","description":"shared design tokens","createdAt":"2026-02-24T00:00:00.000Z"}]',
+          '2026-02-24T00:00:00.000Z',
+          '2026-02-24T00:00:00.000Z',
+          NULL
+        ),
+        (
+          'project-backend',
+          'smartcanvass-be',
+          '/tmp/smartcanvass-be',
+          NULL,
+          '[]',
+          '[]',
+          '2026-02-24T00:00:00.000Z',
+          '2026-02-24T00:00:00.000Z',
+          NULL
+        )
+    `;
+  });
+
+  it.effect("resolves owned links against registered project roots", () =>
+    Effect.gen(function* () {
+      const snapshotQuery = yield* ProjectionSnapshotQuery;
+      yield* seedLinkedProjects();
+
+      const links = yield* snapshotQuery.getProjectLinksById(asProjectId("project-frontend"));
+
+      assert.equal(links.length, 2);
+      assert.equal(links[0]?.path, "/tmp/smartcanvass-be");
+      assert.equal(links[0]?.targetProjectId, "project-backend");
+      assert.equal(links[0]?.mirrored, false);
+      // A folder no project is rooted at is a valid, context-only link.
+      assert.equal(links[1]?.path, "/tmp/design-tokens");
+      assert.equal(links[1]?.targetProjectId, null);
+    }),
+  );
+
+  it.effect("mirrors the link onto the linked project", () =>
+    Effect.gen(function* () {
+      const snapshotQuery = yield* ProjectionSnapshotQuery;
+      yield* seedLinkedProjects();
+
+      const links = yield* snapshotQuery.getProjectLinksById(asProjectId("project-backend"));
+
+      assert.equal(links.length, 1);
+      assert.equal(links[0]?.mirrored, true);
+      assert.equal(links[0]?.ownerProjectId, "project-frontend");
+      assert.equal(links[0]?.path, "/tmp/smartcanvass-fe");
+      assert.equal(links[0]?.targetProjectId, "project-frontend");
+    }),
+  );
+
+  it.effect("returns nothing for an unknown project", () =>
+    Effect.gen(function* () {
+      const snapshotQuery = yield* ProjectionSnapshotQuery;
+      yield* seedLinkedProjects();
+
+      assert.deepEqual(yield* snapshotQuery.getProjectLinksById(asProjectId("project-gone")), []);
     }),
   );
 });

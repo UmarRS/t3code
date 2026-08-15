@@ -540,6 +540,11 @@ const makeWsRpcLayer = (
         switch (event.type) {
           case "project.created":
           case "project.meta-updated":
+          // Only the project that owns the link edge is refetched. The other
+          // side of a mirrored link derives its view from this project's row
+          // (see `@t3tools/shared/projectLinks`), so one upsert updates both.
+          case "project.link-added":
+          case "project.link-removed":
           // Run state and schedules live on the project row, so the clients
           // rendering "a run is live" and the schedule editor need the same
           // upsert a metadata edit sends.
