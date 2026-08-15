@@ -15,10 +15,12 @@ import * as Cause from "effect/Cause";
 import * as Crypto from "effect/Crypto";
 import * as DateTime from "effect/DateTime";
 import * as Deferred from "effect/Deferred";
+import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Queue from "effect/Queue";
+import * as Schedule from "effect/Schedule";
 import * as Stream from "effect/Stream";
 
 import { GitWorkflowService } from "../../git/GitWorkflowService.ts";
@@ -64,6 +66,9 @@ const AUTONOMOUS_INTERACTION_MODE = "default" as const;
 
 /** How many issues one tick will start at once. Bounded so a 50-issue backlog does not fork 50 provider processes in the same instant. */
 const MAX_PARALLEL_STARTS = 4;
+
+/** External merges do not emit orchestration events, so active runs reconcile their one in-flight review periodically. */
+const EXTERNAL_MERGE_RECONCILE_INTERVAL = Duration.minutes(1);
 
 type EvaluateItem = { readonly projectId: ProjectId };
 type MergeItem = { readonly issueId: IssueId };
@@ -180,10 +185,74 @@ const make = Effect.gen(function* () {
     return resolveReviewerModelSelection(yield* providerRegistry.getProviders);
   });
 
+  /**
+   * A user may merge the linked pull request on GitHub while the reviewer is
+   * waiting for checks. GitHub does not send that action through Atlas, so
+   * reconcile it into the same durable verdict the reviewer would have
+   * emitted. Restrict this to claimed reviews: an issue whose reviewer has not
+   * started yet remains owned by the merge queue.
+   */
+  const reconcileExternallyMergedIssue = Effect.fn("reconcileExternallyMergedIssue")(function* (
+    issue: OrchestrationIssue,
+  ) {
+    const reviewerThreadId = issue.reviewerThreadId;
+    if (
+      issue.status !== "in_review" ||
+      issue.reviewVerdict !== null ||
+      reviewerThreadId === null ||
+      reviewerThreadId === undefined ||
+      issue.threadId === null ||
+      issue.pullRequestUrl === null ||
+      issue.needsAttentionAt !== null
+    ) {
+      return false;
+    }
+
+    const workerThread = yield* projectionSnapshotQuery.getThreadShellById(issue.threadId);
+    if (Option.isNone(workerThread) || workerThread.value.worktreePath === null) {
+      return false;
+    }
+
+    const resolved = yield* gitWorkflow
+      .resolvePullRequest({
+        cwd: workerThread.value.worktreePath,
+        reference: issue.pullRequestUrl,
+      })
+      .pipe(
+        Effect.map((result) => Option.some(result.pullRequest)),
+        Effect.catchCause((cause) =>
+          Effect.logDebug("autonomous external merge reconciliation skipped", {
+            issueId: issue.id,
+            pullRequestUrl: issue.pullRequestUrl,
+            cause: Cause.pretty(cause),
+          }).pipe(Effect.as(Option.none())),
+        ),
+      );
+    if (Option.isNone(resolved) || resolved.value.state !== "merged") {
+      return false;
+    }
+
+    yield* orchestrationEngine.dispatch({
+      type: "issue.review.record",
+      commandId: yield* serverCommandId(`external-merge:${issue.id}`),
+      issueId: issue.id,
+      reviewerThreadId,
+      verdict: "merged",
+      notes: "The linked pull request was merged outside Atlas while its review was active.",
+    });
+    return true;
+  });
+
   const evaluateProject = Effect.fn("evaluateProject")(function* (projectId: ProjectId) {
     if (!(yield* projectRunIsLive(projectId))) return;
 
-    const issues = yield* projectionSnapshotQuery.listIssuesByProjectId(projectId);
+    let issues = yield* projectionSnapshotQuery.listIssuesByProjectId(projectId);
+    const reconciledMerge = yield* Effect.forEach(issues, reconcileExternallyMergedIssue, {
+      concurrency: 1,
+    }).pipe(Effect.map((results) => results.some(Boolean)));
+    if (reconciledMerge) {
+      issues = yield* projectionSnapshotQuery.listIssuesByProjectId(projectId);
+    }
     const startable = startableAutonomousIssues(issues);
     const active = activeAutonomousIssues(issues);
 
@@ -646,6 +715,13 @@ const make = Effect.gen(function* () {
         Effect.andThen(
           Queue.take(buffered).pipe(Effect.flatMap(processEventSafely), Effect.forever),
         ),
+      ),
+    );
+    yield* forkParked(
+      Effect.sleep(EXTERNAL_MERGE_RECONCILE_INTERVAL).pipe(
+        Effect.andThen(sweepActiveRuns()),
+        Effect.repeat(Schedule.spaced(EXTERNAL_MERGE_RECONCILE_INTERVAL)),
+        Effect.asVoid,
       ),
     );
     yield* Deferred.await(subscribed);

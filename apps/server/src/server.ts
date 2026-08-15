@@ -229,6 +229,9 @@ const ReactorLayerLive = Layer.empty.pipe(
   // Shared by runtime ingestion (failed turns) and the command reactor
   // (failed turn starts): both must see the same per-thread failover state.
   Layer.provideMerge(ModelFailoverLive),
+  // Not an event reactor, but the same kind of runtime root: a background
+  // loop parked at activation that reclaims disk from long-settled worktrees.
+  Layer.provideMerge(WorktreeSweeperLive),
   // Sizes autonomous reviews before the run reactor dispatches a reviewer.
   Layer.provideMerge(ReviewComplexityClassifierLive),
 );

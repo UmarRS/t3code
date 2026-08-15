@@ -43,6 +43,7 @@ const thread = (id: string, overrides?: Partial<WorktreeSweepThread>): WorktreeS
   worktreePath: `${WORKTREES_DIR}/t3code/${id}`,
   settledAt: null,
   archivedAt: null,
+  deletedAt: null,
   settledOverride: null,
   pinnedAt: null,
   hasLiveWork: false,
@@ -149,6 +150,34 @@ describe("selectWorktreeSweepCandidates", () => {
       });
 
       assert.equal(selection.candidates.length, 1);
+    }),
+  );
+
+  it.effect("treats a deleted thread as parked and ages it from deletion", () =>
+    Effect.gen(function* () {
+      yield* TestClock.setTime(NOW_MS);
+      const nowMs = yield* Clock.currentTimeMillis;
+
+      const oldDeletion = select({
+        nowMs,
+        threads: [thread("deleted-old", { deletedAt: iso(nowMs - 20 * DAY_MS) })],
+      });
+      const recentDeletion = select({
+        nowMs,
+        threads: [
+          thread("deleted-recent", {
+            ...settledDaysAgo(nowMs, 40),
+            deletedAt: iso(nowMs - DAY_MS),
+          }),
+        ],
+      });
+
+      assert.equal(oldDeletion.candidates.length, 1);
+      assert.deepStrictEqual(recentDeletion.candidates, []);
+      assert.deepStrictEqual(
+        recentDeletion.skips.map((skip) => skip.reason),
+        ["settled-too-recently"],
+      );
     }),
   );
 

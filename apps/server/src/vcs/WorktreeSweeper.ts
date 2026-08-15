@@ -4,10 +4,10 @@
  * Worktrees are created per thread under `<worktreesDir>/<repo>/<branch>` and
  * nothing ever removed them, so disk usage only grew. This sweep removes the
  * checkout - never the branch - once every thread pointing at a worktree has
- * been settled or archived for `WORKTREE_SWEEP_MIN_AGE`, and only when losing
- * the local checkout cannot lose work: the branch is merged into the repo's
- * base branch, or the worktree is clean with nothing unpushed. Anything else
- * is skipped with a reason. When in doubt, skip.
+ * been settled, archived, or deleted for `WORKTREE_SWEEP_MIN_AGE`, and only
+ * when losing the local checkout cannot lose work: the branch is merged into
+ * the repo's base branch, or the worktree is clean with nothing unpushed.
+ * Anything else is skipped with a reason. When in doubt, skip.
  *
  * The candidate selection and the sweep itself are written against an explicit
  * dependency record (`WorktreeSweepDependencies`) so both can be unit tested
@@ -84,6 +84,7 @@ export interface WorktreeSweepThread {
   readonly worktreePath: string | null;
   readonly settledAt: string | null;
   readonly archivedAt: string | null;
+  readonly deletedAt: string | null;
   readonly settledOverride: "settled" | "active" | null;
   readonly pinnedAt?: string | null | undefined;
   /** A running turn or live background work keeps the worktree pinned in place. */
@@ -170,16 +171,17 @@ const parseIsoMillis = (value: string | null | undefined): number | null =>
       });
 
 /**
- * When a thread was parked, or `null` while it is still live. Archiving and
- * settling are both parking events; the later of the two wins so a thread that
- * was archived yesterday is not treated as untouched for a fortnight.
+ * When a thread was parked, or `null` while it is still live. Settling,
+ * archiving, and deleting are parking events; the later one wins so a freshly
+ * deleted thread is not treated as untouched for a fortnight.
  */
 function parkedAtMillis(thread: WorktreeSweepThread): number | null {
   const settledAt = thread.settledOverride === "settled" ? parseIsoMillis(thread.settledAt) : null;
   const archivedAt = parseIsoMillis(thread.archivedAt);
+  const deletedAt = parseIsoMillis(thread.deletedAt);
   // Not `Math.max(a ?? 0, b ?? 0)`: zero is a real epoch millisecond, not a
   // neutral element, so a missing half must drop out rather than floor the max.
-  const parked = [settledAt, archivedAt].filter((value) => value !== null);
+  const parked = [settledAt, archivedAt, deletedAt].filter((value) => value !== null);
   return parked.length === 0 ? null : Math.max(...parked);
 }
 
@@ -823,14 +825,62 @@ const makeWorktreeSweeper = (options?: WorktreeSweeperLiveOptions) =>
       loadSnapshot: Effect.all([
         projectionSnapshotQuery.getShellSnapshot(),
         projectionSnapshotQuery.getArchivedShellSnapshot(),
+        projectionSnapshotQuery.getCommandReadModel(),
       ]).pipe(
         Effect.mapError(sweepFailure("loadSnapshot")),
-        Effect.map(([active, archived]) => {
+        Effect.map(([active, archived, commandReadModel]) => {
+          // Shell snapshots intentionally omit deleted rows. The command read
+          // model is still lightweight, includes them, and lets the sweeper
+          // reclaim checkouts whose thread or whole project was deleted.
+          const deletedThreads = commandReadModel.threads.filter(
+            (thread) => thread.deletedAt !== null,
+          );
+          const deletedProjects = commandReadModel.projects.filter(
+            (project) => project.deletedAt !== null,
+          );
+          const shellThreads: ReadonlyArray<WorktreeSweepThread> = [
+            ...active.threads,
+            ...archived.threads,
+          ].map((thread) => ({
+            threadId: thread.id,
+            projectId: thread.projectId,
+            worktreePath: thread.worktreePath,
+            settledAt: thread.settledAt,
+            archivedAt: thread.archivedAt,
+            deletedAt: null,
+            settledOverride: isSettledOverride(thread.settledOverride)
+              ? thread.settledOverride
+              : null,
+            pinnedAt: thread.pinnedAt ?? null,
+            hasLiveWork:
+              thread.session?.activeTurnId != null ||
+              thread.latestTurn?.state === "running" ||
+              thread.backgroundLiveness != null,
+          }));
+          const deletedSweepThreads: ReadonlyArray<WorktreeSweepThread> = deletedThreads.map(
+            (thread) => ({
+              threadId: thread.id,
+              projectId: thread.projectId,
+              worktreePath: thread.worktreePath,
+              settledAt: thread.settledAt,
+              archivedAt: thread.archivedAt,
+              deletedAt: thread.deletedAt,
+              settledOverride: isSettledOverride(thread.settledOverride)
+                ? thread.settledOverride
+                : null,
+              pinnedAt: thread.pinnedAt ?? null,
+              hasLiveWork:
+                thread.session?.activeTurnId != null || thread.latestTurn?.state === "running",
+            }),
+          );
           const threadsById = new Map(
-            [...active.threads, ...archived.threads].map((thread) => [thread.id, thread]),
+            [...shellThreads, ...deletedSweepThreads].map((thread) => [thread.threadId, thread]),
           );
           const projectsById = new Map(
-            [...active.projects, ...archived.projects].map((project) => [project.id, project]),
+            [...active.projects, ...archived.projects, ...deletedProjects].map((project) => [
+              project.id,
+              project,
+            ]),
           );
           return {
             projects: Array.from(projectsById.values(), (project) => ({
@@ -839,17 +889,15 @@ const makeWorktreeSweeper = (options?: WorktreeSweeperLiveOptions) =>
               workspaceRoot: project.workspaceRoot,
             })),
             threads: Array.from(threadsById.values(), (thread) => ({
-              threadId: thread.id,
+              threadId: thread.threadId,
               projectId: thread.projectId,
               worktreePath: thread.worktreePath,
               settledAt: thread.settledAt,
               archivedAt: thread.archivedAt,
-              settledOverride: isSettledOverride(thread.settledOverride)
-                ? thread.settledOverride
-                : null,
+              deletedAt: thread.deletedAt,
+              settledOverride: thread.settledOverride,
               pinnedAt: thread.pinnedAt ?? null,
-              hasLiveWork:
-                thread.session?.activeTurnId != null || thread.backgroundLiveness != null,
+              hasLiveWork: thread.hasLiveWork,
             })),
           };
         }),
