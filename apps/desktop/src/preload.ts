@@ -1,4 +1,5 @@
 import type {
+  DesktopAttentionTarget,
   DesktopBridge,
   DesktopPreviewPointerEvent,
   DesktopPreviewRecordingFrame,
@@ -98,6 +99,20 @@ contextBridge.exposeInMainWorld("desktopBridge", {
       ...(position === undefined ? {} : { position }),
     }),
   openExternal: (url: string) => ipcRenderer.invoke(IpcChannels.OPEN_EXTERNAL_CHANNEL, url),
+  attention: {
+    publish: (state) => ipcRenderer.invoke(IpcChannels.ATTENTION_PUBLISH_CHANNEL, state),
+    onActivate: (listener) => {
+      const wrappedListener = (_event: Electron.IpcRendererEvent, target: unknown) => {
+        if (typeof target !== "object" || target === null) return;
+        listener(target as DesktopAttentionTarget);
+      };
+
+      ipcRenderer.on(IpcChannels.ATTENTION_ACTIVATE_CHANNEL, wrappedListener);
+      return () => {
+        ipcRenderer.removeListener(IpcChannels.ATTENTION_ACTIVATE_CHANNEL, wrappedListener);
+      };
+    },
+  },
   onMenuAction: (listener) => {
     const wrappedListener = (_event: Electron.IpcRendererEvent, action: unknown) => {
       if (typeof action !== "string") return;

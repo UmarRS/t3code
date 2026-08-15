@@ -48,6 +48,7 @@ Docs live in [docs/](./docs).
 
 - [Permission modes](./docs/user/permission-modes.md)
 - [Keyboard shortcuts](./docs/user/keybindings.md)
+- [Notifications and the dock badge](./docs/user/notifications.md)
 - [Link a project to another codebase](./docs/user/linked-projects.md)
 - [Customize a project icon](./docs/user/project-settings.md)
 - [Remote access from another machine](./docs/user/remote-access.md)

@@ -44,6 +44,7 @@ const electronAppLayer = Layer.succeed(ElectronApp.ElectronApp, {
   setAsDefaultProtocolClient: () => Effect.succeed(true),
   setDesktopName: () => Effect.void,
   setDockIcon: () => Effect.void,
+  setBadgeCount: () => Effect.void,
   appendCommandLineSwitch: () => Effect.void,
   onBeforeQuitForUpdate: () => Effect.void,
   removeCommandLineSwitch: () => Effect.void,

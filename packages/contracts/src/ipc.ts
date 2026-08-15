@@ -87,7 +87,7 @@ import type {
   OrchestrationSubscribeThreadInput,
   OrchestrationThreadStreamItem,
 } from "./orchestration.ts";
-import { EnvironmentId } from "./baseSchemas.ts";
+import { EnvironmentId, NonNegativeInt, ThreadId, TrimmedNonEmptyString } from "./baseSchemas.ts";
 import { AuthAccessTokenResult, AuthSessionState, AuthWebSocketTicketResult } from "./auth.ts";
 import { AdvertisedEndpoint } from "./remoteAccess.ts";
 import { ExecutionEnvironmentDescriptor } from "./environment.ts";
@@ -947,6 +947,44 @@ export const DesktopPreviewAutomationWaitForInputSchema = Schema.Struct({
   input: PreviewAutomationWaitForInput,
 });
 
+/** The thread a native notification opens when the user clicks it. Null on a
+ *  rollup alert that stands for several threads at once — clicking one of
+ *  those only brings the window forward. */
+export const DesktopAttentionTargetSchema = Schema.Struct({
+  environmentId: EnvironmentId,
+  threadId: ThreadId,
+});
+export type DesktopAttentionTarget = typeof DesktopAttentionTargetSchema.Type;
+
+/**
+ * One native notification. The renderer composes the copy: it owns the
+ * attention model and the product's wording, and main stays a dumb presenter
+ * that shows the strings and routes the click back.
+ */
+export const DesktopAttentionAlertSchema = Schema.Struct({
+  title: TrimmedNonEmptyString,
+  body: Schema.String,
+  target: Schema.NullOr(DesktopAttentionTargetSchema),
+});
+export type DesktopAttentionAlert = typeof DesktopAttentionAlertSchema.Type;
+
+/**
+ * What the renderer knows about work waiting on the user: `badgeCount` is the
+ * whole standing total (the dock badge is absolute, not incremental) and
+ * `alerts` are only the transitions since the last publish, so republishing
+ * an unchanged state never re-notifies.
+ */
+export const DesktopAttentionStateSchema = Schema.Struct({
+  badgeCount: NonNegativeInt,
+  alerts: Schema.Array(DesktopAttentionAlertSchema),
+});
+export type DesktopAttentionState = typeof DesktopAttentionStateSchema.Type;
+
+export interface DesktopAttentionBridge {
+  publish: (state: DesktopAttentionState) => Promise<void>;
+  onActivate: (listener: (target: DesktopAttentionTarget) => void) => () => void;
+}
+
 export interface DesktopBridge {
   getAppBranding: () => DesktopAppBranding | null;
   // One bootstrap per pool instance currently registered with bootstrap
@@ -1012,6 +1050,12 @@ export interface DesktopBridge {
    * Electron desktop build; web builds have `preview === undefined`.
    */
   preview?: DesktopPreviewBridge;
+  /**
+   * Dock badge and native notifications for threads waiting on the user.
+   * Desktop-only: a browser client leaves it undefined and simply keeps its
+   * in-app indicators.
+   */
+  attention?: DesktopAttentionBridge;
 }
 
 export interface DesktopPreviewBridge {

@@ -17,6 +17,7 @@ const {
   removeSwitchMock,
   setAboutPanelOptionsMock,
   setAppUserModelIdMock,
+  setBadgeCountMock,
   setAsDefaultProtocolClientMock,
   setDesktopNameMock,
   setDockIconMock,
@@ -38,6 +39,7 @@ const {
   removeSwitchMock: vi.fn(),
   setAboutPanelOptionsMock: vi.fn(),
   setAppUserModelIdMock: vi.fn(),
+  setBadgeCountMock: vi.fn(),
   setAsDefaultProtocolClientMock: vi.fn(() => true),
   setDesktopNameMock: vi.fn(),
   setDockIconMock: vi.fn(),
@@ -72,6 +74,7 @@ vi.mock("electron", () => ({
     setAboutPanelOptions: setAboutPanelOptionsMock,
     setAsDefaultProtocolClient: setAsDefaultProtocolClientMock,
     setAppUserModelId: setAppUserModelIdMock,
+    setBadgeCount: setBadgeCountMock,
     setDesktopName: setDesktopNameMock,
     setName: setNameMock,
     setPath: setPathMock,
@@ -93,6 +96,7 @@ describe("ElectronApp", () => {
     relaunchMock.mockClear();
     removeListenerMock.mockClear();
     removeSwitchMock.mockClear();
+    setBadgeCountMock.mockClear();
     setPathMock.mockClear();
   });
 
@@ -189,6 +193,16 @@ describe("ElectronApp", () => {
       yield* electronApp.removeCommandLineSwitch("password-store");
 
       assert.deepEqual(removeSwitchMock.mock.calls, [["password-store"]]);
+    }).pipe(Effect.provide(ElectronApp.layer)),
+  );
+
+  it.effect("sets the dock badge count through the service", () =>
+    Effect.gen(function* () {
+      const electronApp = yield* ElectronApp.ElectronApp;
+      yield* electronApp.setBadgeCount(3);
+      yield* electronApp.setBadgeCount(0);
+
+      assert.deepEqual(setBadgeCountMock.mock.calls, [[3], [0]]);
     }).pipe(Effect.provide(ElectronApp.layer)),
   );
 });
