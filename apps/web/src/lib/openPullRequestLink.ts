@@ -41,16 +41,34 @@ export async function openPullRequestLink(
 }
 
 /**
+ * Returns true when the click should be left to the browser's/OS's native
+ * handling (e.g. cmd/ctrl+click to open in a new tab) rather than intercepted.
+ */
+export function shouldOpenPullRequestExternally(
+  event: Pick<MouseEvent<HTMLElement>, "metaKey" | "ctrlKey">,
+): boolean {
+  return event.metaKey || event.ctrlKey;
+}
+
+/**
  * Returns a click handler that opens a pull request URL in the system browser.
  *
- * Stops event propagation/default so activating the link does not also trigger
- * an enclosing row or trigger (e.g. opening the branch dropdown), and surfaces a
- * toast when the local API is unavailable or the open fails.
+ * Stops event propagation so activating the link does not also trigger an
+ * enclosing row or trigger (e.g. opening the branch dropdown), and surfaces a
+ * toast when the local API is unavailable or the open fails. A real anchor
+ * already knows how to handle cmd/ctrl+click and middle-click, so those are
+ * left alone; a plain click is intercepted and routed through openExternal.
  */
 export function useOpenPrLink() {
   return useCallback((event: MouseEvent<HTMLElement>, prUrl: string) => {
-    event.preventDefault();
     event.stopPropagation();
+
+    const openInBrowser = shouldOpenPullRequestExternally(event);
+    const isAnchor =
+      event.currentTarget instanceof HTMLAnchorElement && event.currentTarget.href.length > 0;
+    if (openInBrowser && isAnchor) return;
+
+    event.preventDefault();
 
     const api = readLocalApi();
     if (!api) {
