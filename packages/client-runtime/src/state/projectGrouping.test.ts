@@ -89,7 +89,7 @@ describe("buildProjectGroups", () => {
     ];
 
     expect(buildProjectGroups({ projects, settings: settings("repository") })[0]?.label).toBe(
-      "T3 Code",
+      "Atlas",
     );
   });
 
