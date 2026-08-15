@@ -7,7 +7,6 @@ import {
   ThreadId,
   type LinkedProjectDelegationStatus,
   type OrchestrationThread,
-  type ProjectId,
 } from "@t3tools/contracts";
 import * as Crypto from "effect/Crypto";
 import * as DateTime from "effect/DateTime";
@@ -48,7 +47,7 @@ const closingMessage = (thread: OrchestrationThread): string | undefined => {
   const assistantMessageId = thread.latestTurn?.assistantMessageId ?? null;
   const message =
     assistantMessageId === null
-      ? [...thread.messages].reverse().find((candidate) => candidate.role === "assistant")
+      ? thread.messages.toReversed().find((candidate) => candidate.role === "assistant")
       : thread.messages.find((candidate) => candidate.id === assistantMessageId);
   const text = message?.text.trim();
   return text === undefined || text.length === 0 ? undefined : text;

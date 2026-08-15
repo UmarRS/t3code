@@ -1988,6 +1988,10 @@ export default function Sidebar() {
     const visible = threads.filter(
       (thread) =>
         thread.archivedAt === null &&
+        // Companion threads belong to the conversation that spawned them, not
+        // to the linked project's own list. They are reachable from the
+        // delegation row in their parent's timeline.
+        (thread.parentThreadId ?? null) === null &&
         (scopedProjectKeys === null ||
           scopedProjectKeys.has(`${thread.environmentId}:${thread.projectId}`)),
     );
