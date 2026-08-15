@@ -246,9 +246,9 @@ export interface RootRouteChildren {
   PairRoute: typeof PairRoute
   SettingsRoute: typeof SettingsRouteWithChildren
   UsageRoute: typeof UsageRoute
+  ProjectsProjectKeyRoute: typeof ProjectsProjectKeyRoute
   IssuesEnvironmentIdProjectIdRoute: typeof IssuesEnvironmentIdProjectIdRoute
   IssuesEnvironmentIdProjectIdReviewRoute: typeof IssuesEnvironmentIdProjectIdReviewRoute
-  ProjectsProjectKeyRoute: typeof ProjectsProjectKeyRoute
 }
 
 declare module '@tanstack/react-router' {
@@ -427,10 +427,10 @@ const rootRouteChildren: RootRouteChildren = {
   PairRoute: PairRoute,
   SettingsRoute: SettingsRouteWithChildren,
   UsageRoute: UsageRoute,
+  ProjectsProjectKeyRoute: ProjectsProjectKeyRoute,
   IssuesEnvironmentIdProjectIdRoute: IssuesEnvironmentIdProjectIdRoute,
   IssuesEnvironmentIdProjectIdReviewRoute:
     IssuesEnvironmentIdProjectIdReviewRoute,
-  ProjectsProjectKeyRoute: ProjectsProjectKeyRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)
