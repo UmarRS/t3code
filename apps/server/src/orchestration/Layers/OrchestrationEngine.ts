@@ -69,6 +69,7 @@ function commandToAggregateRef(command: OrchestrationCommand): {
     case "project.link.remove":
     case "project.autonomous.enable":
     case "project.autonomous.disable":
+    case "project.autonomous.schedule.set":
       return {
         aggregateKind: "project",
         aggregateId: command.projectId,

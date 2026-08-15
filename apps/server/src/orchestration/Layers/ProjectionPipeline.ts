@@ -504,6 +504,7 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
             defaultModelSelection: event.payload.defaultModelSelection,
             defaultThreadEnvMode: null,
             faviconPath: event.payload.faviconPath ?? null,
+            autonomousSchedule: [],
             scripts: event.payload.scripts,
             links: [],
             createdAt: event.payload.createdAt,
@@ -616,6 +617,21 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
             autonomousStartedAt: null,
             autonomousFinishedAt: event.payload.autonomousFinishedAt,
             autonomousFinishedReason: event.payload.reason,
+            updatedAt: event.payload.updatedAt,
+          });
+          return;
+        }
+
+        case "project.autonomous-schedule-set": {
+          const existingRow = yield* projectionProjectRepository.getById({
+            projectId: event.payload.projectId,
+          });
+          if (Option.isNone(existingRow)) {
+            return;
+          }
+          yield* projectionProjectRepository.upsert({
+            ...existingRow.value,
+            autonomousSchedule: event.payload.schedule,
             updatedAt: event.payload.updatedAt,
           });
           return;

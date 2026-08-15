@@ -54,6 +54,7 @@ import {
   IssueReviewStartedPayload,
   ProjectAutonomousDisabledPayload,
   ProjectAutonomousEnabledPayload,
+  ProjectAutonomousScheduleSetPayload,
 } from "./Schemas.ts";
 
 type ThreadPatch = Partial<Omit<OrchestrationThread, "id" | "projectId">>;
@@ -1081,6 +1082,27 @@ export function projectEvent(
                   autonomousStartedAt: null,
                   autonomousFinishedAt: payload.autonomousFinishedAt,
                   autonomousFinishedReason: payload.reason,
+                  updatedAt: payload.updatedAt,
+                }
+              : project,
+          ),
+        })),
+      );
+
+    case "project.autonomous-schedule-set":
+      return decodeForEvent(
+        ProjectAutonomousScheduleSetPayload,
+        event.payload,
+        event.type,
+        "payload",
+      ).pipe(
+        Effect.map((payload) => ({
+          ...nextBase,
+          projects: nextBase.projects.map((project) =>
+            project.id === payload.projectId
+              ? {
+                  ...project,
+                  autonomousSchedule: payload.schedule,
                   updatedAt: payload.updatedAt,
                 }
               : project,

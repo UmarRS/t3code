@@ -18,6 +18,8 @@ import {
   CheckpointRef,
   IsoDateTime,
   IssueId,
+  IssueReviewComplexityTier,
+  ModelSelection,
   NonNegativeInt,
   ProjectId,
   ThreadId,
@@ -84,6 +86,10 @@ export const AutonomousReviewStartedReceipt = Schema.Struct({
   type: Schema.Literal("autonomous.review.started"),
   issueId: IssueId,
   reviewerThreadId: ThreadId,
+  /** The classified complexity of the work under review. */
+  complexityTier: IssueReviewComplexityTier,
+  /** The reviewer model the tier resolved to, after any upward fallback. */
+  modelSelection: ModelSelection,
   createdAt: IsoDateTime,
 });
 export type AutonomousReviewStartedReceipt = typeof AutonomousReviewStartedReceipt.Type;
@@ -103,6 +109,18 @@ export const AutonomousRunCompletedReceipt = Schema.Struct({
 });
 export type AutonomousRunCompletedReceipt = typeof AutonomousRunCompletedReceipt.Type;
 
+/**
+ * A scheduled slot that started a run. Published only when the enable actually
+ * went out, so a test can name the moment without watching the clock.
+ */
+export const AutonomousScheduleFiredReceipt = Schema.Struct({
+  type: Schema.Literal("autonomous.schedule.fired"),
+  projectId: ProjectId,
+  entryId: Schema.String,
+  createdAt: IsoDateTime,
+});
+export type AutonomousScheduleFiredReceipt = typeof AutonomousScheduleFiredReceipt.Type;
+
 export const OrchestrationRuntimeReceipt = Schema.Union([
   CheckpointBaselineCapturedReceipt,
   CheckpointDiffFinalizedReceipt,
@@ -112,6 +130,7 @@ export const OrchestrationRuntimeReceipt = Schema.Union([
   AutonomousReviewStartedReceipt,
   AutonomousIssueFlaggedReceipt,
   AutonomousRunCompletedReceipt,
+  AutonomousScheduleFiredReceipt,
 ]);
 export type OrchestrationRuntimeReceipt = typeof OrchestrationRuntimeReceipt.Type;
 

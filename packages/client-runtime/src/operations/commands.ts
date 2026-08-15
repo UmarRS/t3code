@@ -38,6 +38,7 @@ export type DisableProjectAutonomousInput = Omit<
   CommandInput<"project.autonomous.disable">,
   "reason"
 >;
+export type SetProjectAutonomousScheduleInput = CommandInput<"project.autonomous.schedule.set">;
 export type CreateThreadInput = CommandInput<"thread.create">;
 export type DeleteThreadInput = CommandInput<"thread.delete">;
 export type ArchiveThreadInput = CommandInput<"thread.archive">;
@@ -469,6 +470,19 @@ export const disableProjectAutonomous: (input: DisableProjectAutonomousInput) =>
       commandId: yield* commandId(input),
     });
   });
+
+/** Replace a project's scheduled run times. The list is sent whole. */
+export const setProjectAutonomousSchedule: (
+  input: SetProjectAutonomousScheduleInput,
+) => CommandEffect = Effect.fn("EnvironmentCommands.setProjectAutonomousSchedule")(
+  function* (input) {
+    return yield* dispatch({
+      ...input,
+      type: "project.autonomous.schedule.set",
+      commandId: yield* commandId(input),
+    });
+  },
+);
 
 export const clearIssueAttention: (input: ClearIssueAttentionInput) => CommandEffect = Effect.fn(
   "EnvironmentCommands.clearIssueAttention",

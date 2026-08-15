@@ -42,6 +42,7 @@ import {
   IssueReviewRecordedPayload as ContractsIssueReviewRecordedPayloadSchema,
   ProjectAutonomousEnabledPayload as ContractsProjectAutonomousEnabledPayloadSchema,
   ProjectAutonomousDisabledPayload as ContractsProjectAutonomousDisabledPayloadSchema,
+  ProjectAutonomousScheduleSetPayload as ContractsProjectAutonomousScheduleSetPayloadSchema,
 } from "@t3tools/contracts";
 
 // Server-internal alias surface, backed by contract schemas as the source of truth.
@@ -95,3 +96,5 @@ export const IssueReviewStartedPayload = ContractsIssueReviewStartedPayloadSchem
 export const IssueReviewRecordedPayload = ContractsIssueReviewRecordedPayloadSchema;
 export const ProjectAutonomousEnabledPayload = ContractsProjectAutonomousEnabledPayloadSchema;
 export const ProjectAutonomousDisabledPayload = ContractsProjectAutonomousDisabledPayloadSchema;
+export const ProjectAutonomousScheduleSetPayload =
+  ContractsProjectAutonomousScheduleSetPayloadSchema;

@@ -8,12 +8,12 @@ import * as NodeSqliteClient from "../NodeSqliteClient.ts";
 
 const layer = it.layer(Layer.mergeAll(NodeSqliteClient.layerMemory()));
 
-layer("045_ProjectionProjectLinks", (it) => {
+layer("046_ProjectionProjectLinks", (it) => {
   it.effect("adds the project links column to existing project projections", () =>
     Effect.gen(function* () {
       const sql = yield* SqlClient.SqlClient;
 
-      yield* runMigrations({ toMigrationInclusive: 44 });
+      yield* runMigrations({ toMigrationInclusive: 45 });
       yield* sql`
         INSERT INTO projection_projects (
           project_id,
@@ -37,7 +37,7 @@ layer("045_ProjectionProjectLinks", (it) => {
         )
       `;
 
-      yield* runMigrations({ toMigrationInclusive: 45 });
+      yield* runMigrations({ toMigrationInclusive: 46 });
 
       const columns = yield* sql<{ readonly name: string; readonly notnull: number }>`
         PRAGMA table_info(projection_projects)
@@ -56,8 +56,8 @@ layer("045_ProjectionProjectLinks", (it) => {
 
   it.effect("is idempotent when the column already exists", () =>
     Effect.gen(function* () {
-      yield* runMigrations({ toMigrationInclusive: 45 });
-      yield* runMigrations({ toMigrationInclusive: 45 });
+      yield* runMigrations({ toMigrationInclusive: 46 });
+      yield* runMigrations({ toMigrationInclusive: 46 });
     }),
   );
 });

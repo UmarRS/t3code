@@ -9,6 +9,7 @@
 import {
   IsoDateTime,
   ModelSelection,
+  ProjectAutonomousSchedule,
   ProjectId,
   ProjectLink,
   ProjectScript,
@@ -33,6 +34,7 @@ export const ProjectionProject = Schema.Struct({
   autonomousFinishedReason: Schema.optional(
     Schema.NullOr(Schema.Literals(["completed", "disabled"])),
   ),
+  autonomousSchedule: ProjectAutonomousSchedule,
   scripts: Schema.Array(ProjectScript),
   // Only the link edges this project owns. Mirrors are derived on read.
   links: Schema.Array(ProjectLink),

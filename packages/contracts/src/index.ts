@@ -19,6 +19,7 @@ export * from "./git.ts";
 export * from "./vcs.ts";
 export * from "./sourceControl.ts";
 export * from "./issues.ts";
+export * from "./autonomousSchedule.ts";
 export * from "./orchestration.ts";
 export * from "./threadScope.ts";
 export * from "./projectLink.ts";

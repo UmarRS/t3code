@@ -25,6 +25,7 @@ import {
   buildBranchNamePrompt,
   buildCommitMessagePrompt,
   buildPrContentPrompt,
+  buildReviewComplexityPrompt,
   buildThreadTitlePrompt,
 } from "./TextGenerationPrompts.ts";
 import {
@@ -101,7 +102,8 @@ export const makeCodexTextGeneration = Effect.fn("makeCodexTextGeneration")(func
       | "generateCommitMessage"
       | "generatePrContent"
       | "generateBranchName"
-      | "generateThreadTitle",
+      | "generateThreadTitle"
+      | "classifyReviewComplexity",
     value: unknown,
   ): Effect.Effect<string, TextGenerationError> =>
     encodeJsonString(value).pipe(
@@ -162,7 +164,8 @@ export const makeCodexTextGeneration = Effect.fn("makeCodexTextGeneration")(func
       | "generateCommitMessage"
       | "generatePrContent"
       | "generateBranchName"
-      | "generateThreadTitle";
+      | "generateThreadTitle"
+      | "classifyReviewComplexity";
     cwd: string;
     prompt: string;
     outputSchemaJson: S;
@@ -405,10 +408,30 @@ export const makeCodexTextGeneration = Effect.fn("makeCodexTextGeneration")(func
       } satisfies TextGeneration.ThreadTitleGenerationResult;
     });
 
+  const classifyReviewComplexity: TextGeneration.TextGeneration["Service"]["classifyReviewComplexity"] =
+    Effect.fn("CodexTextGeneration.classifyReviewComplexity")(function* (input) {
+      const { prompt, outputSchema } = buildReviewComplexityPrompt({
+        issueTitle: input.issueTitle,
+        issueDescription: input.issueDescription,
+        diffSummary: input.diffSummary,
+      });
+
+      const generated = yield* runCodexJson({
+        operation: "classifyReviewComplexity",
+        cwd: input.cwd,
+        prompt,
+        outputSchemaJson: outputSchema,
+        modelSelection: input.modelSelection,
+      });
+
+      return { tier: generated.tier };
+    });
+
   return {
     generateCommitMessage,
     generatePrContent,
     generateBranchName,
     generateThreadTitle,
+    classifyReviewComplexity,
   } satisfies TextGeneration.TextGeneration["Service"];
 });

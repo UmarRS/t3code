@@ -57,7 +57,8 @@ import Migration0041 from "./Migrations/041_ProjectionThreadsScope.ts";
 import Migration0042 from "./Migrations/042_ProjectionIssues.ts";
 import Migration0043 from "./Migrations/043_AutonomousMode.ts";
 import Migration0044 from "./Migrations/044_IssueModelSelection.ts";
-import Migration0045 from "./Migrations/045_ProjectionProjectLinks.ts";
+import Migration0045 from "./Migrations/045_ProjectionProjectsAutonomousSchedule.ts";
+import Migration0046 from "./Migrations/046_ProjectionProjectLinks.ts";
 
 /**
  * Migration loader with all migrations defined inline.
@@ -114,7 +115,8 @@ export const migrationEntries = [
   [42, "ProjectionIssues", Migration0042],
   [43, "AutonomousMode", Migration0043],
   [44, "IssueModelSelection", Migration0044],
-  [45, "ProjectionProjectLinks", Migration0045],
+  [45, "ProjectionProjectsAutonomousSchedule", Migration0045],
+  [46, "ProjectionProjectLinks", Migration0046],
 ] as const;
 
 export const migrationManifest = migrationEntries.map(([id, name]) => [id, name] as const);
