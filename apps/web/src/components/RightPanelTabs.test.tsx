@@ -74,17 +74,13 @@ function renderTabs(first: DesktopPreviewFavicon | null, second?: DesktopPreview
       onCopyFilePath={() => undefined}
       onAddBrowser={() => undefined}
       onAddTerminal={() => undefined}
-      onAddPullRequest={() => undefined}
       onAddDiff={() => undefined}
       onAddFiles={() => undefined}
       onAddAgents={() => undefined}
       liveAgentCount={0}
       browserAvailable
-      terminalAvailable={false}
       diffAvailable={false}
       filesAvailable={false}
-      pullRequestAvailable={false}
-      agentsAvailable={false}
     >
       <div>content</div>
     </RightPanelTabs>,
