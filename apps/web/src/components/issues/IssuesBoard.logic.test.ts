@@ -4,6 +4,7 @@ import { describe, expect, it } from "vite-plus/test";
 import {
   buildIssueBoardColumns,
   buildIssueDecompositionPrompt,
+  countDelegationTargetProjects,
   describeIssueBlockers,
   filterIssueDependencyCandidates,
   indexIssuesById,
@@ -11,8 +12,10 @@ import {
   ISSUE_STATUS_COLUMNS,
   issuePriorityRank,
   resolveIssueBlockers,
+  resolveIssueDelegationLinks,
   resolveIssueStartDisabledReason,
   type BoardIssue,
+  type CrossProjectIssueView,
 } from "./IssuesBoard.logic";
 
 function issue(
@@ -236,5 +239,107 @@ describe("buildIssueDecompositionPrompt", () => {
       prompt.indexOf("t3-issues"),
     );
     expect(prompt).toContain("codex: gpt-5.6");
+  });
+});
+
+describe("resolveIssueDelegationLinks", () => {
+  const linked = (
+    id: string,
+    overrides: Partial<CrossProjectIssueView> = {},
+  ): CrossProjectIssueView => ({
+    id: IssueId.make(id),
+    projectId: "project-a",
+    threadId: null,
+    ...overrides,
+  });
+
+  const projectTitleById = new Map([
+    ["project-a", "Web"],
+    ["project-b", "API"],
+  ]);
+
+  it("names the project an incoming delegation came from", () => {
+    const issue = linked("filed-here", {
+      projectId: "project-b",
+      delegatedFromThreadId: "thread-1",
+    });
+    const links = resolveIssueDelegationLinks({
+      issue,
+      environmentIssues: [issue],
+      projectIdByThreadId: new Map([["thread-1", "project-a"]]),
+      projectTitleById,
+    });
+    expect(links.origin).toEqual({
+      threadId: "thread-1",
+      projectId: "project-a",
+      projectTitle: "Web",
+    });
+    expect(links.targets).toEqual([]);
+  });
+
+  it("keeps the incoming link when the origin thread is outside the snapshot", () => {
+    const issue = linked("filed-here", { delegatedFromThreadId: "thread-gone" });
+    const links = resolveIssueDelegationLinks({
+      issue,
+      environmentIssues: [issue],
+      projectIdByThreadId: new Map(),
+      projectTitleById,
+    });
+    expect(links.origin).toEqual({
+      threadId: "thread-gone",
+      projectId: null,
+      projectTitle: null,
+    });
+  });
+
+  it("finds the issues this one's worker filed on other boards", () => {
+    const issue = linked("sender", { threadId: "thread-1" });
+    const target = linked("receiver", {
+      projectId: "project-b",
+      delegatedFromThreadId: "thread-1",
+    });
+    const links = resolveIssueDelegationLinks({
+      issue,
+      environmentIssues: [issue, target, linked("unrelated", { projectId: "project-b" })],
+      projectIdByThreadId: new Map(),
+      projectTitleById,
+    });
+    expect(links.targets).toEqual([
+      { issueId: target.id, projectId: "project-b", projectTitle: "API" },
+    ]);
+    expect(links.origin).toBeNull();
+  });
+
+  it("ignores delegations that stayed on the same board", () => {
+    const issue = linked("sender", { threadId: "thread-1" });
+    const sameBoard = linked("same", { delegatedFromThreadId: "thread-1" });
+    const links = resolveIssueDelegationLinks({
+      issue,
+      environmentIssues: [issue, sameBoard],
+      projectIdByThreadId: new Map(),
+      projectTitleById,
+    });
+    expect(links.targets).toEqual([]);
+  });
+
+  it("reports no links for an ordinary issue", () => {
+    const issue = linked("plain", { threadId: "thread-1" });
+    const links = resolveIssueDelegationLinks({
+      issue,
+      environmentIssues: [issue],
+      projectIdByThreadId: new Map(),
+      projectTitleById,
+    });
+    expect(links).toEqual({ origin: null, targets: [] });
+  });
+
+  it("counts the boards the targets span", () => {
+    expect(
+      countDelegationTargetProjects([
+        { issueId: IssueId.make("a"), projectId: "project-b", projectTitle: "API" },
+        { issueId: IssueId.make("b"), projectId: "project-b", projectTitle: "API" },
+        { issueId: IssueId.make("c"), projectId: "project-c", projectTitle: "Docs" },
+      ]),
+    ).toBe(2);
   });
 });

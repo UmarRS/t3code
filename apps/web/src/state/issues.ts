@@ -28,6 +28,20 @@ export function useProjectIssues(ref: ScopedProjectRef | null): ReadonlyArray<Or
   return useAtomValue(ref === null ? EMPTY_ISSUES_ATOM : environmentIssues.projectIssuesAtom(ref));
 }
 
+/**
+ * Every issue in one environment, across its projects. The board needs the
+ * other projects' rows to see delegation links reaching into or out of it.
+ */
+export function useEnvironmentIssues(
+  environmentId: EnvironmentId | null,
+): ReadonlyArray<OrchestrationIssue> {
+  return useAtomValue(
+    environmentId === null
+      ? EMPTY_ISSUES_ATOM
+      : environmentIssues.environmentIssuesAtom(environmentId),
+  );
+}
+
 export function readEnvironmentIssues(
   environmentId: EnvironmentId,
 ): ReadonlyArray<OrchestrationIssue> {

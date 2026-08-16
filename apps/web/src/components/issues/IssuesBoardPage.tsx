@@ -16,6 +16,8 @@ import {
 } from "@t3tools/contracts";
 import { useNavigate } from "@tanstack/react-router";
 import {
+  ArrowDownLeftIcon,
+  ArrowUpRightIcon,
   BotIcon,
   ChevronDownIcon,
   CircleDashedIcon,
@@ -38,7 +40,7 @@ import { cn, newMessageId, newThreadId } from "~/lib/utils";
 import { useComposerDraftStore } from "~/composerDraftStore";
 import { resolveDefaultProviderModelSelection } from "~/providerInstances";
 import { useProject, useProjects, useThreadShells } from "~/state/entities";
-import { issueEnvironment, useProjectIssues } from "~/state/issues";
+import { issueEnvironment, useEnvironmentIssues, useProjectIssues } from "~/state/issues";
 import { useEnvironmentQuery } from "~/state/query";
 import { primaryServerProvidersAtom, primaryServerSettingsAtom } from "~/state/server";
 import { threadEnvironment } from "~/state/threads";
@@ -85,12 +87,16 @@ import { useIssueAttentionActions } from "./useIssueAttentionActions";
 import {
   buildIssueBoardColumns,
   buildIssueDecompositionPrompt,
+  countDelegationTargetProjects,
+  describeDelegationTargets,
   describeIssueBlockers,
   indexIssuesById,
   ISSUE_PRIORITY_LABEL,
   ISSUE_STATUS_COLUMNS,
   resolveIssueBlockers,
+  resolveIssueDelegationLinks,
   resolveIssueStartDisabledReason,
+  type IssueDelegationLinks,
 } from "./IssuesBoard.logic";
 
 const PRIORITY_DOT_CLASS: Record<NonNullable<OrchestrationIssue["priority"]>, string> = {
@@ -148,6 +154,28 @@ export function IssuesBoardPage({
 
   const columns = useMemo(() => buildIssueBoardColumns(issues), [issues]);
   const issuesById = useMemo(() => indexIssuesById(issues), [issues]);
+
+  // Delegation reaches across boards, so the far side is resolved from the
+  // whole environment rather than this project's slice.
+  const environmentIssues = useEnvironmentIssues(environmentId);
+  const projectIdByThreadId = useMemo(
+    () =>
+      new Map(
+        threadShells
+          .filter((thread) => thread.environmentId === environmentId)
+          .map((thread) => [thread.id as string, thread.projectId as string]),
+      ),
+    [environmentId, threadShells],
+  );
+  const projectTitleById = useMemo(
+    () =>
+      new Map(
+        projects
+          .filter((entry) => entry.environmentId === environmentId)
+          .map((entry) => [entry.id as string, entry.title]),
+      ),
+    [environmentId, projects],
+  );
 
   const reportFailure = useCallback((title: string, failure: unknown) => {
     const error = squashAtomCommandFailure(
@@ -344,6 +372,33 @@ export function IssuesBoardPage({
       await openThreadById(issue.threadId);
     },
     [openThreadById],
+  );
+
+  /** Jump to the thread that delegated this issue here, wherever it lives. */
+  const openDelegationOrigin = useCallback(
+    async (origin: IssueDelegationLinks["origin"]) => {
+      if (origin === null) return;
+      await openThreadById(origin.threadId as ThreadId);
+    },
+    [openThreadById],
+  );
+
+  /**
+   * Jump to the board holding the delegated work. Several targets on one board
+   * still resolve to that board; targets spread over more than one leave the
+   * choice to the user rather than guessing, so the chip only navigates when
+   * there is one destination.
+   */
+  const openDelegationTargets = useCallback(
+    async (targets: IssueDelegationLinks["targets"]) => {
+      const [first] = targets;
+      if (first === undefined || countDelegationTargetProjects(targets) !== 1) return;
+      await navigate({
+        to: "/issues/$environmentId/$projectId",
+        params: { environmentId, projectId: first.projectId as ProjectId },
+      });
+    },
+    [environmentId, navigate],
   );
 
   // Tabs are routes so the palette, the finished-run link, and a bookmark all
@@ -554,10 +609,23 @@ export function IssuesBoardPage({
                                   thread.environmentId === environmentId &&
                                   thread.id === issue.threadId,
                               ) ?? null);
+                        const delegationLinks = resolveIssueDelegationLinks({
+                          issue,
+                          environmentIssues,
+                          projectIdByThreadId,
+                          projectTitleById,
+                        });
                         return (
                           <li key={issue.id}>
                             <IssueCard
                               issue={issue}
+                              delegationLinks={delegationLinks}
+                              onOpenDelegationOrigin={() =>
+                                void openDelegationOrigin(delegationLinks.origin)
+                              }
+                              onOpenDelegationTargets={() =>
+                                void openDelegationTargets(delegationLinks.targets)
+                              }
                               blockedBy={
                                 blockers.length === 0 ? null : describeIssueBlockers(blockers)
                               }
@@ -642,8 +710,14 @@ function IssueCard({
   onDelete,
   onClearAttention,
   onRetryAttention,
+  delegationLinks,
+  onOpenDelegationOrigin,
+  onOpenDelegationTargets,
 }: {
   readonly issue: OrchestrationIssue;
+  readonly delegationLinks: IssueDelegationLinks;
+  readonly onOpenDelegationOrigin: () => void;
+  readonly onOpenDelegationTargets: () => void;
   readonly blockedBy: string | null;
   readonly startDisabledReason: string | null;
   readonly starting: boolean;
@@ -824,6 +898,66 @@ function IssueCard({
               }
             />
             <TooltipPopup side="bottom">Waiting on {blockedBy}</TooltipPopup>
+          </Tooltip>
+        ) : null}
+
+        {delegationLinks.origin !== null ? (
+          <Tooltip>
+            <TooltipTrigger
+              render={
+                <Badge
+                  render={<button type="button" onClick={onOpenDelegationOrigin} />}
+                  variant="outline"
+                  size="sm"
+                  className="max-w-full cursor-pointer gap-1 text-info-foreground"
+                >
+                  <ArrowDownLeftIcon className="size-3 shrink-0" />
+                  <span className="truncate">
+                    From {delegationLinks.origin.projectTitle ?? "another project"}
+                  </span>
+                </Badge>
+              }
+            />
+            <TooltipPopup side="bottom">
+              {delegationLinks.origin.projectTitle === null
+                ? "An agent in a linked project delegated this work here. Open the thread that sent it."
+                : `An agent in ${delegationLinks.origin.projectTitle} delegated this work here. Open the thread that sent it.`}
+            </TooltipPopup>
+          </Tooltip>
+        ) : null}
+
+        {delegationLinks.targets.length > 0 ? (
+          <Tooltip>
+            <TooltipTrigger
+              render={
+                <Badge
+                  render={<button type="button" onClick={onOpenDelegationTargets} />}
+                  variant="outline"
+                  size="sm"
+                  className={cn(
+                    "max-w-full gap-1 text-info-foreground",
+                    countDelegationTargetProjects(delegationLinks.targets) === 1 &&
+                      "cursor-pointer",
+                  )}
+                >
+                  <ArrowUpRightIcon className="size-3 shrink-0" />
+                  <span className="truncate">
+                    {describeDelegationTargets(delegationLinks.targets)}
+                  </span>
+                </Badge>
+              }
+            />
+            <TooltipPopup side="bottom">
+              <span className="block max-w-64 text-left">
+                This issue's agent delegated work to{" "}
+                {delegationLinks.targets
+                  .map((target) => target.projectTitle ?? "another project")
+                  .filter((title, index, all) => all.indexOf(title) === index)
+                  .join(", ")}
+                . It is tracked as {delegationLinks.targets.length === 1 ? "an issue" : "issues"} on
+                that board.
+              </span>
+            </TooltipPopup>
           </Tooltip>
         ) : null}
 

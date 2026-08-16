@@ -204,3 +204,113 @@ export function buildIssueDecompositionPrompt(input: {
     "",
   ].join("\n");
 }
+
+/**
+ * Cross-project links for one issue.
+ *
+ * Delegation crosses boards in one direction — a worker in one project hands a
+ * task to another, and the task lands there as an issue carrying the thread it
+ * came from — so each side sees the other differently. The receiving issue
+ * knows its origin thread outright; the sending issue has to be found by the
+ * issues that name its thread. Both are worth a mark on the card: a board that
+ * shows neither makes delegated work look like it appeared from nowhere.
+ */
+
+export interface CrossProjectIssueView {
+  readonly id: IssueId;
+  readonly projectId: string;
+  readonly threadId: string | null;
+  readonly delegatedFromThreadId?: string | null | undefined;
+}
+
+export interface IssueDelegationOrigin {
+  /** The thread that delegated the work, in whichever project owns it. */
+  readonly threadId: string;
+  /** Null when the origin thread is not in the loaded snapshot. */
+  readonly projectId: string | null;
+  readonly projectTitle: string | null;
+}
+
+export interface IssueDelegationTarget {
+  readonly issueId: IssueId;
+  readonly projectId: string;
+  readonly projectTitle: string | null;
+}
+
+export interface IssueDelegationLinks {
+  /** Set when this issue was filed here by another project's agent. */
+  readonly origin: IssueDelegationOrigin | null;
+  /** Issues this one's worker filed on other boards, in discovery order. */
+  readonly targets: ReadonlyArray<IssueDelegationTarget>;
+}
+
+const NO_DELEGATION_LINKS: IssueDelegationLinks = { origin: null, targets: [] };
+
+export function resolveIssueDelegationLinks(input: {
+  readonly issue: CrossProjectIssueView;
+  /** Every issue in the environment, so the other board's rows are visible. */
+  readonly environmentIssues: ReadonlyArray<CrossProjectIssueView>;
+  /** Project of a thread id, for naming the far side of an incoming link. */
+  readonly projectIdByThreadId: ReadonlyMap<string, string>;
+  readonly projectTitleById: ReadonlyMap<string, string>;
+}): IssueDelegationLinks {
+  const { issue } = input;
+  const originThreadId = issue.delegatedFromThreadId ?? null;
+  const origin =
+    originThreadId === null
+      ? null
+      : ((): IssueDelegationOrigin => {
+          const projectId = input.projectIdByThreadId.get(originThreadId) ?? null;
+          return {
+            threadId: originThreadId,
+            projectId,
+            projectTitle:
+              projectId === null ? null : (input.projectTitleById.get(projectId) ?? null),
+          };
+        })();
+
+  // Only a started issue can have delegated anything, and an issue never
+  // counts as its own target — a delegation that stayed on this board is
+  // ordinary work, not a link between two of them.
+  const targets =
+    issue.threadId === null
+      ? []
+      : input.environmentIssues.flatMap((candidate) =>
+          candidate.delegatedFromThreadId === issue.threadId &&
+          candidate.projectId !== issue.projectId
+            ? [
+                {
+                  issueId: candidate.id,
+                  projectId: candidate.projectId,
+                  projectTitle: input.projectTitleById.get(candidate.projectId) ?? null,
+                },
+              ]
+            : [],
+        );
+
+  return origin === null && targets.length === 0 ? NO_DELEGATION_LINKS : { origin, targets };
+}
+
+/** How many distinct boards the targets span, for a one-glance card label. */
+export function countDelegationTargetProjects(
+  targets: ReadonlyArray<IssueDelegationTarget>,
+): number {
+  return new Set(targets.map((target) => target.projectId)).size;
+}
+
+/**
+ * The card label for outgoing links. One board is worth naming; several are
+ * only worth counting, because the chip has a line to say it in.
+ */
+export function describeDelegationTargets(targets: ReadonlyArray<IssueDelegationTarget>): string {
+  const projectCount = countDelegationTargetProjects(targets);
+  if (projectCount > 1) {
+    return `To ${projectCount} projects`;
+  }
+  const [first] = targets;
+  const title = first?.projectTitle ?? null;
+  if (title === null) {
+    return targets.length === 1 ? "To another project" : `To another project (${targets.length})`;
+  }
+  return targets.length === 1 ? `To ${title}` : `To ${title} (${targets.length})`;
+}
