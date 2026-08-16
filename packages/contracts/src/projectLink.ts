@@ -1,6 +1,6 @@
 import * as Schema from "effect/Schema";
 
-import { IsoDateTime, TrimmedNonEmptyString } from "./baseSchemas.ts";
+import { IsoDateTime, IssueId, TrimmedNonEmptyString } from "./baseSchemas.ts";
 
 /**
  * A cross-project link points one project at a folder that lives somewhere
@@ -78,8 +78,19 @@ export const LINKED_PROJECT_AGENT_ACTIVITY_KIND = "linked-project.agent";
 /**
  * How a delegated run ended. `timed-out` is not a failure: the companion is
  * still working and the delegating agent can poll it by thread id.
+ *
+ * `queued` is not an ending at all. It is what delegation from an autonomous
+ * worker returns: the task was routed to the target project's issue board and
+ * is being worked through that board's pipeline — its own worktree, a pull
+ * request, a reviewer, and an automatic merge — so the delegating agent gets
+ * control back immediately and polls the worker thread by id.
  */
-export const LinkedProjectDelegationStatus = Schema.Literals(["completed", "failed", "timed-out"]);
+export const LinkedProjectDelegationStatus = Schema.Literals([
+  "completed",
+  "failed",
+  "timed-out",
+  "queued",
+]);
 export type LinkedProjectDelegationStatus = typeof LinkedProjectDelegationStatus.Type;
 
 /**
@@ -145,6 +156,12 @@ export const LinkedProjectDelegationResult = Schema.Struct({
   targetProjectTitle: TrimmedNonEmptyString,
   targetWorkspaceRoot: TrimmedNonEmptyString,
   result: Schema.optional(Schema.String),
+  /**
+   * The issue the task was filed as, present only on a `queued` delegation.
+   * Worth returning: it is the handle a human has on the delegated work in the
+   * target project's board, and it names the thing the reviewer will merge.
+   */
+  issueId: Schema.optional(IssueId),
 });
 export type LinkedProjectDelegationResult = typeof LinkedProjectDelegationResult.Type;
 

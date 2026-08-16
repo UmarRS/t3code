@@ -112,6 +112,7 @@ const ProjectionIssueSummaryDbRowSchema = Schema.Struct({
   reviewVerdict: Schema.NullOr(IssueReviewVerdict),
   reviewerThreadId: Schema.NullOr(ThreadId),
   reviewedAt: Schema.NullOr(IsoDateTime),
+  delegatedFromThreadId: Schema.NullOr(ThreadId),
   createdAt: IsoDateTime,
   updatedAt: IsoDateTime,
   deletedAt: Schema.NullOr(IsoDateTime),
@@ -141,6 +142,7 @@ function mapIssueSummaryRow(
     reviewVerdict: row.reviewVerdict,
     reviewerThreadId: row.reviewerThreadId,
     reviewedAt: row.reviewedAt,
+    delegatedFromThreadId: row.delegatedFromThreadId,
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
     deletedAt: row.deletedAt,
@@ -514,6 +516,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           review_verdict AS "reviewVerdict",
           reviewer_thread_id AS "reviewerThreadId",
           reviewed_at AS "reviewedAt",
+          delegated_from_thread_id AS "delegatedFromThreadId",
           created_at AS "createdAt",
           updated_at AS "updatedAt",
           deleted_at AS "deletedAt"
@@ -543,6 +546,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           review_verdict AS "reviewVerdict",
           reviewer_thread_id AS "reviewerThreadId",
           reviewed_at AS "reviewedAt",
+          delegated_from_thread_id AS "delegatedFromThreadId",
           created_at AS "createdAt",
           updated_at AS "updatedAt",
           deleted_at AS "deletedAt"
@@ -574,6 +578,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           review_verdict AS "reviewVerdict",
           reviewer_thread_id AS "reviewerThreadId",
           reviewed_at AS "reviewedAt",
+          delegated_from_thread_id AS "delegatedFromThreadId",
           created_at AS "createdAt",
           updated_at AS "updatedAt",
           deleted_at AS "deletedAt"
@@ -603,6 +608,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           review_verdict AS "reviewVerdict",
           reviewer_thread_id AS "reviewerThreadId",
           reviewed_at AS "reviewedAt",
+          delegated_from_thread_id AS "delegatedFromThreadId",
           created_at AS "createdAt",
           updated_at AS "updatedAt",
           deleted_at AS "deletedAt"
@@ -634,6 +640,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           review_verdict AS "reviewVerdict",
           reviewer_thread_id AS "reviewerThreadId",
           reviewed_at AS "reviewedAt",
+          delegated_from_thread_id AS "delegatedFromThreadId",
           created_at AS "createdAt",
           updated_at AS "updatedAt",
           deleted_at AS "deletedAt"

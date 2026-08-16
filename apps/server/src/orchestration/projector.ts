@@ -886,6 +886,10 @@ export function projectEvent(
             dependsOn: payload.dependsOn,
             threadId: null,
             pullRequestUrl: null,
+            // Carried into the read model because the decider's gates and the
+            // autonomous run loop both ask whether an issue was delegated in,
+            // and neither can afford a second read to find out.
+            delegatedFromThreadId: payload.delegatedFromThreadId ?? null,
             createdAt: payload.createdAt,
             updatedAt: payload.updatedAt,
             deletedAt: null,

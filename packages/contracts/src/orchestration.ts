@@ -1044,6 +1044,13 @@ const IssueCreateCommand = Schema.Struct({
   priority: Schema.optional(Schema.NullOr(IssuePriority)),
   modelSelection: Schema.optional(Schema.NullOr(ModelSelection)),
   dependsOn: Schema.optional(IssueDependsOn),
+  /**
+   * The thread that delegated this work from another project. Only the
+   * cross-project coordinator sets it, and it is what tells the autonomous run
+   * reactor to carry this issue through pull request, review and merge even
+   * when the project it landed in has no run of its own.
+   */
+  delegatedFromThreadId: Schema.optional(Schema.NullOr(ThreadId)),
   createdAt: IsoDateTime,
 });
 
@@ -1671,6 +1678,8 @@ export const IssueCreatedPayload = Schema.Struct({
     Schema.withDecodingDefault(Effect.succeed(null)),
   ),
   dependsOn: IssueDependsOn,
+  /** Non-null only on an issue filed by cross-project delegation. Optional so pre-delegation events decode. */
+  delegatedFromThreadId: Schema.optional(Schema.NullOr(ThreadId)),
   createdAt: IsoDateTime,
   updatedAt: IsoDateTime,
 });

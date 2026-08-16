@@ -126,6 +126,16 @@ export const OrchestrationIssue = Schema.Struct({
   reviewVerdict: Schema.optional(Schema.NullOr(IssueReviewVerdict)),
   reviewerThreadId: Schema.optional(Schema.NullOr(ThreadId)),
   reviewedAt: Schema.optional(Schema.NullOr(IsoDateTime)),
+  /**
+   * Set when cross-project delegation filed this issue on behalf of an
+   * autonomous worker in another project: the thread that delegated the work.
+   * The run reactor treats such an issue as autonomously worked even while the
+   * target project has no live run of its own, so the delegated change still
+   * goes through a worktree, a pull request, a review and an automatic merge
+   * rather than being written into the repository untracked. Optional on the
+   * wire so payloads written before cross-project delegation still decode.
+   */
+  delegatedFromThreadId: Schema.optional(Schema.NullOr(ThreadId)),
   createdAt: IsoDateTime,
   updatedAt: IsoDateTime,
   deletedAt: Schema.NullOr(IsoDateTime),

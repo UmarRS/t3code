@@ -42,6 +42,8 @@ export const ProjectionIssue = Schema.Struct({
   reviewerThreadId: Schema.NullOr(ThreadId),
   reviewedAt: Schema.NullOr(IsoDateTime),
   reviewNotes: Schema.String,
+  /** The thread that delegated this issue in from another project, if any. */
+  delegatedFromThreadId: Schema.NullOr(ThreadId),
   createdAt: IsoDateTime,
   updatedAt: IsoDateTime,
   deletedAt: Schema.NullOr(IsoDateTime),

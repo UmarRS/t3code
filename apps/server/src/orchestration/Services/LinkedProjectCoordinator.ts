@@ -16,6 +16,7 @@
  * @module LinkedProjectCoordinator
  */
 import type {
+  IssueId,
   LinkedProjectDelegationStatus,
   LinkedProjectSummary,
   OrchestrationDispatchCommandError,
@@ -38,6 +39,11 @@ export interface RoutableLinkedProject {
 }
 
 export interface LinkedProjectDelegationResult {
+  /**
+   * The thread doing the delegated work. A companion thread on the interactive
+   * path, and the issue's worker thread on the autonomous one — either way it
+   * is what {@link LinkedProjectCoordinatorShape.readDelegation} polls.
+   */
   readonly companionThreadId: ThreadId;
   readonly status: LinkedProjectDelegationStatus;
   readonly targetProjectTitle: string;
@@ -47,6 +53,8 @@ export interface LinkedProjectDelegationResult {
    * ended without saying anything.
    */
   readonly result?: string | undefined;
+  /** The issue the task was filed as. Present only on a `queued` delegation. */
+  readonly issueId?: IssueId | undefined;
 }
 
 export interface LinkedProjectCoordinatorShape {
@@ -84,13 +92,22 @@ export interface LinkedProjectCoordinatorShape {
   >;
 
   /**
-   * Run `task` as an agent in `targetProjectId` on behalf of `parentThreadId`,
-   * and wait for it to finish.
+   * Run `task` as an agent in `targetProjectId` on behalf of `parentThreadId`.
    *
-   * Reuses the parent's existing companion for that project when there is one,
-   * so a second delegation continues the same conversation. Returns
-   * `timed-out` rather than failing when the run outlives `timeout`: the agent
-   * is still working and can be polled with {@link readDelegation}.
+   * Two shapes, chosen by what the caller is. A conversational thread gets a
+   * companion: an agent opened in the target project that this call waits for,
+   * reusing the parent's existing companion so a second delegation continues
+   * the same conversation, and returning `timed-out` rather than failing when
+   * the run outlives `timeout` — the agent is still working and can be polled
+   * with {@link readDelegation}.
+   *
+   * A thread that is itself working an issue autonomously gets something else
+   * entirely: the task is filed as an issue on the target project's board and
+   * started there immediately, so the delegated change arrives through that
+   * board's pipeline — its own worktree, a pull request, a review, and an
+   * automatic merge — instead of being written into another repository by an
+   * agent nobody is tracking. That returns `queued` straight away, because a
+   * caller with no human in it must not sit on a tool call for ten minutes.
    */
   readonly delegate: (input: {
     readonly parentThreadId: ThreadId;

@@ -67,6 +67,19 @@ export class GitWorkflowService extends Context.Service<
       readonly cwd: string;
       readonly baseRef: string;
     }) => Effect.Effect<GitVcsDriver.GitRangeContext, GitCommandError>;
+    /**
+     * Whether this worktree holds anything a pull request could carry:
+     * working-tree changes, or commits the base branch does not already have.
+     *
+     * Deliberately measured against the base branch rather than the upstream:
+     * a branch that was never pushed has no upstream, and "ahead of nothing" is
+     * not the question. Callers that only want to know whether to bother
+     * committing and pushing get a cheap answer without running the workflow.
+     */
+    readonly hasShippableWork: (input: {
+      readonly cwd: string;
+      readonly baseBranch: string;
+    }) => Effect.Effect<boolean, GitCommandError>;
     readonly createWorktree: (
       input: VcsCreateWorktreeInput,
     ) => Effect.Effect<VcsCreateWorktreeResult, GitCommandError>;
@@ -311,6 +324,38 @@ export const make = Effect.gen(function* () {
     readRangeContext: (input) =>
       ensureGitCommand("GitWorkflowService.readRangeContext", input.cwd).pipe(
         Effect.andThen(git.readRangeContext(input.cwd, input.baseRef)),
+      ),
+    hasShippableWork: (input) =>
+      ensureGitCommand("GitWorkflowService.hasShippableWork", input.cwd).pipe(
+        Effect.andThen(
+          Effect.gen(function* () {
+            // The status read goes through the driver rather than the cached
+            // manager status: this question is asked the instant an agent stops
+            // working, and a cached answer from before its last write would be
+            // exactly wrong.
+            const status = yield* git.statusDetailsLocal(input.cwd);
+            if (status.hasWorkingTreeChanges) return true;
+            const counted = yield* git.execute({
+              operation: "GitWorkflowService.hasShippableWork.count",
+              cwd: input.cwd,
+              args: ["rev-list", "--count", `${input.baseBranch}..HEAD`],
+            });
+            const parsed = Number.parseInt(counted.stdout.trim(), 10);
+            // An unreadable count is a failure, not a "no": callers treat the
+            // absence of work as a decision, and that decision must never rest
+            // on output nobody could parse.
+            if (!Number.isFinite(parsed)) {
+              return yield* new GitCommandError({
+                operation: "GitWorkflowService.hasShippableWork",
+                command: "rev-list",
+                cwd: input.cwd,
+                detail: "git rev-list returned a commit count that could not be read.",
+                stdoutLength: counted.stdout.length,
+              });
+            }
+            return parsed > 0;
+          }),
+        ),
       ),
     fetchRemote: (input) =>
       ensureGitCommand("GitWorkflowService.fetchRemote", input.cwd).pipe(

@@ -49,6 +49,7 @@ const makeProjectionIssueRepository = Effect.gen(function* () {
           reviewer_thread_id,
           reviewed_at,
           review_notes,
+          delegated_from_thread_id,
           created_at,
           updated_at,
           deleted_at
@@ -70,6 +71,7 @@ const makeProjectionIssueRepository = Effect.gen(function* () {
           ${row.reviewerThreadId},
           ${row.reviewedAt},
           ${row.reviewNotes},
+          ${row.delegatedFromThreadId},
           ${row.createdAt},
           ${row.updatedAt},
           ${row.deletedAt}
@@ -91,6 +93,7 @@ const makeProjectionIssueRepository = Effect.gen(function* () {
           reviewer_thread_id = excluded.reviewer_thread_id,
           reviewed_at = excluded.reviewed_at,
           review_notes = excluded.review_notes,
+          delegated_from_thread_id = excluded.delegated_from_thread_id,
           created_at = excluded.created_at,
           updated_at = excluded.updated_at,
           deleted_at = excluded.deleted_at
@@ -119,6 +122,7 @@ const makeProjectionIssueRepository = Effect.gen(function* () {
           reviewer_thread_id AS "reviewerThreadId",
           reviewed_at AS "reviewedAt",
           review_notes AS "reviewNotes",
+          delegated_from_thread_id AS "delegatedFromThreadId",
           created_at AS "createdAt",
           updated_at AS "updatedAt",
           deleted_at AS "deletedAt"
@@ -149,6 +153,7 @@ const makeProjectionIssueRepository = Effect.gen(function* () {
           reviewer_thread_id AS "reviewerThreadId",
           reviewed_at AS "reviewedAt",
           review_notes AS "reviewNotes",
+          delegated_from_thread_id AS "delegatedFromThreadId",
           created_at AS "createdAt",
           updated_at AS "updatedAt",
           deleted_at AS "deletedAt"
@@ -182,6 +187,7 @@ const makeProjectionIssueRepository = Effect.gen(function* () {
           reviewer_thread_id AS "reviewerThreadId",
           reviewed_at AS "reviewedAt",
           review_notes AS "reviewNotes",
+          delegated_from_thread_id AS "delegatedFromThreadId",
           created_at AS "createdAt",
           updated_at AS "updatedAt",
           deleted_at AS "deletedAt"

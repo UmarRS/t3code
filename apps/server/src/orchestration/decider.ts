@@ -1638,6 +1638,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           priority: command.priority ?? null,
           modelSelection: command.modelSelection ?? null,
           dependsOn,
+          delegatedFromThreadId: command.delegatedFromThreadId ?? null,
           createdAt: command.createdAt,
           updatedAt: command.createdAt,
         },

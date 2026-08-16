@@ -144,6 +144,33 @@ it.layer(NodeServices.layer)("issue decider", (it) => {
           expect(events[0].payload.priority).toBeNull();
           expect(events[0].payload.dependsOn).toEqual([]);
           expect(events[0].aggregateKind).toBe("issue");
+          // Nothing delegated this one in, and the event says so explicitly
+          // rather than leaving the field absent.
+          expect(events[0].payload.delegatedFromThreadId).toBeNull();
+        }
+      }),
+    );
+
+    it.effect("carries the delegating thread onto a cross-project issue", () =>
+      Effect.gen(function* () {
+        const events = yield* decide(
+          {
+            type: "issue.create",
+            commandId: CommandId.make("cmd-create-delegated"),
+            issueId: IssueId.make("issue-1"),
+            projectId: PROJECT_ID,
+            title: "Add GET/POST /saved-views",
+            description: "The full task, as the delegating agent wrote it.",
+            delegatedFromThreadId: THREAD_ID,
+            createdAt: NOW,
+          },
+          makeReadModel([]),
+        );
+        expect(events[0]?.type).toBe("issue.created");
+        if (events[0]?.type === "issue.created") {
+          // The mark the autonomous run reactor reads to work this issue even
+          // though its project has no run of its own.
+          expect(events[0].payload.delegatedFromThreadId).toBe(THREAD_ID);
         }
       }),
     );

@@ -19,6 +19,9 @@ const toToolResult = (result: LinkedProjectDelegationResult) => ({
   targetProjectTitle: result.targetProjectTitle,
   targetWorkspaceRoot: result.targetWorkspaceRoot,
   ...(result.result !== undefined ? { result: result.result } : {}),
+  // Present only on a queued delegation, and worth handing back: it is what
+  // names the delegated work on the other project's board.
+  ...(result.issueId !== undefined ? { issueId: result.issueId } : {}),
 });
 
 const handlers = {

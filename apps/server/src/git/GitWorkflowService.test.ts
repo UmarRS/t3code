@@ -23,6 +23,27 @@ function makeLayer(input: {
   );
 }
 
+/** A resolved git repository, so command-routed workflows reach the driver. */
+function makeGitLayer(driver: Record<string, unknown>) {
+  return GitWorkflowService.layer.pipe(
+    Layer.provide(
+      Layer.mock(VcsDriverRegistry.VcsDriverRegistry)({
+        resolve: () => Effect.succeed({ kind: "git" } as never),
+      }),
+    ),
+    Layer.provide(Layer.mock(GitVcsDriver.GitVcsDriver)(driver as never)),
+    Layer.provide(Layer.mock(GitManager.GitManager)({})),
+  );
+}
+
+const executeResult = (stdout: string) => ({
+  exitCode: 0,
+  stdout,
+  stderr: "",
+  stdoutTruncated: false,
+  stderrTruncated: false,
+});
+
 describe("GitWorkflowService", () => {
   it.effect("returns an empty local status when no VCS repository is detected", () =>
     Effect.gen(function* () {
@@ -189,4 +210,86 @@ describe("GitWorkflowService", () => {
       ),
     );
   });
+
+  it.effect("reports shippable work from the working tree without counting commits", () => {
+    const execute = vi.fn();
+    return Effect.gen(function* () {
+      const workflow = yield* GitWorkflowService.GitWorkflowService;
+      const shippable = yield* workflow.hasShippableWork({ cwd: "/repo", baseBranch: "main" });
+
+      assert.equal(shippable, true);
+      // The cheap answer is enough; nothing needs to be counted.
+      assert.equal(execute.mock.calls.length, 0);
+    }).pipe(
+      Effect.provide(
+        makeGitLayer({
+          statusDetailsLocal: () => Effect.succeed({ hasWorkingTreeChanges: true }),
+          execute,
+        }),
+      ),
+    );
+  });
+
+  it.effect("counts commits against the base branch when the working tree is clean", () => {
+    const calls: Array<ReadonlyArray<string>> = [];
+    return Effect.gen(function* () {
+      const workflow = yield* GitWorkflowService.GitWorkflowService;
+      const shippable = yield* workflow.hasShippableWork({ cwd: "/repo", baseBranch: "main" });
+
+      assert.equal(shippable, true);
+      // Against the base branch, not the upstream: the branch may never have
+      // been pushed.
+      assert.deepStrictEqual(calls, [["rev-list", "--count", "main..HEAD"]]);
+    }).pipe(
+      Effect.provide(
+        makeGitLayer({
+          statusDetailsLocal: () => Effect.succeed({ hasWorkingTreeChanges: false }),
+          execute: (input: { readonly args: ReadonlyArray<string> }) =>
+            Effect.sync(() => {
+              calls.push(input.args);
+              return executeResult("2\n");
+            }),
+        }),
+      ),
+    );
+  });
+
+  it.effect("reports no shippable work for a clean tree with nothing ahead of the base", () =>
+    Effect.gen(function* () {
+      const workflow = yield* GitWorkflowService.GitWorkflowService;
+      const shippable = yield* workflow.hasShippableWork({ cwd: "/repo", baseBranch: "main" });
+
+      assert.equal(shippable, false);
+    }).pipe(
+      Effect.provide(
+        makeGitLayer({
+          statusDetailsLocal: () => Effect.succeed({ hasWorkingTreeChanges: false }),
+          execute: () => Effect.succeed(executeResult("0\n")),
+        }),
+      ),
+    ),
+  );
+
+  it.effect("fails rather than answering no when the commit count cannot be read", () =>
+    Effect.gen(function* () {
+      const workflow = yield* GitWorkflowService.GitWorkflowService;
+      const error = yield* workflow
+        .hasShippableWork({ cwd: "/repo", baseBranch: "main" })
+        .pipe(Effect.flip);
+
+      expect(error).toMatchObject({
+        _tag: "GitCommandError",
+        operation: "GitWorkflowService.hasShippableWork",
+        command: "rev-list",
+        cwd: "/repo",
+      });
+    }).pipe(
+      Effect.provide(
+        makeGitLayer({
+          statusDetailsLocal: () => Effect.succeed({ hasWorkingTreeChanges: false }),
+          execute: () => Effect.succeed(executeResult("not a number")),
+        }),
+      ),
+    ),
+  );
 });

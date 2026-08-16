@@ -677,6 +677,7 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
               reviewerThreadId: null,
               reviewedAt: null,
               reviewNotes: "",
+              delegatedFromThreadId: event.payload.delegatedFromThreadId ?? null,
               createdAt: event.payload.createdAt,
               updatedAt: event.payload.updatedAt,
               deletedAt: null,

@@ -220,12 +220,14 @@ const ReactorLayerLive = Layer.empty.pipe(
   Layer.provideMerge(OrchestrationReactorLive),
   Layer.provideMerge(AutonomousRunReactorLive),
   Layer.provideMerge(AutonomousScheduleReactorLive),
-  // Provided after the reactor that consumes it, and re-exported so the RPC
-  // layer can start issues on a client's behalf too.
-  Layer.provideMerge(IssueStartCoordinatorLive),
-  // Re-exported for the same reason: the MCP toolkit delegates on an agent's
-  // behalf, so the tool handlers need it from outside the reactor stack.
+  // Re-exported because the MCP toolkit delegates on an agent's behalf, so the
+  // tool handlers need it from outside the reactor stack.
   Layer.provideMerge(LinkedProjectCoordinatorLive),
+  // Provided after both consumers — the run reactor working a backlog, and the
+  // linked-project coordinator filing an autonomous worker's cross-repo task as
+  // an issue on the target board — and re-exported so the RPC layer can start
+  // issues on a client's behalf too.
+  Layer.provideMerge(IssueStartCoordinatorLive),
   Layer.provideMerge(ProviderRuntimeIngestionLive),
   Layer.provideMerge(ProviderCommandReactorLive),
   Layer.provideMerge(CheckpointReactorLive),

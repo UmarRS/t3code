@@ -67,6 +67,9 @@ const AUTONOMOUS_INTERACTION_MODE = "default" as const;
 /** How many issues one tick will start at once. Bounded so a 50-issue backlog does not fork 50 provider processes in the same instant. */
 const MAX_PARALLEL_STARTS = 4;
 
+/** The branch autonomous work is measured against, reviewed against and merged into. */
+const AUTONOMOUS_BASE_BRANCH = "main";
+
 /** External merges do not emit orchestration events, so active runs reconcile their one in-flight review periodically. */
 const EXTERNAL_MERGE_RECONCILE_INTERVAL = Duration.minutes(1);
 
@@ -118,6 +121,26 @@ const make = Effect.gen(function* () {
     const project = yield* projectionSnapshotQuery.getProjectShellById(projectId);
     return Option.isSome(project) && project.value.autonomousStartedAt != null;
   });
+
+  /**
+   * Whether this loop owns the issue's pull request, review and merge.
+   *
+   * A live run on the issue's project is the usual reason. The other is an
+   * issue delegated in from an autonomous worker in another project: the
+   * project it landed on may have no run of its own and no human watching it
+   * either, and the delegated change is only reviewed and merged if this loop
+   * carries it — which is the whole point of routing that work through a board
+   * instead of letting a companion write to the repository untracked.
+   */
+  const issueIsAutonomouslyWorked = Effect.fn("issueIsAutonomouslyWorked")(function* (
+    issue: OrchestrationIssue,
+  ) {
+    if (issue.delegatedFromThreadId != null) return true;
+    return yield* projectRunIsLive(issue.projectId);
+  });
+
+  /** True for an issue this loop must carry even though its project has no run. */
+  const isDelegatedIssue = (issue: OrchestrationIssue) => issue.delegatedFromThreadId != null;
 
   // ---------------------------------------------------------------- evaluate
 
@@ -244,57 +267,69 @@ const make = Effect.gen(function* () {
   });
 
   const evaluateProject = Effect.fn("evaluateProject")(function* (projectId: ProjectId) {
-    if (!(yield* projectRunIsLive(projectId))) return;
+    const runIsLive = yield* projectRunIsLive(projectId);
 
     let issues = yield* projectionSnapshotQuery.listIssuesByProjectId(projectId);
-    const reconciledMerge = yield* Effect.forEach(issues, reconcileExternallyMergedIssue, {
+    // Without a live run, the only issues this loop may touch are the ones
+    // another project delegated in. Nothing here starts them — the linked
+    // project coordinator did that synchronously — and nothing here may
+    // "complete" a run that does not exist; what is left is carrying them
+    // through review. A project with neither is not this loop's business.
+    const owned = runIsLive ? issues : issues.filter(isDelegatedIssue);
+    if (!runIsLive && owned.length === 0) return;
+
+    const reconciledMerge = yield* Effect.forEach(owned, reconcileExternallyMergedIssue, {
       concurrency: 1,
     }).pipe(Effect.map((results) => results.some(Boolean)));
     if (reconciledMerge) {
       issues = yield* projectionSnapshotQuery.listIssuesByProjectId(projectId);
     }
-    const startable = startableAutonomousIssues(issues);
-    const active = activeAutonomousIssues(issues);
 
-    // Nothing to start and nothing moving: whatever is left is done, canceled,
-    // or flagged, none of which the run can advance. Turn itself off so the UI
-    // can show a finished run.
-    if (isAutonomousRunComplete(issues)) {
-      yield* orchestrationEngine
-        .dispatch({
-          type: "project.autonomous.disable",
-          commandId: yield* serverCommandId(`run-complete:${projectId}`),
+    if (runIsLive) {
+      const startable = startableAutonomousIssues(issues);
+      const active = activeAutonomousIssues(issues);
+
+      // Nothing to start and nothing moving: whatever is left is done,
+      // canceled, or flagged, none of which the run can advance. Turn itself
+      // off so the UI can show a finished run.
+      if (isAutonomousRunComplete(issues)) {
+        yield* orchestrationEngine
+          .dispatch({
+            type: "project.autonomous.disable",
+            commandId: yield* serverCommandId(`run-complete:${projectId}`),
+            projectId,
+            reason: "completed",
+          })
+          .pipe(Effect.ignoreCause({ log: true }));
+        yield* receipts.publish({
+          type: "autonomous.run.completed",
           projectId,
-          reason: "completed",
-        })
-        .pipe(Effect.ignoreCause({ log: true }));
-      yield* receipts.publish({
-        type: "autonomous.run.completed",
-        projectId,
-        createdAt: yield* nowIso,
-      });
-      return;
-    }
+          createdAt: yield* nowIso,
+        });
+        return;
+      }
 
-    // Every issue about to run, plus everything already running, is context for
-    // every worker: each one needs to know which neighbours it must not touch.
-    const cohortTitles = [...startable, ...active].map((issue) => ({
-      id: issue.id,
-      title: issue.title,
-    }));
-    yield* Effect.forEach(
-      startable,
-      (issue) =>
-        startIssueForRun(
-          issue,
-          cohortTitles.filter((entry) => entry.id !== issue.id).map((entry) => entry.title),
-        ),
-      { concurrency: MAX_PARALLEL_STARTS, discard: true },
-    );
+      // Every issue about to run, plus everything already running, is context
+      // for every worker: each one needs to know which neighbours it must not
+      // touch.
+      const cohortTitles = [...startable, ...active].map((issue) => ({
+        id: issue.id,
+        title: issue.title,
+      }));
+      yield* Effect.forEach(
+        startable,
+        (issue) =>
+          startIssueForRun(
+            issue,
+            cohortTitles.filter((entry) => entry.id !== issue.id).map((entry) => entry.title),
+          ),
+        { concurrency: MAX_PARALLEL_STARTS, discard: true },
+      );
+    }
 
     // Issues whose worker is done and whose pull request is open, but that no
     // reviewer has claimed. Derived from state, so a restart re-queues them.
-    for (const issue of issues) {
+    for (const issue of runIsLive ? issues : issues.filter(isDelegatedIssue)) {
       const readyForReview =
         issue.status === "in_review" &&
         issue.needsAttentionAt == null &&
@@ -322,7 +357,7 @@ const make = Effect.gen(function* () {
     if (Option.isNone(issueOption)) return;
     const issue = issueOption.value;
     if (issue.status !== "in_progress" || issue.needsAttentionAt != null) return;
-    if (!(yield* projectRunIsLive(issue.projectId))) return;
+    if (!(yield* issueIsAutonomouslyWorked(issue))) return;
 
     if (sessionStatus === "error") {
       yield* flagNeedsAttention(
@@ -344,14 +379,15 @@ const make = Effect.gen(function* () {
   ) {
     const thread = yield* projectionSnapshotQuery.getThreadShellById(threadId);
     if (Option.isNone(thread)) return Option.none<OrchestrationIssue>();
-    // Session events are global. Ordinary threads should pay one narrow
-    // project lookup, not a scan of every issue in their project, just to
-    // discover that autonomous mode is not involved.
-    if (!(yield* projectRunIsLive(thread.value.projectId))) {
-      return Option.none<OrchestrationIssue>();
-    }
+    // Session events are global, so this runs for every thread in the app. A
+    // live run means any of the project's issues may be the one; without a run
+    // the scan still has to happen — an issue delegated in from another project
+    // is worked with no run of its own — but only delegated issues can match.
+    const runIsLive = yield* projectRunIsLive(thread.value.projectId);
     const issues = yield* projectionSnapshotQuery.listIssuesByProjectId(thread.value.projectId);
-    const match = issues.find((issue) => issue.threadId === threadId);
+    const match = issues.find(
+      (issue) => issue.threadId === threadId && (runIsLive || isDelegatedIssue(issue)),
+    );
     return match === undefined ? Option.none<OrchestrationIssue>() : Option.some(match);
   });
 
@@ -366,6 +402,30 @@ const make = Effect.gen(function* () {
         issue.id,
         "The worker thread has no worktree, so no pull request could be opened.",
       );
+      return;
+    }
+
+    // A worker can finish with nothing to ship and still have done its job: it
+    // may have routed every piece of the work to a linked project's board, or
+    // found the work already done. Asking a provider to open a pull request
+    // for an empty range fails, and parking the issue for that would call a
+    // finished issue broken — so ask git first.
+    //
+    // Failing the check falls through to the normal path. A probe that cannot
+    // answer must never be the reason real work is stranded.
+    const shippable = yield* gitWorkflow
+      .hasShippableWork({ cwd, baseBranch: AUTONOMOUS_BASE_BRANCH })
+      .pipe(
+        Effect.catchCause((cause) =>
+          Effect.logDebug("autonomous shippable-work check failed", {
+            issueId: issue.id,
+            cwd,
+            cause: Cause.pretty(cause),
+          }).pipe(Effect.as(true)),
+        ),
+      );
+    if (!shippable) {
+      yield* completeIssueWithoutChanges(issue, threadId);
       return;
     }
 
@@ -410,6 +470,54 @@ const make = Effect.gen(function* () {
       createdAt: yield* nowIso,
     });
   });
+
+  /**
+   * Finish an issue whose worker left nothing behind to ship. There is no
+   * branch to review and no pull request to merge, so `done` is the honest
+   * end state — `isAutonomousRunComplete` counts it, and the review step is
+   * skipped for the good reason that there is nothing to review.
+   */
+  const completeIssueWithoutChanges = Effect.fn("completeIssueWithoutChanges")(function* (
+    issue: OrchestrationIssue,
+    threadId: ThreadId,
+  ) {
+    const delegated = yield* workerDelegatedWorkToLinkedProjects(threadId);
+    const reason = delegated
+      ? "The worker finished without local changes; its work was delegated to linked projects."
+      : "The worker finished without local changes; there was nothing to ship.";
+    yield* orchestrationEngine
+      .dispatch({
+        type: "issue.status.set",
+        commandId: yield* serverCommandId(`no-changes:${issue.id}`),
+        issueId: issue.id,
+        status: "done",
+      })
+      .pipe(Effect.ignoreCause({ log: true }));
+    yield* receipts.publish({
+      type: "autonomous.issue.completed-without-changes",
+      issueId: issue.id,
+      threadId,
+      reason,
+      createdAt: yield* nowIso,
+    });
+  });
+
+  /**
+   * Whether this worker handed work to another project's board. The mark that
+   * says so lives on the issues it filed, in projects this one knows nothing
+   * about, and no query asks across projects — so this reads the shell
+   * snapshot, which is the same thing the restart sweep already reads. It runs
+   * once per empty-handed worker, which is rare, and only to word a sentence.
+   */
+  const workerDelegatedWorkToLinkedProjects = Effect.fn("workerDelegatedWorkToLinkedProjects")(
+    function* (threadId: ThreadId) {
+      const snapshot = yield* projectionSnapshotQuery
+        .getShellSnapshot()
+        .pipe(Effect.orElseSucceed(() => null));
+      if (snapshot === null) return false;
+      return snapshot.issues.some((issue) => issue.delegatedFromThreadId === threadId);
+    },
+  );
 
   /**
    * A PR failure happens after the worker has already committed and pushed. A
@@ -459,7 +567,7 @@ const make = Effect.gen(function* () {
     // user canceled the issue, flagged it, or stopped the run.
     if (issue.status !== "in_review" || issue.needsAttentionAt != null) return;
     if (issue.reviewVerdict != null) return;
-    if (!(yield* projectRunIsLive(issue.projectId))) return;
+    if (!(yield* issueIsAutonomouslyWorked(issue))) return;
 
     const workerThread =
       issue.threadId === null
@@ -484,7 +592,7 @@ const make = Effect.gen(function* () {
       issueTitle: issue.title,
       issueDescription: Option.isSome(issueDetail) ? issueDetail.value.description : "",
       worktreePath: workerThread.value.worktreePath,
-      baseBranch: "main",
+      baseBranch: AUTONOMOUS_BASE_BRANCH,
     });
     const modelSelection = resolveTieredReviewerModelSelection(
       yield* providerRegistry.getProviders,
@@ -524,7 +632,7 @@ const make = Effect.gen(function* () {
         interactionMode: AUTONOMOUS_INTERACTION_MODE,
         worktreePath: workerThread.value.worktreePath,
         branch: workerThread.value.branch,
-        baseBranch: "main",
+        baseBranch: AUTONOMOUS_BASE_BRANCH,
         createdAt,
       })
       .pipe(
@@ -682,14 +790,24 @@ const make = Effect.gen(function* () {
   /**
    * Anything the hot stream may have carried before the subscription went
    * live is re-derived from projected state: every project with an active run
-   * gets one evaluation tick. The same sweep is what resumes runs across a
-   * server restart.
+   * gets one evaluation tick, and so does every project holding an unfinished
+   * issue that was delegated in — that work has no run to be resumed by, and
+   * dropping it on a restart would strand a delegated pull request forever.
+   * The same sweep is what resumes runs across a server restart.
    */
   const sweepActiveRuns = Effect.fn("sweepActiveRuns")(function* () {
     const snapshot = yield* projectionSnapshotQuery.getShellSnapshot();
+    const projectIds = new Set<ProjectId>();
     for (const project of snapshot.projects) {
       if (project.autonomousStartedAt == null) continue;
-      yield* evaluateQueue.enqueue({ projectId: project.id });
+      projectIds.add(project.id);
+    }
+    for (const issue of activeAutonomousIssues(snapshot.issues)) {
+      if (!isDelegatedIssue(issue)) continue;
+      projectIds.add(issue.projectId);
+    }
+    for (const projectId of projectIds) {
+      yield* evaluateQueue.enqueue({ projectId });
     }
   });
 
