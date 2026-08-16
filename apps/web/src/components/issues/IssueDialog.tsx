@@ -17,7 +17,7 @@ import {
 import { CheckIcon, ChevronDownIcon } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 
-import { newIssueId } from "~/lib/utils";
+import { cn, newIssueId } from "~/lib/utils";
 import { deriveProviderInstanceEntries, isProviderInstancePickerReady } from "~/providerInstances";
 import { issueEnvironment } from "~/state/issues";
 import { primaryServerProvidersAtom } from "~/state/server";
@@ -106,6 +106,8 @@ export function IssueDialog({
       : null,
   );
   const loadedDescription = detail.data?.issue?.description ?? null;
+  const descriptionPending =
+    editingIssue !== null && detail.isPending && loadedDescription === null;
 
   const createIssue = useAtomCommand(issueEnvironment.create, { reportFailure: false });
   const updateIssue = useAtomCommand(issueEnvironment.update, { reportFailure: false });
@@ -228,8 +230,17 @@ export function IssueDialog({
 
           <label className="grid gap-1.5">
             <span className="text-xs font-medium text-foreground">Description</span>
+            {/*
+              A fixed height, not a minimum: the control sizes itself to its
+              content, and an issue's body arrives from a point read after the
+              dialog is already on screen. Letting it grow then would resize the
+              popup around a description that can be hundreds of lines, and
+              because the popup is centred in the viewport its top edge — and
+              the close button pinned to it — jumps out from under the pointer
+              just as the user reaches for it.
+            */}
             <Textarea
-              className="min-h-32"
+              className="h-64 [&_[data-slot=textarea]]:resize-none"
               maxLength={ISSUE_DESCRIPTION_MAX_LENGTH}
               placeholder="Markdown. Acceptance criteria, constraints, anything that must not break."
               value={description}
@@ -238,12 +249,23 @@ export function IssueDialog({
                 setDescription(event.target.value);
               }}
             />
-            {editingIssue !== null && detail.isPending && loadedDescription === null ? (
-              <span className="flex items-center gap-1.5 text-muted-foreground text-xs">
-                <Spinner className="size-3" />
-                Loading description...
-              </span>
-            ) : null}
+            {/*
+              Always laid out, only sometimes visible: this row sits in the
+              same centred column as the dialog, so unmounting it the moment
+              the read lands would shift the popup — and the close button with
+              it — by its own height, which is the jump this dialog is trying
+              not to make.
+            */}
+            <span
+              aria-hidden={!descriptionPending}
+              className={cn(
+                "flex items-center gap-1.5 text-muted-foreground text-xs",
+                !descriptionPending && "invisible",
+              )}
+            >
+              <Spinner className="size-3" />
+              Loading description...
+            </span>
           </label>
 
           <div className="grid gap-4 sm:grid-cols-2">
