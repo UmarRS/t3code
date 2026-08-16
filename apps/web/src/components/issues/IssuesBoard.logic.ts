@@ -5,6 +5,8 @@ import {
   type IssueId,
   type IssuePriority,
   type IssueStatus,
+  type ProjectId,
+  type ThreadId,
 } from "@t3tools/contracts";
 
 /**
@@ -203,4 +205,160 @@ export function buildIssueDecompositionPrompt(input: {
     ISSUE_DECOMPOSITION_PROMPT_INSTRUCTIONS.trim(),
     "",
   ].join("\n");
+}
+
+/**
+ * Cross-project links for one issue.
+ *
+ * Delegation crosses boards in one direction — a worker in one project hands a
+ * task to another, and the task lands there as an issue carrying the thread it
+ * came from — so each side sees the other differently. The receiving issue
+ * knows its origin thread outright; the sending issue has to be found by the
+ * issues that name its thread. Both are worth a mark on the card: a board that
+ * shows neither makes delegated work look like it appeared from nowhere.
+ *
+ * The outgoing half is therefore only as stable as the sender's thread: the
+ * delegated issue records the thread that filed it, so unlinking that thread
+ * and starting the issue again drops the sending card's mark while the
+ * receiving one keeps pointing at the original thread. Carrying the link
+ * across a restart would mean recording the sending issue, not its thread.
+ */
+
+export interface CrossProjectIssueView {
+  readonly id: IssueId;
+  readonly projectId: ProjectId;
+  readonly threadId: ThreadId | null;
+  readonly delegatedFromThreadId?: ThreadId | null | undefined;
+}
+
+export interface IssueDelegationOrigin {
+  /** The thread that delegated the work, in whichever project owns it. */
+  readonly threadId: ThreadId;
+  /** Null when the origin thread is not in the loaded snapshot. */
+  readonly projectId: ProjectId | null;
+  readonly projectTitle: string | null;
+}
+
+export interface IssueDelegationTarget {
+  readonly issueId: IssueId;
+  readonly projectId: ProjectId;
+  readonly projectTitle: string | null;
+}
+
+export interface IssueDelegationLinks {
+  /** Set when this issue was filed here by another project's agent. */
+  readonly origin: IssueDelegationOrigin | null;
+  /** Issues this one's worker filed on other boards, in discovery order. */
+  readonly targets: ReadonlyArray<IssueDelegationTarget>;
+}
+
+/** Delegated issues grouped by the thread that filed them. */
+export type DelegationTargetsByOriginThread = ReadonlyMap<
+  ThreadId,
+  ReadonlyArray<IssueDelegationTarget>
+>;
+
+const NO_DELEGATION_LINKS: IssueDelegationLinks = { origin: null, targets: [] };
+const NO_TARGETS: ReadonlyArray<IssueDelegationTarget> = [];
+
+/**
+ * Groups the environment's issues by the thread each was delegated from, so a
+ * board resolves its outgoing links with a lookup per card rather than a scan
+ * of every issue in the environment per card.
+ */
+export function indexDelegationTargetsByOriginThread(input: {
+  readonly environmentIssues: ReadonlyArray<CrossProjectIssueView>;
+  readonly projectTitleById: ReadonlyMap<ProjectId, string>;
+}): DelegationTargetsByOriginThread {
+  const index = new Map<ThreadId, Array<IssueDelegationTarget>>();
+  for (const issue of input.environmentIssues) {
+    const originThreadId = issue.delegatedFromThreadId ?? null;
+    if (originThreadId === null) continue;
+    const target: IssueDelegationTarget = {
+      issueId: issue.id,
+      projectId: issue.projectId,
+      projectTitle: input.projectTitleById.get(issue.projectId) ?? null,
+    };
+    const existing = index.get(originThreadId);
+    if (existing === undefined) {
+      index.set(originThreadId, [target]);
+    } else {
+      existing.push(target);
+    }
+  }
+  return index;
+}
+
+export function resolveIssueDelegationLinks(input: {
+  readonly issue: CrossProjectIssueView;
+  readonly targetsByOriginThread: DelegationTargetsByOriginThread;
+  /** Project of a thread id, for naming the far side of an incoming link. */
+  readonly projectIdByThreadId: ReadonlyMap<ThreadId, ProjectId>;
+  readonly projectTitleById: ReadonlyMap<ProjectId, string>;
+}): IssueDelegationLinks {
+  const { issue } = input;
+  const originThreadId = issue.delegatedFromThreadId ?? null;
+  const origin =
+    originThreadId === null
+      ? null
+      : ((): IssueDelegationOrigin => {
+          const projectId = input.projectIdByThreadId.get(originThreadId) ?? null;
+          return {
+            threadId: originThreadId,
+            projectId,
+            projectTitle:
+              projectId === null ? null : (input.projectTitleById.get(projectId) ?? null),
+          };
+        })();
+
+  // Only a started issue can have delegated anything, and a delegation that
+  // stayed on this board is ordinary work rather than a link between two of
+  // them — so the issue's own project is filtered out.
+  const filed =
+    issue.threadId === null
+      ? NO_TARGETS
+      : (input.targetsByOriginThread.get(issue.threadId) ?? NO_TARGETS);
+  const targets = filed.filter((target) => target.projectId !== issue.projectId);
+
+  return origin === null && targets.length === 0 ? NO_DELEGATION_LINKS : { origin, targets };
+}
+
+/** How many distinct boards the targets span, for a one-glance card label. */
+export function countDelegationTargetProjects(
+  targets: ReadonlyArray<IssueDelegationTarget>,
+): number {
+  return new Set(targets.map((target) => target.projectId)).size;
+}
+
+/**
+ * The card label for outgoing links. One board is worth naming; several are
+ * only worth counting, because the chip has a line to say it in.
+ */
+export function describeDelegationTargets(targets: ReadonlyArray<IssueDelegationTarget>): string {
+  const projectCount = countDelegationTargetProjects(targets);
+  if (projectCount > 1) {
+    return `To ${projectCount} projects`;
+  }
+  const [first] = targets;
+  const title = first?.projectTitle ?? null;
+  if (title === null) {
+    return targets.length === 1 ? "To another project" : `To another project (${targets.length})`;
+  }
+  return targets.length === 1 ? `To ${title}` : `To ${title} (${targets.length})`;
+}
+
+/**
+ * The boards the targets sit on, named once each, for the chip's tooltip.
+ * Grouped by project rather than by title, so two boards that happen to share
+ * a name still count as two and the tooltip agrees with the chip's own count.
+ */
+export function describeDelegationTargetProjects(
+  targets: ReadonlyArray<IssueDelegationTarget>,
+): string {
+  const titleByProjectId = new Map<ProjectId, string>();
+  for (const target of targets) {
+    if (titleByProjectId.has(target.projectId)) continue;
+    titleByProjectId.set(target.projectId, target.projectTitle ?? "another project");
+  }
+  return [...titleByProjectId.values()].join(", ");
 }
