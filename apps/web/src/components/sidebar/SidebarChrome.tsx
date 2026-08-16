@@ -1,12 +1,8 @@
-import {
-  ArrowLeftIcon,
-  ChartNoAxesColumnIcon,
-  ListChecksIcon,
-  SettingsIcon,
-} from "lucide-react";
+import { ArrowLeftIcon, ChartNoAxesColumnIcon, ListChecksIcon, SettingsIcon } from "lucide-react";
 import { memo, useCallback } from "react";
 import { Link, useCanGoBack, useLocation, useNavigate } from "@tanstack/react-router";
 
+import { APP_VERSION } from "../../branding";
 import { useProjects } from "../../state/entities";
 import { resolveAutonomousRunState } from "../issues/autonomousRun.logic";
 import { useEnvironmentIdentificationMode } from "../../hooks/useSettings";
@@ -254,6 +250,7 @@ export const SidebarChromeFooter = memo(function SidebarChromeFooter() {
                 <TooltipPopup side="top">Usage</TooltipPopup>
               </Tooltip>
             </SidebarMenuItem>
+            <SidebarVersionLabel />
           </>
         )}
         <SidebarUpdatePill />
@@ -261,3 +258,25 @@ export const SidebarChromeFooter = memo(function SidebarChromeFooter() {
     </SidebarFooter>
   );
 });
+
+/**
+ * The running version, parked in the chrome so "which build am I on?" is a
+ * glance rather than a trip into Settings. Settings keeps the authoritative
+ * About row — with the desktop updater attached — so this stays a plain label.
+ */
+function SidebarVersionLabel() {
+  return (
+    <SidebarMenuItem className="min-w-0 shrink">
+      <Tooltip>
+        <TooltipTrigger
+          render={
+            <span className="block truncate px-1 text-[11px] text-sidebar-muted-foreground/70 tabular-nums">
+              v{APP_VERSION}
+            </span>
+          }
+        />
+        <TooltipPopup side="top">Atlas {APP_VERSION}</TooltipPopup>
+      </Tooltip>
+    </SidebarMenuItem>
+  );
+}

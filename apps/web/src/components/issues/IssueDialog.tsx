@@ -228,8 +228,17 @@ export function IssueDialog({
 
           <label className="grid gap-1.5">
             <span className="text-xs font-medium text-foreground">Description</span>
+            {/*
+              A fixed height, not a minimum: the control sizes itself to its
+              content, and an issue's body arrives from a point read after the
+              dialog is already on screen. Letting it grow then would resize the
+              popup around a description that can be hundreds of lines, and
+              because the popup is centred in the viewport its top edge — and
+              the close button pinned to it — jumps out from under the pointer
+              just as the user reaches for it.
+            */}
             <Textarea
-              className="min-h-32"
+              className="h-64"
               maxLength={ISSUE_DESCRIPTION_MAX_LENGTH}
               placeholder="Markdown. Acceptance criteria, constraints, anything that must not break."
               value={description}
