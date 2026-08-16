@@ -392,4 +392,16 @@ describe("resolveIssueDelegationLinks", () => {
       ]),
     ).toBe("API, Docs");
   });
+
+  it("keeps the tooltip and the count in step when two boards share a title", () => {
+    const target = (id: string, project: string, title: string | null) => ({
+      issueId: IssueId.make(id),
+      projectId: ProjectId.make(project),
+      projectTitle: title,
+    });
+    const sameTitle = [target("a", "project-b", "API"), target("b", "project-c", "API")];
+    expect(countDelegationTargetProjects(sameTitle)).toBe(2);
+    expect(describeDelegationTargetProjects(sameTitle)).toBe("API, API");
+    expect(describeDelegationTargets(sameTitle)).toBe("To 2 projects");
+  });
 });

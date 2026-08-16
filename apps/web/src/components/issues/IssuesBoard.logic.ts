@@ -216,6 +216,12 @@ export function buildIssueDecompositionPrompt(input: {
  * knows its origin thread outright; the sending issue has to be found by the
  * issues that name its thread. Both are worth a mark on the card: a board that
  * shows neither makes delegated work look like it appeared from nowhere.
+ *
+ * The outgoing half is therefore only as stable as the sender's thread: the
+ * delegated issue records the thread that filed it, so unlinking that thread
+ * and starting the issue again drops the sending card's mark while the
+ * receiving one keeps pointing at the original thread. Carrying the link
+ * across a restart would mean recording the sending issue, not its thread.
  */
 
 export interface CrossProjectIssueView {
@@ -341,10 +347,18 @@ export function describeDelegationTargets(targets: ReadonlyArray<IssueDelegation
   return targets.length === 1 ? `To ${title}` : `To ${title} (${targets.length})`;
 }
 
-/** The boards the targets sit on, named once each, for the chip's tooltip. */
+/**
+ * The boards the targets sit on, named once each, for the chip's tooltip.
+ * Grouped by project rather than by title, so two boards that happen to share
+ * a name still count as two and the tooltip agrees with the chip's own count.
+ */
 export function describeDelegationTargetProjects(
   targets: ReadonlyArray<IssueDelegationTarget>,
 ): string {
-  const titles = new Set(targets.map((target) => target.projectTitle ?? "another project"));
-  return [...titles].join(", ");
+  const titleByProjectId = new Map<ProjectId, string>();
+  for (const target of targets) {
+    if (titleByProjectId.has(target.projectId)) continue;
+    titleByProjectId.set(target.projectId, target.projectTitle ?? "another project");
+  }
+  return [...titleByProjectId.values()].join(", ");
 }

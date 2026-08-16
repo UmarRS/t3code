@@ -912,10 +912,16 @@ function IssueCard({
             <TooltipTrigger
               render={
                 <Badge
-                  render={<button type="button" onClick={onOpenDelegationOrigin} />}
+                  // An origin whose project could not be resolved is a thread
+                  // that is no longer in the snapshot, and opening it would
+                  // bounce the user off the board to a redirect, so the chip
+                  // only becomes a button once there is something to open.
+                  {...(delegationLinks.origin.projectId === null
+                    ? {}
+                    : { render: <button type="button" onClick={onOpenDelegationOrigin} /> })}
                   variant="outline"
                   size="sm"
-                  className="max-w-full cursor-pointer gap-1 text-info-foreground"
+                  className="max-w-full gap-1 text-info-foreground"
                 >
                   <ArrowDownLeftIcon className="size-3 shrink-0" />
                   <span className="truncate">
@@ -925,9 +931,9 @@ function IssueCard({
               }
             />
             <TooltipPopup side="bottom">
-              {delegationLinks.origin.projectTitle === null
-                ? "An agent in a linked project delegated this work here. Open the thread that sent it."
-                : `An agent in ${delegationLinks.origin.projectTitle} delegated this work here. Open the thread that sent it.`}
+              {delegationLinks.origin.projectId === null
+                ? "An agent in a linked project delegated this work here. The thread it came from is no longer available."
+                : `An agent in ${delegationLinks.origin.projectTitle ?? "a linked project"} delegated this work here. Open the thread that sent it.`}
             </TooltipPopup>
           </Tooltip>
         ) : null}
