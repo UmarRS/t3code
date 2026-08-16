@@ -7,6 +7,7 @@ import {
   isIssueDependencySatisfied,
   ISSUE_DECOMPOSITION_BLOCK_LANGUAGE,
   ISSUE_DECOMPOSITION_PROMPT_INSTRUCTIONS,
+  ISSUE_REVIEW_PROMPT_INSTRUCTIONS,
 } from "./issues.ts";
 
 const id = (value: string) => IssueId.make(value);
@@ -97,5 +98,17 @@ describe("decomposition prompt", () => {
     ]);
     expect(encoded.startsWith("```t3-issues\n")).toBe(true);
     expect(encoded.endsWith("\n```")).toBe(true);
+  });
+
+  it("says stories are merged automatically, so none of them asks for sign-off", () => {
+    expect(ISSUE_DECOMPOSITION_PROMPT_INSTRUCTIONS).toContain("merged automatically");
+    expect(ISSUE_DECOMPOSITION_PROMPT_INSTRUCTIONS).toContain("Never write a human sign-off");
+  });
+});
+
+describe("review prompt", () => {
+  it("gives the reviewer the merge authority a story description cannot revoke", () => {
+    expect(ISSUE_REVIEW_PROMPT_INSTRUCTIONS).toContain("your review is the approval");
+    expect(ISSUE_REVIEW_PROMPT_INSTRUCTIONS).toContain("a review you pass ends in a merge");
   });
 });

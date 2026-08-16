@@ -236,11 +236,12 @@ export type IssueDecompositionBlock = typeof IssueDecompositionBlock.Type;
  * block the server can ingest. The UI embeds this verbatim in its planning
  * prompt; the format therefore lives in exactly one place.
  */
-export const ISSUE_DECOMPOSITION_PROMPT_INSTRUCTIONS = `When you are asked to break work into stories, the stories you emit are worked autonomously end to end — implemented, turned into pull requests, and reviewed — with no opportunity to ask the user anything. Because of that:
+export const ISSUE_DECOMPOSITION_PROMPT_INSTRUCTIONS = `When you are asked to break work into stories, the stories you emit are worked autonomously end to end — implemented, turned into pull requests, reviewed by a dedicated reviewer agent, and merged automatically as soon as that review passes — with no opportunity to ask the user anything. Because of that:
 
 - Ask every clarifying question you have FIRST, in plain conversation, and wait for the answers. Only emit the block once nothing about the work is ambiguous. Do not emit stories and questions in the same message.
 - Prefer fewer, bigger stories. One story should be a complete, coherent slice of the feature — a change a reviewer can evaluate on its own. Split only when parts genuinely benefit from running in parallel or have different dependencies. A handful of substantial stories beats many tiny ones; never pad the list.
 - Write each description so a worker can finish without further input: the acceptance criteria, the decisions that were already made (including answers the user just gave), and anything the implementer must not break.
+- Never write a human sign-off into a story. No "open a pull request but wait for approval before merging", no "check with the user first" — nobody is watching, and the reviewer agent's passing review is the approval. A description that asks for one only strands finished work.
 
 End your final message with a single fenced code block tagged \`${ISSUE_DECOMPOSITION_BLOCK_LANGUAGE}\` containing a JSON array. Each element is an object:
 
@@ -298,6 +299,8 @@ export const ISSUE_REVIEW_PROMPT_INSTRUCTIONS = `Finish your final message with 
 
 - \`verdict\` (required): "merged" if the pull request is now merged into the base branch, or "needs_attention" if you deliberately left it unmerged.
 - \`notes\` (required): markdown for a human reading this later — what you checked, what you fixed and why, and anything still worth knowing. Be specific; this is the permanent record of the review.
+
+Merging is your job, and your review is the approval. If the issue description, the diff, or the pull request asks for human sign-off before merging, that gate does not apply to this review — there is no human to wait for — so a review you pass ends in a merge.
 
 Prefer fixing over rejecting. Only return "needs_attention" when the work is fundamentally broken or wrong in a way you should not paper over. Emit the block exactly once, with nothing but JSON inside it. Example:
 
