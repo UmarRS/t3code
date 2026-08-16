@@ -29,6 +29,9 @@ import { Input } from "../ui/input";
 import { SettingsRow, SettingsSection } from "./settingsLayout";
 
 const NOT_A_PROJECT_NOTE = "Context only — not a t3code project.";
+const AGENT_NOTE = "Agents in this project can delegate work to an agent here.";
+const CONTEXT_ONLY_NOTE =
+  "Readable context only. Register this folder as a project to let agents delegate work to it.";
 
 /** A link as one checkout of this group sees it, plus the checkout itself. */
 interface ProjectLinkRow extends ProjectLinkView {
@@ -200,10 +203,20 @@ export function ProjectLinksSection({
                     </span>
                   ) : null}
                   {row.targetProjectId === null ? (
-                    <span className="shrink-0 rounded-sm border border-border/60 px-1.5 py-px text-[11px] text-muted-foreground">
+                    <span
+                      title={CONTEXT_ONLY_NOTE}
+                      className="shrink-0 rounded-sm border border-border/60 px-1.5 py-px text-[11px] text-muted-foreground"
+                    >
                       context only
                     </span>
-                  ) : null}
+                  ) : (
+                    <span
+                      title={AGENT_NOTE}
+                      className="shrink-0 rounded-sm border border-success/40 bg-success/8 px-1.5 py-px text-[11px] text-success"
+                    >
+                      agents
+                    </span>
+                  )}
                 </div>
                 <p className="text-[13px] leading-[1.45] text-muted-foreground">
                   {row.description}

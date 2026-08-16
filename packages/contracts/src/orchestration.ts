@@ -362,6 +362,20 @@ export const ThreadTitleRegeneration = Schema.Struct({
 });
 export type ThreadTitleRegeneration = typeof ThreadTitleRegeneration.Type;
 
+/**
+ * A companion thread is one the app spawned in a *linked* project so a second
+ * agent could work that repo on behalf of `parentThreadId`. Both fields are
+ * null on ordinary threads, and optional on the wire so snapshots from
+ * pre-companion servers still decode.
+ *
+ * The relation is deliberately one level deep: a companion never delegates
+ * onward, which keeps fan-out bounded and the timeline readable.
+ */
+export const ThreadCompanionFields = {
+  parentThreadId: Schema.optional(Schema.NullOr(ThreadId)),
+  originLinkId: Schema.optional(Schema.NullOr(ProjectLinkId)),
+} as const;
+
 export const OrchestrationThread = Schema.Struct({
   id: ThreadId,
   projectId: ProjectId,
@@ -376,6 +390,8 @@ export const OrchestrationThread = Schema.Struct({
   // Where inside the workspace this thread works, and which neighbors it may
   // still read. See threadScope.ts.
   ...ThreadScopeFields,
+  // Set only on threads the app spawned in a linked project.
+  ...ThreadCompanionFields,
   latestTurn: Schema.NullOr(OrchestrationLatestTurn),
   createdAt: IsoDateTime,
   updatedAt: IsoDateTime,
@@ -469,6 +485,9 @@ export const OrchestrationThreadShell = Schema.Struct({
   // Carried on the shell so sidebar rows can render the scope chip without
   // loading thread detail.
   ...ThreadScopeFields,
+  // Carried for the same reason: the sidebar nests companions under their
+  // parent instead of listing them as top-level rows.
+  ...ThreadCompanionFields,
   latestTurn: Schema.NullOr(OrchestrationLatestTurn),
   createdAt: IsoDateTime,
   updatedAt: IsoDateTime,
@@ -708,6 +727,8 @@ const ThreadCreateCommand = Schema.Struct({
   // Optional here (unlike on the thread itself) so every caller that does not
   // care about scope can keep constructing the command as it always did.
   ...ThreadScopeFields,
+  // Set only by the linked-project coordinator; ordinary creates omit both.
+  ...ThreadCompanionFields,
   createdAt: IsoDateTime,
 });
 
@@ -1023,6 +1044,13 @@ const IssueCreateCommand = Schema.Struct({
   priority: Schema.optional(Schema.NullOr(IssuePriority)),
   modelSelection: Schema.optional(Schema.NullOr(ModelSelection)),
   dependsOn: Schema.optional(IssueDependsOn),
+  /**
+   * The thread that delegated this work from another project. Only the
+   * cross-project coordinator sets it, and it is what tells the autonomous run
+   * reactor to carry this issue through pull request, review and merge even
+   * when the project it landed in has no run of its own.
+   */
+  delegatedFromThreadId: Schema.optional(Schema.NullOr(ThreadId)),
   createdAt: IsoDateTime,
 });
 
@@ -1449,6 +1477,7 @@ export const ThreadCreatedPayload = Schema.Struct({
   branch: Schema.NullOr(TrimmedNonEmptyString),
   worktreePath: Schema.NullOr(TrimmedNonEmptyString),
   ...ThreadScopeFields,
+  ...ThreadCompanionFields,
   createdAt: IsoDateTime,
   updatedAt: IsoDateTime,
 });
@@ -1649,6 +1678,8 @@ export const IssueCreatedPayload = Schema.Struct({
     Schema.withDecodingDefault(Effect.succeed(null)),
   ),
   dependsOn: IssueDependsOn,
+  /** Non-null only on an issue filed by cross-project delegation. Optional so pre-delegation events decode. */
+  delegatedFromThreadId: Schema.optional(Schema.NullOr(ThreadId)),
   createdAt: IsoDateTime,
   updatedAt: IsoDateTime,
 });

@@ -112,6 +112,7 @@ const ProjectionIssueSummaryDbRowSchema = Schema.Struct({
   reviewVerdict: Schema.NullOr(IssueReviewVerdict),
   reviewerThreadId: Schema.NullOr(ThreadId),
   reviewedAt: Schema.NullOr(IsoDateTime),
+  delegatedFromThreadId: Schema.NullOr(ThreadId),
   createdAt: IsoDateTime,
   updatedAt: IsoDateTime,
   deletedAt: Schema.NullOr(IsoDateTime),
@@ -141,6 +142,7 @@ function mapIssueSummaryRow(
     reviewVerdict: row.reviewVerdict,
     reviewerThreadId: row.reviewerThreadId,
     reviewedAt: row.reviewedAt,
+    delegatedFromThreadId: row.delegatedFromThreadId,
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
     deletedAt: row.deletedAt,
@@ -207,6 +209,10 @@ const ProjectIdLookupInput = Schema.Struct({
 });
 const ThreadIdLookupInput = Schema.Struct({
   threadId: ThreadId,
+});
+const CompanionThreadLookupInput = Schema.Struct({
+  parentThreadId: ThreadId,
+  targetProjectId: ProjectId,
 });
 // Windowed reads order turns by the stable keyset (anchor, turn key), where
 // anchor is requested_at and turn key is
@@ -510,6 +516,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           review_verdict AS "reviewVerdict",
           reviewer_thread_id AS "reviewerThreadId",
           reviewed_at AS "reviewedAt",
+          delegated_from_thread_id AS "delegatedFromThreadId",
           created_at AS "createdAt",
           updated_at AS "updatedAt",
           deleted_at AS "deletedAt"
@@ -539,6 +546,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           review_verdict AS "reviewVerdict",
           reviewer_thread_id AS "reviewerThreadId",
           reviewed_at AS "reviewedAt",
+          delegated_from_thread_id AS "delegatedFromThreadId",
           created_at AS "createdAt",
           updated_at AS "updatedAt",
           deleted_at AS "deletedAt"
@@ -570,6 +578,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           review_verdict AS "reviewVerdict",
           reviewer_thread_id AS "reviewerThreadId",
           reviewed_at AS "reviewedAt",
+          delegated_from_thread_id AS "delegatedFromThreadId",
           created_at AS "createdAt",
           updated_at AS "updatedAt",
           deleted_at AS "deletedAt"
@@ -599,6 +608,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           review_verdict AS "reviewVerdict",
           reviewer_thread_id AS "reviewerThreadId",
           reviewed_at AS "reviewedAt",
+          delegated_from_thread_id AS "delegatedFromThreadId",
           created_at AS "createdAt",
           updated_at AS "updatedAt",
           deleted_at AS "deletedAt"
@@ -630,6 +640,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           review_verdict AS "reviewVerdict",
           reviewer_thread_id AS "reviewerThreadId",
           reviewed_at AS "reviewedAt",
+          delegated_from_thread_id AS "delegatedFromThreadId",
           created_at AS "createdAt",
           updated_at AS "updatedAt",
           deleted_at AS "deletedAt"
@@ -656,6 +667,8 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           worktree_path AS "worktreePath",
           focus_path AS "focusPath",
           linked_paths_json AS "linkedPaths",
+          parent_thread_id AS "parentThreadId",
+          origin_link_id AS "originLinkId",
           latest_turn_id AS "latestTurnId",
           created_at AS "createdAt",
           updated_at AS "updatedAt",
@@ -694,6 +707,8 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           worktree_path AS "worktreePath",
           focus_path AS "focusPath",
           linked_paths_json AS "linkedPaths",
+          parent_thread_id AS "parentThreadId",
+          origin_link_id AS "originLinkId",
           latest_turn_id AS "latestTurnId",
           created_at AS "createdAt",
           updated_at AS "updatedAt",
@@ -734,6 +749,8 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           worktree_path AS "worktreePath",
           focus_path AS "focusPath",
           linked_paths_json AS "linkedPaths",
+          parent_thread_id AS "parentThreadId",
+          origin_link_id AS "originLinkId",
           latest_turn_id AS "latestTurnId",
           created_at AS "createdAt",
           updated_at AS "updatedAt",
@@ -1171,6 +1188,25 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
       `,
   });
 
+  // Newest first: an older companion may have been archived by hand, and the
+  // most recent live one is the conversation the parent has been working with.
+  const getCompanionThreadIdFor = SqlSchema.findOneOption({
+    Request: CompanionThreadLookupInput,
+    Result: ProjectionThreadIdLookupRowSchema,
+    execute: ({ parentThreadId, targetProjectId }) =>
+      sql`
+        SELECT
+          thread_id AS "threadId"
+        FROM projection_threads
+        WHERE parent_thread_id = ${parentThreadId}
+          AND project_id = ${targetProjectId}
+          AND deleted_at IS NULL
+          AND archived_at IS NULL
+        ORDER BY created_at DESC, thread_id DESC
+        LIMIT 1
+      `,
+  });
+
   const getThreadCheckpointContextThreadRow = SqlSchema.findOneOption({
     Request: ThreadIdLookupInput,
     Result: ProjectionThreadCheckpointContextThreadRowSchema,
@@ -1206,6 +1242,8 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           worktree_path AS "worktreePath",
           focus_path AS "focusPath",
           linked_paths_json AS "linkedPaths",
+          parent_thread_id AS "parentThreadId",
+          origin_link_id AS "originLinkId",
           latest_turn_id AS "latestTurnId",
           created_at AS "createdAt",
           updated_at AS "updatedAt",
@@ -1860,6 +1898,8 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
                 ...(row.linkedPaths && row.linkedPaths.length > 0
                   ? { linkedPaths: row.linkedPaths }
                   : {}),
+                ...(row.parentThreadId ? { parentThreadId: row.parentThreadId } : {}),
+                ...(row.originLinkId ? { originLinkId: row.originLinkId } : {}),
                 latestTurn: latestTurnByThread.get(row.threadId) ?? null,
                 createdAt: row.createdAt,
                 updatedAt: row.updatedAt,
@@ -2100,6 +2140,8 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
                   ...(row.linkedPaths && row.linkedPaths.length > 0
                     ? { linkedPaths: row.linkedPaths }
                     : {}),
+                  ...(row.parentThreadId ? { parentThreadId: row.parentThreadId } : {}),
+                  ...(row.originLinkId ? { originLinkId: row.originLinkId } : {}),
                   latestTurn: latestTurnByThread.get(row.threadId) ?? null,
                   createdAt: row.createdAt,
                   updatedAt: row.updatedAt,
@@ -2254,6 +2296,8 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
                         ...(row.linkedPaths && row.linkedPaths.length > 0
                           ? { linkedPaths: row.linkedPaths }
                           : {}),
+                        ...(row.parentThreadId ? { parentThreadId: row.parentThreadId } : {}),
+                        ...(row.originLinkId ? { originLinkId: row.originLinkId } : {}),
                         latestTurn: latestTurnByThread.get(row.threadId) ?? null,
                         createdAt: row.createdAt,
                         updatedAt: row.updatedAt,
@@ -2404,6 +2448,8 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
                   ...(row.linkedPaths && row.linkedPaths.length > 0
                     ? { linkedPaths: row.linkedPaths }
                     : {}),
+                  ...(row.parentThreadId ? { parentThreadId: row.parentThreadId } : {}),
+                  ...(row.originLinkId ? { originLinkId: row.originLinkId } : {}),
                   latestTurn: latestTurnByThread.get(row.threadId) ?? null,
                   createdAt: row.createdAt,
                   updatedAt: row.updatedAt,
@@ -2606,6 +2652,17 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
         Effect.map(Option.map((row) => row.threadId)),
       );
 
+  const getCompanionThreadId: ProjectionSnapshotQueryShape["getCompanionThreadId"] = (input) =>
+    getCompanionThreadIdFor(input).pipe(
+      Effect.mapError(
+        toPersistenceSqlOrDecodeError(
+          "ProjectionSnapshotQuery.getCompanionThreadId:query",
+          "ProjectionSnapshotQuery.getCompanionThreadId:decodeRow",
+        ),
+      ),
+      Effect.map(Option.map((row) => row.threadId)),
+    );
+
   const getThreadCheckpointContext: ProjectionSnapshotQueryShape["getThreadCheckpointContext"] = (
     threadId,
   ) =>
@@ -2725,6 +2782,10 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
         ...(threadRow.value.linkedPaths && threadRow.value.linkedPaths.length > 0
           ? { linkedPaths: threadRow.value.linkedPaths }
           : {}),
+        ...(threadRow.value.parentThreadId
+          ? { parentThreadId: threadRow.value.parentThreadId }
+          : {}),
+        ...(threadRow.value.originLinkId ? { originLinkId: threadRow.value.originLinkId } : {}),
         latestTurn: Option.isSome(latestTurnRow) ? mapLatestTurn(latestTurnRow.value) : null,
         createdAt: threadRow.value.createdAt,
         updatedAt: threadRow.value.updatedAt,
@@ -2850,6 +2911,10 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
         ...(threadRow.value.linkedPaths && threadRow.value.linkedPaths.length > 0
           ? { linkedPaths: threadRow.value.linkedPaths }
           : {}),
+        ...(threadRow.value.parentThreadId
+          ? { parentThreadId: threadRow.value.parentThreadId }
+          : {}),
+        ...(threadRow.value.originLinkId ? { originLinkId: threadRow.value.originLinkId } : {}),
         latestTurn: Option.isSome(latestTurnRow) ? mapLatestTurn(latestTurnRow.value) : null,
         createdAt: threadRow.value.createdAt,
         updatedAt: threadRow.value.updatedAt,
@@ -3128,6 +3193,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
     getProjectLinksById,
     listScheduledProjects,
     getFirstActiveThreadIdByProjectId,
+    getCompanionThreadId,
     getThreadCheckpointContext,
     getFullThreadDiffContext,
     getThreadShellById,

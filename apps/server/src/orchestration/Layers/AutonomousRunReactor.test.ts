@@ -1,6 +1,8 @@
 import {
   CommandId,
+  GitCommandError,
   IssueId,
+  MessageId,
   ProjectId,
   ProviderInstanceId,
   ThreadId,
@@ -89,6 +91,11 @@ const makeProviderSnapshots = (models: ReadonlyArray<{ slug: string }> = CLAUDE_
  */
 function makeHarness(options?: {
   readonly pullRequestFails?: boolean;
+  /**
+   * What the shippable-work pre-check answers: work to ship (the default),
+   * nothing to ship, or a git failure the reactor has to survive.
+   */
+  readonly shippableWork?: boolean | "fails";
   /** The tier the stubbed classifier answers with. Defaults to the safe tier. */
   readonly reviewTier?: IssueReviewComplexityTier;
   readonly providers?: ReadonlyArray<unknown>;
@@ -96,10 +103,12 @@ function makeHarness(options?: {
   const started: StartedIssue[] = [];
   const reviews: IssueReviewStartInput[] = [];
   const stackedActions: Array<{ readonly cwd: string; readonly action: string }> = [];
+  const shippableChecks: Array<{ readonly cwd: string; readonly baseBranch: string }> = [];
   const resolvedPullRequests: Array<{ readonly cwd: string; readonly reference: string }> = [];
   const classified: ReviewComplexityInput[] = [];
   let pullRequestFails = options?.pullRequestFails ?? false;
   let pullRequestState: "open" | "merged" = "open";
+  const shippableWork = options?.shippableWork ?? true;
 
   const orchestrationLayer = OrchestrationEngineLive.pipe(
     Layer.provide(OrchestrationProjectionSnapshotQueryLive),
@@ -138,6 +147,20 @@ function makeHarness(options?: {
   ).pipe(Layer.provide(orchestrationLayer));
 
   const gitLayer = Layer.mock(GitWorkflowService.GitWorkflowService)({
+    hasShippableWork: (input: { readonly cwd: string; readonly baseBranch: string }) =>
+      Effect.suspend(() => {
+        shippableChecks.push(input);
+        return shippableWork === "fails"
+          ? Effect.fail(
+              new GitCommandError({
+                operation: "GitWorkflowService.hasShippableWork",
+                command: "rev-list",
+                cwd: input.cwd,
+                detail: "the probe itself broke",
+              }),
+            )
+          : Effect.succeed(shippableWork);
+      }),
     runStackedAction: (input: { readonly cwd: string; readonly action: string }) =>
       Effect.sync(() => {
         stackedActions.push({ cwd: input.cwd, action: input.action });
@@ -198,6 +221,7 @@ function makeHarness(options?: {
     started,
     reviews,
     stackedActions,
+    shippableChecks,
     resolvedPullRequests,
     classified,
     allowPullRequests: () => {
@@ -248,6 +272,41 @@ const bootRun = Effect.fn("bootRun")(function* () {
       title: `Issue ${id}`,
       description: `Body of ${id}`,
       dependsOn: dependsOn.map((entry) => IssueId.make(entry)),
+      createdAt: NOW,
+    });
+
+  /**
+   * An issue filed by cross-project delegation. Its project has no run of its
+   * own; the mark is what tells the reactor to work it anyway.
+   */
+  const createDelegatedIssue = (id: string, delegatedFrom?: ThreadId) =>
+    dispatch({
+      type: "issue.create",
+      commandId: nextCommandId(`delegated-${id}`),
+      issueId: IssueId.make(id),
+      projectId: PROJECT_ID,
+      title: `Issue ${id}`,
+      description: `Body of ${id}`,
+      dependsOn: [],
+      delegatedFromThreadId: delegatedFrom ?? ThreadId.make("thread-delegating-parent"),
+      createdAt: NOW,
+    });
+
+  /**
+   * What the linked-project coordinator does synchronously when it delegates:
+   * claim the issue with a thread of its own. The reactor never starts these
+   * itself, so a scenario has to.
+   */
+  const startIssueDirectly = (id: string, threadId: ThreadId) =>
+    dispatch({
+      type: "issue.start",
+      commandId: nextCommandId(`start-${id}`),
+      issueId: IssueId.make(id),
+      threadId,
+      messageId: MessageId.make(`message-${id}`),
+      modelSelection: MODEL,
+      runtimeMode: "full-access",
+      interactionMode: "default",
       createdAt: NOW,
     });
 
@@ -322,6 +381,8 @@ const bootRun = Effect.fn("bootRun")(function* () {
     nextCommandId,
     createProject,
     createIssue,
+    createDelegatedIssue,
+    startIssueDirectly,
     enableAutonomous,
     createWorkerThread,
     endTurn,
@@ -628,6 +689,102 @@ describe("AutonomousRunReactor", () => {
     }).pipe(Effect.scoped, Effect.provide(harness.layer));
   });
 
+  it.effect("finishes an issue whose worker left nothing to ship", () => {
+    const harness = makeHarness({ shippableWork: false });
+    return Effect.gen(function* () {
+      const run = yield* bootRun();
+      yield* run.createProject();
+      yield* run.createIssue("issue-a");
+      yield* run.enableAutonomous();
+      yield* run.reactor.drain;
+
+      const threadId = harness.started[0]?.command.threadId;
+      if (!threadId) throw new Error("expected the issue to have started");
+      yield* run.createWorkerThread(threadId, "/tmp/acme-worktrees/issue-a", "issue/issue-a");
+
+      // Two receipts: the issue finishing, then the run finishing with it.
+      const seen = yield* run.collectReceiptsWhile(2, run.endTurn(threadId, "idle"));
+      expect(seen.map((receipt) => receipt.type)).toEqual([
+        "autonomous.issue.completed-without-changes",
+        "autonomous.run.completed",
+      ]);
+      expect(seen[0]).toMatchObject({
+        issueId: IssueId.make("issue-a"),
+        threadId,
+        reason: "The worker finished without local changes; there was nothing to ship.",
+      });
+
+      // The pre-check looked at the worker's own worktree, against the branch
+      // the review and merge use.
+      expect(harness.shippableChecks).toEqual([
+        { cwd: "/tmp/acme-worktrees/issue-a", baseBranch: "main" },
+      ]);
+      // Nothing to commit is not a reason to run a commit/push/PR, and not a
+      // reason to park the issue either.
+      expect(harness.stackedActions).toEqual([]);
+      expect(harness.reviews).toEqual([]);
+      const issue = yield* run.findIssue("issue-a");
+      expect(issue?.status).toBe("done");
+      expect(issue?.needsAttentionAt).toBeNull();
+      expect(issue?.pullRequestUrl).toBeNull();
+    }).pipe(Effect.scoped, Effect.provide(harness.layer));
+  });
+
+  it.effect("says so when the empty-handed worker delegated its work away", () => {
+    const harness = makeHarness({ shippableWork: false });
+    return Effect.gen(function* () {
+      const run = yield* bootRun();
+      yield* run.createProject();
+      yield* run.createIssue("issue-a");
+      yield* run.enableAutonomous();
+      yield* run.reactor.drain;
+
+      const threadId = harness.started[0]?.command.threadId;
+      if (!threadId) throw new Error("expected the issue to have started");
+      // What delegation leaves behind: an issue on another project's board,
+      // marked with the thread that filed it. The harness has one project, so
+      // the mark is what carries the meaning here, exactly as the reactor
+      // reads it out of the shell snapshot.
+      // Waited on rather than drained: the harness's single project means the
+      // reactor also starts issue-b, and its receipt must be out of the way
+      // before the one under test.
+      yield* run.receiptsWhile(1, run.createDelegatedIssue("issue-b", threadId));
+      yield* run.reactor.drain;
+      yield* run.createWorkerThread(threadId, "/tmp/acme-worktrees/issue-a", "issue/issue-a");
+
+      const seen = yield* run.collectReceiptsWhile(1, run.endTurn(threadId, "idle"));
+      expect(seen[0]).toMatchObject({
+        type: "autonomous.issue.completed-without-changes",
+        reason:
+          "The worker finished without local changes; its work was delegated to linked projects.",
+      });
+      expect((yield* run.findIssue("issue-a"))?.status).toBe("done");
+    }).pipe(Effect.scoped, Effect.provide(harness.layer));
+  });
+
+  it.effect("opens the pull request anyway when the shippable-work check fails", () => {
+    const harness = makeHarness({ shippableWork: "fails" });
+    return Effect.gen(function* () {
+      const run = yield* bootRun();
+      yield* run.createProject();
+      yield* run.createIssue("issue-a");
+      yield* run.enableAutonomous();
+      yield* run.reactor.drain;
+
+      const threadId = harness.started[0]?.command.threadId;
+      if (!threadId) throw new Error("expected the issue to have started");
+      yield* run.createWorkerThread(threadId, "/tmp/acme-worktrees/issue-a", "issue/issue-a");
+
+      const seen = yield* run.receiptsWhile(2, run.endTurn(threadId, "idle"));
+      // A probe that cannot answer must never be why real work is dropped.
+      expect(seen).toContain("autonomous.pull-request.opened");
+      expect(harness.stackedActions).toEqual([
+        { cwd: "/tmp/acme-worktrees/issue-a", action: "commit_push_pr" },
+      ]);
+      expect((yield* run.findIssue("issue-a"))?.status).toBe("in_review");
+    }).pipe(Effect.scoped, Effect.provide(harness.layer));
+  });
+
   it.effect("retries only the pull request when its attention flag is cleared", () => {
     const harness = makeHarness({ pullRequestFails: true });
     return Effect.gen(function* () {
@@ -774,6 +931,76 @@ describe("AutonomousRunReactor", () => {
       const project = yield* run.snapshotQuery.getProjectShellById(PROJECT_ID);
       expect(Option.getOrThrow(project).autonomousStartedAt).toBeNull();
       expect(Option.getOrThrow(project).autonomousFinishedReason).toBe("completed");
+    }).pipe(Effect.scoped, Effect.provide(harness.layer));
+  });
+
+  it.effect("carries a delegated issue through review with no run on its project", () => {
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      const run = yield* bootRun();
+      yield* run.createProject();
+      yield* run.createDelegatedIssue("issue-a");
+      yield* run.reactor.drain;
+
+      // The delegating coordinator starts these, not this loop — and a project
+      // with no run must never be "completed" out from under one.
+      expect(harness.started).toEqual([]);
+      const project = yield* run.snapshotQuery.getProjectShellById(PROJECT_ID);
+      expect(Option.getOrThrow(project).autonomousFinishedReason).toBeNull();
+
+      const threadId = ThreadId.make("delegated-worker");
+      yield* run.startIssueDirectly("issue-a", threadId);
+      yield* run.createWorkerThread(threadId, "/tmp/acme-worktrees/issue-a", "issue/issue-a");
+
+      const seen = yield* run.receiptsWhile(2, run.endTurn(threadId, "idle"));
+      expect(seen).toContain("autonomous.pull-request.opened");
+      expect(seen).toContain("autonomous.review.started");
+
+      const issue = yield* run.findIssue("issue-a");
+      expect(issue?.status).toBe("in_review");
+      expect(issue?.pullRequestUrl).toBe("https://example.test/pr/1");
+      expect(harness.reviews).toHaveLength(1);
+      expect(harness.reviews[0]?.issueId).toBe(IssueId.make("issue-a"));
+    }).pipe(Effect.scoped, Effect.provide(harness.layer));
+  });
+
+  it.effect("finishes a run started on an empty backlog", () => {
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      const run = yield* bootRun();
+      yield* run.createProject();
+      // Wait on the receipt rather than a drain: the drain can run before the
+      // reactor has even taken the enable event off its buffer.
+      const seen = yield* run.receiptsWhile(1, run.enableAutonomous());
+      expect(seen).toEqual(["autonomous.run.completed"]);
+      yield* run.reactor.drain;
+
+      // Nothing to do is a finished run, not a run left switched on.
+      const project = yield* run.snapshotQuery.getProjectShellById(PROJECT_ID);
+      expect(Option.getOrThrow(project).autonomousStartedAt).toBeNull();
+      expect(Option.getOrThrow(project).autonomousFinishedReason).toBe("completed");
+      expect(harness.started).toEqual([]);
+    }).pipe(Effect.scoped, Effect.provide(harness.layer));
+  });
+
+  it.effect("leaves an ordinary issue in a run-less project alone", () => {
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      const run = yield* bootRun();
+      yield* run.createProject();
+      yield* run.createIssue("issue-a");
+      // Started by hand, the way a user starts an issue without a run. Nothing
+      // about that asks for an automatic pull request or a review.
+      const threadId = ThreadId.make("manual-worker");
+      yield* run.startIssueDirectly("issue-a", threadId);
+      yield* run.createWorkerThread(threadId, "/tmp/acme-worktrees/issue-a", "issue/issue-a");
+
+      yield* run.endTurn(threadId, "idle");
+      yield* run.reactor.drain;
+
+      expect(harness.stackedActions).toEqual([]);
+      expect(harness.reviews).toEqual([]);
+      expect((yield* run.findIssue("issue-a"))?.status).toBe("in_progress");
     }).pipe(Effect.scoped, Effect.provide(harness.layer));
   });
 

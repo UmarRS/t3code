@@ -19,8 +19,43 @@ The description is required, and it is worth writing well: it is what agents rea
 linked folder is. "backend for all smartcanvass APIs" tells an agent something; a bare path does
 not.
 
-The folder has to exist. It does not have to be a project you have added to Atlas — a folder that
-is not a project is marked **context only**, and works as read-only context and nothing more.
+The folder has to exist. It does not have to be a project you have added to Atlas, but whether it
+is one decides what agents can do with it:
+
+- A folder that **is** a registered project is marked **agents**. Work can be routed to it.
+- A folder that is **not** is marked **context only** — readable, but nothing can be delegated to
+  it, because there is no project to open a thread in.
+
+Note that paths are matched exactly. On macOS `/Users/you/dev/api` and `/Users/you/Dev/api` are the
+same folder but not the same string, so a link typed with the wrong casing lands as **context
+only**. Re-add it using the casing the project itself uses.
+
+## Delegate work to a linked project
+
+When a link is marked **agents**, an agent working in this project can hand that repository a task.
+It opens a thread there, runs an agent with the same model and the same write access, and reports
+the result back into the conversation that asked for it — so a single request can build a UI here
+and the endpoints it calls over there.
+
+Three tools drive this, and the agent chooses when to use them:
+
+| Tool                         | What it does                           |
+| ---------------------------- | -------------------------------------- |
+| `list_linked_projects`       | Lists the links and which are routable |
+| `delegate_to_linked_project` | Hands over a task and waits for it     |
+| `check_linked_project_agent` | Polls a task still running             |
+
+The delegated agent runs in its own repository and **cannot see your conversation**, so the task it
+receives has to stand alone. Delegating to the same project twice continues the same agent's
+thread rather than starting a stranger.
+
+A long task comes back as _still working_ rather than blocking; the agent polls it and picks the
+result up later. Its thread does not appear in the sidebar on its own — it belongs to the
+conversation that created it, and is reachable from the delegation row in that thread.
+
+Two things stay single-repository by design: **diffs and git actions**. The parent thread's diff
+shows only the parent's repository; the delegated agent's changes live on its own thread, and are
+committed from there.
 
 ## Links go both ways
 

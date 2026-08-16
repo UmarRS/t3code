@@ -102,6 +102,22 @@ export const AutonomousIssueFlaggedReceipt = Schema.Struct({
 });
 export type AutonomousIssueFlaggedReceipt = typeof AutonomousIssueFlaggedReceipt.Type;
 
+/**
+ * A worker that ended its turn with nothing to ship. Legitimate — it may have
+ * routed the work to a linked project's board, or found the work already done —
+ * so the issue finishes instead of being parked, and this is the run UI's
+ * record of why no pull request exists.
+ */
+export const AutonomousIssueCompletedWithoutChangesReceipt = Schema.Struct({
+  type: Schema.Literal("autonomous.issue.completed-without-changes"),
+  issueId: IssueId,
+  threadId: ThreadId,
+  reason: Schema.String,
+  createdAt: IsoDateTime,
+});
+export type AutonomousIssueCompletedWithoutChangesReceipt =
+  typeof AutonomousIssueCompletedWithoutChangesReceipt.Type;
+
 export const AutonomousRunCompletedReceipt = Schema.Struct({
   type: Schema.Literal("autonomous.run.completed"),
   projectId: ProjectId,
@@ -129,6 +145,7 @@ export const OrchestrationRuntimeReceipt = Schema.Union([
   AutonomousPullRequestOpenedReceipt,
   AutonomousReviewStartedReceipt,
   AutonomousIssueFlaggedReceipt,
+  AutonomousIssueCompletedWithoutChangesReceipt,
   AutonomousRunCompletedReceipt,
   AutonomousScheduleFiredReceipt,
 ]);

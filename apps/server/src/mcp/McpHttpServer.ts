@@ -17,6 +17,8 @@ import {
   PreviewSnapshotToolkitHandlersLive,
   PreviewStandardToolkitHandlersLive,
 } from "./toolkits/preview/handlers.ts";
+import { LinkedProjectsToolkitHandlersLive } from "./toolkits/linkedProjects/handlers.ts";
+import { LinkedProjectsToolkit } from "./toolkits/linkedProjects/tools.ts";
 import {
   PreviewSnapshotTool,
   PreviewSnapshotToolkit,
@@ -216,6 +218,10 @@ export const PreviewToolkitRegistrationLive = Layer.mergeAll(
   PreviewSnapshotRegistrationLive,
 );
 
+const LinkedProjectsToolkitRegistrationLive = McpServer.toolkit(LinkedProjectsToolkit).pipe(
+  Layer.provide(LinkedProjectsToolkitHandlersLive),
+);
+
 const McpTransportLive = McpServer.layerHttp({
   name: "Atlas",
   version: packageJson.version,
@@ -223,4 +229,7 @@ const McpTransportLive = McpServer.layerHttp({
   protocols: [McpProtocol.v2025_06_18],
 }).pipe(Layer.provide(McpAuthMiddlewareLive));
 
-export const layer = PreviewToolkitRegistrationLive.pipe(Layer.provideMerge(McpTransportLive));
+export const layer = Layer.mergeAll(
+  PreviewToolkitRegistrationLive,
+  LinkedProjectsToolkitRegistrationLive,
+).pipe(Layer.provideMerge(McpTransportLive));

@@ -128,7 +128,11 @@ const makeWithOptions = Effect.fn("McpSessionRegistry.make")(function* (
         threadId: ThreadId.make(request.threadId),
         providerSessionId,
         providerInstanceId: ProviderInstanceId.make(request.providerInstanceId),
-        capabilities: new Set(["preview"]),
+        // Granted unconditionally rather than gated on the project actually
+        // having a routable link: the registry has no route to project data,
+        // and inverting that dependency to save three tool definitions is a
+        // worse trade than letting `list_linked_projects` answer "none".
+        capabilities: new Set(["preview", "linked-projects"]),
         issuedAt,
       };
       yield* SynchronizedRef.update(state, ({ records }) => {
