@@ -88,8 +88,10 @@ import {
   buildIssueBoardColumns,
   buildIssueDecompositionPrompt,
   countDelegationTargetProjects,
+  describeDelegationTargetProjects,
   describeDelegationTargets,
   describeIssueBlockers,
+  indexDelegationTargetsByOriginThread,
   indexIssuesById,
   ISSUE_PRIORITY_LABEL,
   ISSUE_STATUS_COLUMNS,
@@ -163,7 +165,7 @@ export function IssuesBoardPage({
       new Map(
         threadShells
           .filter((thread) => thread.environmentId === environmentId)
-          .map((thread) => [thread.id as string, thread.projectId as string]),
+          .map((thread) => [thread.id, thread.projectId] as const),
       ),
     [environmentId, threadShells],
   );
@@ -172,9 +174,13 @@ export function IssuesBoardPage({
       new Map(
         projects
           .filter((entry) => entry.environmentId === environmentId)
-          .map((entry) => [entry.id as string, entry.title]),
+          .map((entry) => [entry.id, entry.title] as const),
       ),
     [environmentId, projects],
+  );
+  const targetsByOriginThread = useMemo(
+    () => indexDelegationTargetsByOriginThread({ environmentIssues, projectTitleById }),
+    [environmentIssues, projectTitleById],
   );
 
   const reportFailure = useCallback((title: string, failure: unknown) => {
@@ -378,7 +384,7 @@ export function IssuesBoardPage({
   const openDelegationOrigin = useCallback(
     async (origin: IssueDelegationLinks["origin"]) => {
       if (origin === null) return;
-      await openThreadById(origin.threadId as ThreadId);
+      await openThreadById(origin.threadId);
     },
     [openThreadById],
   );
@@ -395,7 +401,7 @@ export function IssuesBoardPage({
       if (first === undefined || countDelegationTargetProjects(targets) !== 1) return;
       await navigate({
         to: "/issues/$environmentId/$projectId",
-        params: { environmentId, projectId: first.projectId as ProjectId },
+        params: { environmentId, projectId: first.projectId },
       });
     },
     [environmentId, navigate],
@@ -611,7 +617,7 @@ export function IssuesBoardPage({
                               ) ?? null);
                         const delegationLinks = resolveIssueDelegationLinks({
                           issue,
-                          environmentIssues,
+                          targetsByOriginThread,
                           projectIdByThreadId,
                           projectTitleById,
                         });
@@ -931,14 +937,14 @@ function IssueCard({
             <TooltipTrigger
               render={
                 <Badge
-                  render={<button type="button" onClick={onOpenDelegationTargets} />}
+                  // Only one destination is worth a click; several boards would
+                  // have to guess which, so the chip stays a plain label.
+                  {...(countDelegationTargetProjects(delegationLinks.targets) === 1
+                    ? { render: <button type="button" onClick={onOpenDelegationTargets} /> }
+                    : {})}
                   variant="outline"
                   size="sm"
-                  className={cn(
-                    "max-w-full gap-1 text-info-foreground",
-                    countDelegationTargetProjects(delegationLinks.targets) === 1 &&
-                      "cursor-pointer",
-                  )}
+                  className="max-w-full gap-1 text-info-foreground"
                 >
                   <ArrowUpRightIcon className="size-3 shrink-0" />
                   <span className="truncate">
@@ -950,12 +956,8 @@ function IssueCard({
             <TooltipPopup side="bottom">
               <span className="block max-w-64 text-left">
                 This issue's agent delegated work to{" "}
-                {delegationLinks.targets
-                  .map((target) => target.projectTitle ?? "another project")
-                  .filter((title, index, all) => all.indexOf(title) === index)
-                  .join(", ")}
-                . It is tracked as {delegationLinks.targets.length === 1 ? "an issue" : "issues"} on
-                that board.
+                {describeDelegationTargetProjects(delegationLinks.targets)}. It is tracked as{" "}
+                {delegationLinks.targets.length === 1 ? "an issue" : "issues"} on that board.
               </span>
             </TooltipPopup>
           </Tooltip>

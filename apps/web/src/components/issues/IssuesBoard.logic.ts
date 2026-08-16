@@ -5,6 +5,8 @@ import {
   type IssueId,
   type IssuePriority,
   type IssueStatus,
+  type ProjectId,
+  type ThreadId,
 } from "@t3tools/contracts";
 
 /**
@@ -218,22 +220,22 @@ export function buildIssueDecompositionPrompt(input: {
 
 export interface CrossProjectIssueView {
   readonly id: IssueId;
-  readonly projectId: string;
-  readonly threadId: string | null;
-  readonly delegatedFromThreadId?: string | null | undefined;
+  readonly projectId: ProjectId;
+  readonly threadId: ThreadId | null;
+  readonly delegatedFromThreadId?: ThreadId | null | undefined;
 }
 
 export interface IssueDelegationOrigin {
   /** The thread that delegated the work, in whichever project owns it. */
-  readonly threadId: string;
+  readonly threadId: ThreadId;
   /** Null when the origin thread is not in the loaded snapshot. */
-  readonly projectId: string | null;
+  readonly projectId: ProjectId | null;
   readonly projectTitle: string | null;
 }
 
 export interface IssueDelegationTarget {
   readonly issueId: IssueId;
-  readonly projectId: string;
+  readonly projectId: ProjectId;
   readonly projectTitle: string | null;
 }
 
@@ -244,15 +246,49 @@ export interface IssueDelegationLinks {
   readonly targets: ReadonlyArray<IssueDelegationTarget>;
 }
 
+/** Delegated issues grouped by the thread that filed them. */
+export type DelegationTargetsByOriginThread = ReadonlyMap<
+  ThreadId,
+  ReadonlyArray<IssueDelegationTarget>
+>;
+
 const NO_DELEGATION_LINKS: IssueDelegationLinks = { origin: null, targets: [] };
+const NO_TARGETS: ReadonlyArray<IssueDelegationTarget> = [];
+
+/**
+ * Groups the environment's issues by the thread each was delegated from, so a
+ * board resolves its outgoing links with a lookup per card rather than a scan
+ * of every issue in the environment per card.
+ */
+export function indexDelegationTargetsByOriginThread(input: {
+  readonly environmentIssues: ReadonlyArray<CrossProjectIssueView>;
+  readonly projectTitleById: ReadonlyMap<ProjectId, string>;
+}): DelegationTargetsByOriginThread {
+  const index = new Map<ThreadId, Array<IssueDelegationTarget>>();
+  for (const issue of input.environmentIssues) {
+    const originThreadId = issue.delegatedFromThreadId ?? null;
+    if (originThreadId === null) continue;
+    const target: IssueDelegationTarget = {
+      issueId: issue.id,
+      projectId: issue.projectId,
+      projectTitle: input.projectTitleById.get(issue.projectId) ?? null,
+    };
+    const existing = index.get(originThreadId);
+    if (existing === undefined) {
+      index.set(originThreadId, [target]);
+    } else {
+      existing.push(target);
+    }
+  }
+  return index;
+}
 
 export function resolveIssueDelegationLinks(input: {
   readonly issue: CrossProjectIssueView;
-  /** Every issue in the environment, so the other board's rows are visible. */
-  readonly environmentIssues: ReadonlyArray<CrossProjectIssueView>;
+  readonly targetsByOriginThread: DelegationTargetsByOriginThread;
   /** Project of a thread id, for naming the far side of an incoming link. */
-  readonly projectIdByThreadId: ReadonlyMap<string, string>;
-  readonly projectTitleById: ReadonlyMap<string, string>;
+  readonly projectIdByThreadId: ReadonlyMap<ThreadId, ProjectId>;
+  readonly projectTitleById: ReadonlyMap<ProjectId, string>;
 }): IssueDelegationLinks {
   const { issue } = input;
   const originThreadId = issue.delegatedFromThreadId ?? null;
@@ -269,24 +305,14 @@ export function resolveIssueDelegationLinks(input: {
           };
         })();
 
-  // Only a started issue can have delegated anything, and an issue never
-  // counts as its own target — a delegation that stayed on this board is
-  // ordinary work, not a link between two of them.
-  const targets =
+  // Only a started issue can have delegated anything, and a delegation that
+  // stayed on this board is ordinary work rather than a link between two of
+  // them — so the issue's own project is filtered out.
+  const filed =
     issue.threadId === null
-      ? []
-      : input.environmentIssues.flatMap((candidate) =>
-          candidate.delegatedFromThreadId === issue.threadId &&
-          candidate.projectId !== issue.projectId
-            ? [
-                {
-                  issueId: candidate.id,
-                  projectId: candidate.projectId,
-                  projectTitle: input.projectTitleById.get(candidate.projectId) ?? null,
-                },
-              ]
-            : [],
-        );
+      ? NO_TARGETS
+      : (input.targetsByOriginThread.get(issue.threadId) ?? NO_TARGETS);
+  const targets = filed.filter((target) => target.projectId !== issue.projectId);
 
   return origin === null && targets.length === 0 ? NO_DELEGATION_LINKS : { origin, targets };
 }
@@ -313,4 +339,12 @@ export function describeDelegationTargets(targets: ReadonlyArray<IssueDelegation
     return targets.length === 1 ? "To another project" : `To another project (${targets.length})`;
   }
   return targets.length === 1 ? `To ${title}` : `To ${title} (${targets.length})`;
+}
+
+/** The boards the targets sit on, named once each, for the chip's tooltip. */
+export function describeDelegationTargetProjects(
+  targets: ReadonlyArray<IssueDelegationTarget>,
+): string {
+  const titles = new Set(targets.map((target) => target.projectTitle ?? "another project"));
+  return [...titles].join(", ");
 }
