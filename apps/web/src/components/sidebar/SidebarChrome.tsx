@@ -2,7 +2,7 @@ import { ArrowLeftIcon, ChartNoAxesColumnIcon, ListChecksIcon, SettingsIcon } fr
 import { memo, useCallback } from "react";
 import { Link, useCanGoBack, useLocation, useNavigate } from "@tanstack/react-router";
 
-import { APP_VERSION } from "../../branding";
+import { APP_DISPLAY_NAME, APP_VERSION } from "../../branding";
 import { useProjects } from "../../state/entities";
 import { resolveAutonomousRunState } from "../issues/autonomousRun.logic";
 import { useEnvironmentIdentificationMode } from "../../hooks/useSettings";
@@ -250,9 +250,9 @@ export const SidebarChromeFooter = memo(function SidebarChromeFooter() {
                 <TooltipPopup side="top">Usage</TooltipPopup>
               </Tooltip>
             </SidebarMenuItem>
-            <SidebarVersionLabel />
           </>
         )}
+        <SidebarVersionLabel />
         <SidebarUpdatePill />
       </SidebarMenu>
     </SidebarFooter>
@@ -261,8 +261,11 @@ export const SidebarChromeFooter = memo(function SidebarChromeFooter() {
 
 /**
  * The running version, parked in the chrome so "which build am I on?" is a
- * glance rather than a trip into Settings. Settings keeps the authoritative
- * About row — with the desktop updater attached — so this stays a plain label.
+ * glance rather than a trip into Settings. Kept outside the footer's page
+ * branch so it survives navigation, and named from the resolved branding
+ * rather than a literal, since forks rename the app and nightly and latest
+ * share version numbers. Settings keeps the authoritative About row — with
+ * the desktop updater attached — so this stays a plain label.
  */
 function SidebarVersionLabel() {
   return (
@@ -275,7 +278,9 @@ function SidebarVersionLabel() {
             </span>
           }
         />
-        <TooltipPopup side="top">Atlas {APP_VERSION}</TooltipPopup>
+        <TooltipPopup side="top">
+          {APP_DISPLAY_NAME} {APP_VERSION}
+        </TooltipPopup>
       </Tooltip>
     </SidebarMenuItem>
   );
