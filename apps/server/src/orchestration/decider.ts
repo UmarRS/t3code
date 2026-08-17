@@ -1332,6 +1332,17 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
       };
     }
 
+    // Resuming is not a decision: the WS layer routes it to the recovery
+    // service, which reads the thread's interrupted turn and dispatches the
+    // ordinary stop/start pair. It reaches the decider only if that routing is
+    // ever bypassed, and rejecting is the honest answer there.
+    case "thread.turn.resume": {
+      return yield* new OrchestrationCommandInvariantError({
+        commandType: command.type,
+        detail: "thread.turn.resume is handled by the resume coordinator, not the decider.",
+      });
+    }
+
     case "thread.session.stop": {
       const thread = yield* requireThread({
         readModel,

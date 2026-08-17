@@ -59,6 +59,7 @@ export type RespondToThreadApprovalInput = CommandInput<"thread.approval.respond
 export type RespondToThreadUserInputInput = CommandInput<"thread.user-input.respond">;
 export type RevertThreadCheckpointInput = CommandInput<"thread.checkpoint.revert">;
 export type StopThreadSessionInput = CommandInput<"thread.session.stop">;
+export type ResumeThreadTurnInput = CommandInput<"thread.turn.resume">;
 export type CreateIssueInput = CommandInput<"issue.create">;
 export type UpdateIssueInput = CommandInput<"issue.update">;
 export type SetIssueStatusInput = CommandInput<"issue.status.set">;
@@ -356,6 +357,23 @@ export const revertThreadCheckpoint: (input: RevertThreadCheckpointInput) => Com
       createdAt: metadata.createdAt,
     });
   });
+
+/**
+ * Pick a thread's interrupted turn back up now. The server rebuilds the turn
+ * from the thread's own last user message, so this carries no message payload —
+ * the client no longer holds the bytes of any attachment it sent.
+ */
+export const resumeThreadTurn: (input: ResumeThreadTurnInput) => CommandEffect = Effect.fn(
+  "EnvironmentCommands.resumeThreadTurn",
+)(function* (input) {
+  const metadata = yield* timestampedCommandMetadata(input);
+  return yield* dispatch({
+    ...input,
+    type: "thread.turn.resume",
+    commandId: metadata.commandId,
+    createdAt: metadata.createdAt,
+  });
+});
 
 export const stopThreadSession: (input: StopThreadSessionInput) => CommandEffect = Effect.fn(
   "EnvironmentCommands.stopThreadSession",

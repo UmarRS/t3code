@@ -20,6 +20,7 @@ import {
   type OrchestrationThread,
   type OrchestrationThreadActivity,
   type ProviderRuntimeEvent,
+  resumeAtForSessionStatus,
 } from "@t3tools/contracts";
 import * as Cache from "effect/Cache";
 import * as Cause from "effect/Cause";
@@ -1796,18 +1797,21 @@ const make = Effect.gen(function* () {
               runtimeMode: thread.session?.runtimeMode ?? "full-access",
               activeTurnId: nextActiveTurnId,
               lastError,
+              resumeAt: resumeAtForSessionStatus(thread.session, status),
               updatedAt: now,
             },
             createdAt: now,
           });
 
-          // A turn that failed because the Claude account is out of
-          // credits/limits restarts once on the codex backup model (any other
-          // failure — and any failure of the backup itself — keeps the error
-          // state set above). Classification runs on the raw provider error;
-          // the failover service owns the mapping and the one-hop guarantee.
+          // A turn that failed because the account is out of credits/limits
+          // recovers by itself: it parks until the limit lifts when the
+          // provider said when that is, and otherwise restarts once on the
+          // codex backup model (any other failure — and any failure of the
+          // backup itself — keeps the error state set above). Classification
+          // runs on the raw provider error; the recovery service owns the
+          // strategy choice and the one-hop guarantee.
           if (isFreshTurnFailure && rawLastError !== null) {
-            yield* modelFailover.maybeFailoverToBackup({
+            yield* modelFailover.recoverFromExhaustion({
               threadId: thread.id,
               failureDetail: rawLastError,
               createdAt: now,
@@ -2081,6 +2085,7 @@ const make = Effect.gen(function* () {
               runtimeMode: thread.session?.runtimeMode ?? "full-access",
               activeTurnId: eventTurnId ?? null,
               lastError: runtimeErrorMessage,
+              resumeAt: resumeAtForSessionStatus(thread.session, "error"),
               updatedAt: now,
             },
             createdAt: now,

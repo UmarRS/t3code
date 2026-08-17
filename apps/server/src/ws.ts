@@ -88,6 +88,7 @@ import * as PortScanner from "./preview/PortScanner.ts";
 import * as WorkspaceEntries from "./workspace/WorkspaceEntries.ts";
 import * as WorkspaceFileSystem from "./workspace/WorkspaceFileSystem.ts";
 import * as IssueStartCoordinator from "./orchestration/Services/IssueStartCoordinator.ts";
+import { ModelFailoverService } from "./orchestration/Services/ModelFailover.ts";
 import { readWorkflowScript } from "./orchestration/workflowScriptQuery.ts";
 import * as WorkspacePaths from "./workspace/WorkspacePaths.ts";
 import * as VcsStatusBroadcaster from "./vcs/VcsStatusBroadcaster.ts";
@@ -375,6 +376,7 @@ const makeWsRpcLayer = (
       const workspaceFileSystem = yield* WorkspaceFileSystem.WorkspaceFileSystem;
       const projectSetupScriptRunner = yield* ProjectSetupScriptRunner.ProjectSetupScriptRunner;
       const issueStartCoordinator = yield* IssueStartCoordinator.IssueStartCoordinator;
+      const modelFailover = yield* ModelFailoverService;
       const serverEnvironment = yield* ServerEnvironment.ServerEnvironment;
       const backgroundPolicy = yield* BackgroundPolicy.BackgroundPolicy;
       const rpcClientIds = yield* Ref.make(new Set<RpcClientId>());
@@ -1022,6 +1024,26 @@ const makeWsRpcLayer = (
           );
         });
 
+      // "Resume now" and the resume ticker run the same restart; only the
+      // trigger differs. Reporting a failure when there is nothing to restart
+      // keeps the button honest instead of silently doing nothing.
+      const resumeInterruptedTurn = (
+        command: Extract<OrchestrationCommand, { type: "thread.turn.resume" }>,
+      ): Effect.Effect<{ readonly sequence: number }, OrchestrationDispatchCommandError> =>
+        modelFailover
+          .resumeParkedThread({ threadId: command.threadId, createdAt: command.createdAt })
+          .pipe(
+            Effect.flatMap((result) =>
+              result.resumed
+                ? Effect.succeed({ sequence: result.sequence })
+                : Effect.fail(
+                    new OrchestrationDispatchCommandError({
+                      message: "This thread has no interrupted turn to resume.",
+                    }),
+                  ),
+            ),
+          );
+
       const dispatchNormalizedCommand = (
         normalizedCommand: OrchestrationCommand,
       ): Effect.Effect<{ readonly sequence: number }, OrchestrationDispatchCommandError> => {
@@ -1033,13 +1055,20 @@ const makeWsRpcLayer = (
                 // seeded turn) shared with the autonomous reactor, so it lives
                 // in a service rather than in this RPC handler.
                 issueStartCoordinator.startIssue(normalizedCommand)
-              : orchestrationEngine
-                  .dispatch(normalizedCommand)
-                  .pipe(
-                    Effect.mapError((cause) =>
-                      toDispatchCommandError(cause, "Failed to dispatch orchestration command"),
-                    ),
-                  );
+              : normalizedCommand.type === "thread.turn.resume"
+                ? // Resuming reads the thread's own last user message and
+                  // restarts it, the same way the resume ticker does when a
+                  // parked limit lifts — so it is a service call, not a
+                  // decision. It reports the sequence of the commands it
+                  // dispatched in turn.
+                  resumeInterruptedTurn(normalizedCommand)
+                : orchestrationEngine
+                    .dispatch(normalizedCommand)
+                    .pipe(
+                      Effect.mapError((cause) =>
+                        toDispatchCommandError(cause, "Failed to dispatch orchestration command"),
+                      ),
+                    );
 
         return startup
           .enqueueCommand(dispatchEffect)

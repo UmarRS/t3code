@@ -95,6 +95,7 @@ const ACTIVE_THREAD: OrchestrationThread = {
     runtimeMode: "full-access",
     activeTurnId: TurnId.make("turn-1"),
     lastError: null,
+    resumeAt: null,
     updatedAt: "2026-04-01T00:01:00.000Z",
   },
 };

@@ -665,6 +665,7 @@ describe("resolveSidebarThreadStatus", () => {
     runtimeMode: DEFAULT_RUNTIME_MODE,
     activeTurnId: "turn-1" as never,
     lastError: null,
+    resumeAt: null,
     updatedAt: "2026-03-09T10:00:00.000Z",
   };
 
@@ -1071,6 +1072,7 @@ describe("resolveWorkingStartedAt", () => {
     runtimeMode: DEFAULT_RUNTIME_MODE,
     activeTurnId: "turn-1" as never,
     lastError: null,
+    resumeAt: null,
     updatedAt: "2026-03-09T10:02:00.000Z",
   };
 
@@ -1145,6 +1147,7 @@ describe("resolveThreadStatusPill", () => {
       runtimeMode: DEFAULT_RUNTIME_MODE,
       activeTurnId: "turn-1" as never,
       lastError: null,
+      resumeAt: null,
       updatedAt: "2026-03-09T10:00:00.000Z",
     },
   };
@@ -1178,6 +1181,61 @@ describe("resolveThreadStatusPill", () => {
         thread: baseThread,
       }),
     ).toMatchObject({ label: "Working", pulse: true });
+  });
+
+  it("shows rate limited while the session waits out a provider limit", () => {
+    expect(
+      resolveThreadStatusPill({
+        thread: {
+          ...baseThread,
+          session: {
+            ...baseThread.session,
+            status: "error",
+            activeTurnId: null,
+            lastError: "You've hit your session limit",
+            resumeAt: "2026-03-09T12:00:00.000Z",
+          },
+        },
+      }),
+    ).toMatchObject({ label: "Rate Limited", pulse: false });
+  });
+
+  it("lets a working thread outrank a parked one in the project row", () => {
+    const working = resolveThreadStatusPill({ thread: baseThread });
+    const parked = resolveThreadStatusPill({
+      thread: {
+        ...baseThread,
+        session: {
+          ...baseThread.session,
+          status: "error",
+          activeTurnId: null,
+          resumeAt: "2026-03-09T12:00:00.000Z",
+        },
+      },
+    });
+
+    // Order must not decide it: a project with any live work reads as working.
+    expect(resolveProjectStatusIndicator([parked, working])).toMatchObject({ label: "Working" });
+    expect(resolveProjectStatusIndicator([working, parked])).toMatchObject({ label: "Working" });
+    // With nothing live, the park is what the project row has to say.
+    expect(resolveProjectStatusIndicator([parked, null])).toMatchObject({ label: "Rate Limited" });
+  });
+
+  it("stops showing rate limited once the park is cleared", () => {
+    expect(
+      resolveThreadStatusPill({
+        thread: {
+          ...baseThread,
+          session: {
+            ...baseThread.session,
+            status: "error",
+            activeTurnId: null,
+            lastError: "You've hit your session limit",
+            resumeAt: null,
+          },
+        },
+      }),
+    ).not.toMatchObject({ label: "Rate Limited" });
   });
 
   it("shows plan ready when a settled plan turn has a proposed plan ready for follow-up", () => {

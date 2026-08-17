@@ -333,7 +333,11 @@ const bootRun = Effect.fn("bootRun")(function* () {
       createdAt: NOW,
     });
 
-  const endTurn = (threadId: ThreadId, status: "idle" | "error") =>
+  const endTurn = (
+    threadId: ThreadId,
+    status: "idle" | "error",
+    options?: { readonly resumeAt?: string },
+  ) =>
     dispatch({
       type: "thread.session.set",
       commandId: nextCommandId("session"),
@@ -345,6 +349,7 @@ const bootRun = Effect.fn("bootRun")(function* () {
         runtimeMode: "full-access",
         activeTurnId: null,
         lastError: status === "error" ? "provider exploded" : null,
+        resumeAt: options?.resumeAt ?? null,
         updatedAt: NOW,
       },
       createdAt: NOW,
@@ -838,6 +843,32 @@ describe("AutonomousRunReactor", () => {
       expect(harness.stackedActions).toEqual([]);
       const issue = yield* run.findIssue("issue-a");
       expect(issue?.needsAttentionReason).toContain("ended in an error");
+    }).pipe(Effect.scoped, Effect.provide(harness.layer));
+  });
+
+  it.effect("leaves the issue alone while its worker waits out a provider limit", () => {
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      const run = yield* bootRun();
+      yield* run.createProject();
+      yield* run.createIssue("issue-a");
+      yield* run.enableAutonomous();
+      yield* run.reactor.drain;
+
+      const threadId = harness.started[0]?.command.threadId;
+      if (!threadId) throw new Error("expected the issue to have started");
+      yield* run.createWorkerThread(threadId, "/tmp/acme-worktrees/issue-a", null);
+
+      yield* run.endTurn(threadId, "error", { resumeAt: "2026-01-01T05:00:00.000Z" });
+      yield* run.reactor.drain;
+
+      // The turn is not over — the server restarts it when the limit lifts —
+      // so the issue must not be handed to a human, and must not reach the PR
+      // step either.
+      expect(harness.stackedActions).toEqual([]);
+      const issue = yield* run.findIssue("issue-a");
+      expect(issue?.needsAttentionAt).toBeNull();
+      expect(issue?.status).toBe("in_progress");
     }).pipe(Effect.scoped, Effect.provide(harness.layer));
   });
 

@@ -1,8 +1,9 @@
 import { memo } from "react";
 import { Alert, AlertAction, AlertDescription } from "../ui/alert";
 import { Button } from "../ui/button";
-import { CircleAlertIcon, XIcon } from "lucide-react";
+import { CircleAlertIcon, ClockIcon, PlayIcon, XIcon } from "lucide-react";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
+import type { ThreadErrorBannerMode } from "./threadLimitPark";
 
 export function getThreadErrorBannerKey(threadKey: string, error: string | null): string | null {
   return error === null ? null : `${threadKey}\u0000${error}`;
@@ -34,32 +35,88 @@ export function isThreadErrorBannerDismissedForSession(bannerKey: string | null)
 }
 
 export const ThreadErrorBanner = memo(function ThreadErrorBanner({
-  error,
+  mode,
   onDismiss,
+  onResumeNow,
+  onStopWaiting,
 }: {
-  error: string | null;
+  mode: ThreadErrorBannerMode | null;
   onDismiss?: () => void;
+  /** Skip the wait and restart the interrupted turn now. Parked threads only. */
+  onResumeNow?: () => void;
+  /** Give up on the automatic restart, leaving the thread stopped. */
+  onStopWaiting?: () => void;
 }) {
-  if (!error) return null;
+  if (mode === null) return null;
+
+  if (mode.kind === "parked") {
+    const wait =
+      mode.relativeLabel === null
+        ? `Resuming at ${mode.resumeAtLabel}.`
+        : `Resuming at ${mode.resumeAtLabel} (${mode.relativeLabel}).`;
+    return (
+      <div className="mx-auto w-fit max-w-[min(48rem,calc(100%-2rem))] pt-3">
+        <Alert variant="warning" controlAlignment="first-line">
+          <ClockIcon />
+          <AlertDescription>
+            <Tooltip>
+              <TooltipTrigger render={<div className="line-clamp-3" />}>
+                {`Paused until the model's limit resets. ${wait}`}
+              </TooltipTrigger>
+              <TooltipPopup side="top" className="max-w-96 whitespace-pre-wrap">
+                {mode.message}
+              </TooltipPopup>
+            </Tooltip>
+          </AlertDescription>
+          <AlertAction>
+            <div className="flex items-center gap-1">
+              {onResumeNow && (
+                <Button variant="ghost" size="xs" onClick={onResumeNow}>
+                  <PlayIcon />
+                  Resume now
+                </Button>
+              )}
+              {onStopWaiting && (
+                <Button variant="ghost" size="xs" onClick={onStopWaiting}>
+                  Stop waiting
+                </Button>
+              )}
+            </div>
+          </AlertAction>
+        </Alert>
+      </div>
+    );
+  }
+
   return (
     <div className="mx-auto w-fit max-w-[min(48rem,calc(100%-2rem))] pt-3">
       <Alert variant="error" controlAlignment="first-line">
         <CircleAlertIcon />
         <AlertDescription>
           <Tooltip>
-            <TooltipTrigger render={<div className="line-clamp-3" />}>{error}</TooltipTrigger>
+            <TooltipTrigger render={<div className="line-clamp-3" />}>
+              {mode.message}
+            </TooltipTrigger>
             <TooltipPopup side="top" className="max-w-96 whitespace-pre-wrap">
-              {error}
+              {mode.message}
             </TooltipPopup>
           </Tooltip>
         </AlertDescription>
-        {onDismiss && (
-          <AlertAction>
-            <Button variant="ghost" size="icon-xs" aria-label="Dismiss error" onClick={onDismiss}>
-              <XIcon className="text-destructive" />
-            </Button>
-          </AlertAction>
-        )}
+        <AlertAction>
+          <div className="flex items-center gap-1">
+            {onResumeNow && (
+              <Button variant="ghost" size="xs" onClick={onResumeNow}>
+                <PlayIcon />
+                Retry
+              </Button>
+            )}
+            {onDismiss && (
+              <Button variant="ghost" size="icon-xs" aria-label="Dismiss error" onClick={onDismiss}>
+                <XIcon className="text-destructive" />
+              </Button>
+            )}
+          </div>
+        </AlertAction>
       </Alert>
     </div>
   );

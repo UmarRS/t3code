@@ -52,6 +52,7 @@ import { IssueStartCoordinatorLive } from "./orchestration/Layers/IssueStartCoor
 import { LinkedProjectCoordinatorLive } from "./orchestration/Layers/LinkedProjectCoordinator.ts";
 import { OrchestrationReactorLive } from "./orchestration/Layers/OrchestrationReactor.ts";
 import { RuntimeReceiptBusLive } from "./orchestration/Layers/RuntimeReceiptBus.ts";
+import { LimitResumeReactorLive } from "./orchestration/Layers/LimitResumeReactor.ts";
 import { ModelFailoverLive } from "./orchestration/Layers/ModelFailover.ts";
 import { ReviewComplexityClassifierLive } from "./orchestration/Layers/ReviewComplexityClassifier.ts";
 import { ProviderRuntimeIngestionLive } from "./orchestration/Layers/ProviderRuntimeIngestion.ts";
@@ -220,6 +221,10 @@ const ReactorLayerLive = Layer.empty.pipe(
   Layer.provideMerge(OrchestrationReactorLive),
   Layer.provideMerge(AutonomousRunReactorLive),
   Layer.provideMerge(AutonomousScheduleReactorLive),
+  // Provided before ModelFailoverLive below, which it consumes: the ticker only
+  // decides *when* a parked thread is due, and hands the restart itself to the
+  // same service that parked it.
+  Layer.provideMerge(LimitResumeReactorLive),
   // Re-exported because the MCP toolkit delegates on an agent's behalf, so the
   // tool handlers need it from outside the reactor stack.
   Layer.provideMerge(LinkedProjectCoordinatorLive),

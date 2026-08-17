@@ -74,6 +74,7 @@ function makeShell(input: {
             runtimeMode: "full-access",
             activeTurnId: null,
             lastError: null,
+            resumeAt: null,
             updatedAt: NOW,
           },
     latestUserMessageAt: null,
@@ -283,6 +284,7 @@ describe("effectiveSettled", () => {
         runtimeMode: "full-access",
         activeTurnId: null,
         lastError: null,
+        resumeAt: null,
         updatedAt: requestedAt,
       },
     };
@@ -359,6 +361,7 @@ describe("hasQueuedTurnStart", () => {
         runtimeMode: "full-access" as const,
         activeTurnId: null,
         lastError: "boom",
+        resumeAt: null,
         updatedAt: NOW,
       },
     };
