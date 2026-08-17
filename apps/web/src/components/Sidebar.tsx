@@ -173,6 +173,7 @@ import { Input } from "./ui/input";
 import { Menu, MenuPopup, MenuRadioGroup, MenuRadioItem, MenuTrigger } from "./ui/menu";
 import { SidebarContent, SidebarGroup, SidebarMenuButton, useSidebar } from "./ui/sidebar";
 import { SidebarChromeFooter, SidebarChromeHeader } from "./sidebar/SidebarChrome";
+import { SidebarProjectsSection } from "./sidebar/SidebarProjectsSection";
 import { Popover, PopoverPopup, PopoverTrigger } from "./ui/popover";
 import { Tooltip, TooltipPopup, TooltipProvider, TooltipTrigger } from "./ui/tooltip";
 import {
@@ -3583,6 +3584,9 @@ export default function Sidebar() {
               </p>
             )
           ) : null}
+          {/* Projects sit above the thread list: the project you pick scopes
+            everything below it, and search takes the whole panel over. */}
+          {!isSearchingThreads ? <SidebarProjectsSection projectGroups={projectGroups} /> : null}
           {!isSearchingThreads ? (
             <TooltipProvider
               key="sidebar-thread-tooltips-150"
