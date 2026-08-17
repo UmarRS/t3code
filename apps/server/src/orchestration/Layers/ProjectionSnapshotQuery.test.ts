@@ -68,6 +68,50 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
     }),
   );
 
+  // The archive sweep's whole filter lives in this query's predicate, so this
+  // is where "not yet due", "not done", and "already deleted" are proved to
+  // stay put.
+  it.effect("lists only the live done issues untouched since the cutoff", () =>
+    Effect.gen(function* () {
+      const snapshotQuery = yield* ProjectionSnapshotQuery;
+      const sql = yield* SqlClient.SqlClient;
+
+      yield* sql`
+        INSERT INTO projection_issues (
+          issue_id, project_id, title, description, status, priority,
+          model_selection_json, depends_on_json, review_notes,
+          created_at, updated_at, deleted_at
+        ) VALUES
+          ('archive-due', 'project-archive', 'Long finished', '', 'done', NULL,
+           NULL, '[]', '', '2026-08-01T00:00:00.000Z', '2026-08-10T00:00:00.000Z', NULL),
+          ('archive-older', 'project-archive', 'Finished first', '', 'done', NULL,
+           NULL, '[]', '', '2026-08-01T00:00:00.000Z', '2026-08-09T00:00:00.000Z', NULL),
+          ('archive-fresh', 'project-archive', 'Just finished', '', 'done', NULL,
+           NULL, '[]', '', '2026-08-01T00:00:00.000Z', '2026-08-11T00:00:00.000Z', NULL),
+          ('archive-canceled', 'project-archive', 'Abandoned', '', 'canceled', NULL,
+           NULL, '[]', '', '2026-08-01T00:00:00.000Z', '2026-08-09T00:00:00.000Z', NULL),
+          ('archive-working', 'project-archive', 'Still going', '', 'in_progress', NULL,
+           NULL, '[]', '', '2026-08-01T00:00:00.000Z', '2026-08-09T00:00:00.000Z', NULL),
+          ('archive-settled', 'project-archive', 'Already filed', '', 'archived', NULL,
+           NULL, '[]', '', '2026-08-01T00:00:00.000Z', '2026-08-09T00:00:00.000Z', NULL),
+          ('archive-deleted', 'project-archive', 'Gone', '', 'done', NULL,
+           NULL, '[]', '', '2026-08-01T00:00:00.000Z', '2026-08-09T00:00:00.000Z',
+           '2026-08-09T12:00:00.000Z')
+      `;
+
+      // Oldest first, and the cutoff is inclusive: an issue untouched since
+      // exactly the cutoff has served its full day.
+      const due = yield* snapshotQuery.listIssuesDueForArchive("2026-08-10T00:00:00.000Z");
+      assert.deepEqual(
+        due.map((issue) => issue.issueId),
+        [IssueId.make("archive-older"), IssueId.make("archive-due")],
+      );
+      assert.equal(due[1]?.updatedAt, "2026-08-10T00:00:00.000Z");
+
+      yield* sql`DELETE FROM projection_issues WHERE project_id = 'project-archive'`;
+    }),
+  );
+
   it.effect("hydrates read model from projection tables and computes snapshot sequence", () =>
     Effect.gen(function* () {
       const snapshotQuery = yield* ProjectionSnapshotQuery;

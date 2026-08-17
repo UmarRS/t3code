@@ -368,6 +368,21 @@ it.layer(NodeServices.layer)("issue decider", (it) => {
       }),
     );
 
+    // Archiving finished work is filing, not undoing it: the dependents it
+    // unblocked must stay unblocked a day later.
+    it.effect("starts an issue whose dependency was archived", () =>
+      Effect.gen(function* () {
+        const events = yield* decide(
+          startCommand("issue-b"),
+          makeReadModel([
+            issue("issue-a", { status: "archived" }),
+            issue("issue-b", { dependsOn: [IssueId.make("issue-a")] }),
+          ]),
+        );
+        expect(events[0]?.type).toBe("issue.started");
+      }),
+    );
+
     for (const blockingStatus of ["backlog", "in_progress", "in_review", "canceled"] as const) {
       it.effect(`rejects a start blocked by a ${blockingStatus} dependency`, () =>
         Effect.gen(function* () {
@@ -426,6 +441,24 @@ it.layer(NodeServices.layer)("issue decider", (it) => {
         if (events[0]?.type === "issue.pull-request-linked") {
           expect(events[0].payload.status).toBe("in_review");
           expect(events[0].payload.pullRequestUrl).toBe("https://example.test/pr/1");
+        }
+      }),
+    );
+
+    // A pull request that opens a day late must not pull settled history back
+    // onto the active board.
+    it.effect("records the url without dragging an archived issue backwards", () =>
+      Effect.gen(function* () {
+        const events = yield* decide(
+          {
+            type: "issue.pull-request.link",
+            commandId: CommandId.make("cmd-pr"),
+            threadId: THREAD_ID,
+          },
+          makeReadModel([issue("issue-a", { threadId: THREAD_ID, status: "archived" })]),
+        );
+        if (events[0]?.type === "issue.pull-request-linked") {
+          expect(events[0].payload.status).toBeUndefined();
         }
       }),
     );

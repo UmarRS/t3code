@@ -41,6 +41,17 @@ export interface ProjectionScheduledProject {
   readonly autonomousSchedule: ReadonlyArray<ProjectAutonomousScheduleEntry>;
 }
 
+/**
+ * Just enough of an issue for the archive sweep to act. `updatedAt` rides
+ * along because it is what the sweep's command id is built from: it names the
+ * exact `done` the dispatch is filing away, so a raced tick or a restart
+ * cannot archive the same issue twice under two different ids.
+ */
+export interface ProjectionIssueDueForArchive {
+  readonly issueId: IssueId;
+  readonly updatedAt: string;
+}
+
 export interface ProjectionSnapshotCounts {
   readonly projectCount: number;
   readonly threadCount: number;
@@ -278,6 +289,18 @@ export interface ProjectionSnapshotQueryShape {
   readonly listIssuesByProjectId: (
     projectId: ProjectId,
   ) => Effect.Effect<ReadonlyArray<OrchestrationIssue>, ProjectionRepositoryError>;
+
+  /**
+   * Read the live `done` issues untouched since `cutoffIso`, across every
+   * project — the ones the archive sweep is about to file away.
+   *
+   * Deliberately narrower than a board read, like `listScheduledProjects`:
+   * this runs once a minute, so it reads two columns of the issues that have
+   * anything to do rather than every issue in the environment.
+   */
+  readonly listIssuesDueForArchive: (
+    cutoffIso: string,
+  ) => Effect.Effect<ReadonlyArray<ProjectionIssueDueForArchive>, ProjectionRepositoryError>;
 }
 
 /**

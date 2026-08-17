@@ -8,6 +8,7 @@ import {
 import { AutonomousRunReactor } from "../Services/AutonomousRunReactor.ts";
 import { AutonomousScheduleReactor } from "../Services/AutonomousScheduleReactor.ts";
 import { CheckpointReactor } from "../Services/CheckpointReactor.ts";
+import { IssueArchiveReactor } from "../Services/IssueArchiveReactor.ts";
 import { LimitResumeReactor } from "../Services/LimitResumeReactor.ts";
 import { ProviderCommandReactor } from "../Services/ProviderCommandReactor.ts";
 import { ProviderRuntimeIngestionService } from "../Services/ProviderRuntimeIngestion.ts";
@@ -21,6 +22,7 @@ export const makeOrchestrationReactor = Effect.gen(function* () {
   const autonomousRunReactor = yield* AutonomousRunReactor;
   const autonomousScheduleReactor = yield* AutonomousScheduleReactor;
   const limitResumeReactor = yield* LimitResumeReactor;
+  const issueArchiveReactor = yield* IssueArchiveReactor;
 
   const start: OrchestrationReactorShape["start"] = Effect.fn("start")(function* () {
     yield* providerRuntimeIngestion.start();
@@ -30,6 +32,7 @@ export const makeOrchestrationReactor = Effect.gen(function* () {
     yield* autonomousRunReactor.start();
     yield* autonomousScheduleReactor.start();
     yield* limitResumeReactor.start();
+    yield* issueArchiveReactor.start();
   });
 
   return {

@@ -1862,10 +1862,13 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           detail: `Thread '${command.threadId}' is not linked to an issue.`,
         });
       }
-      // A PR opening moves work into review, but never drags a finished or
-      // abandoned issue backwards — the URL is still recorded so the dashboard
-      // can link out.
-      const advancesToReview = issue.status !== "done" && issue.status !== "canceled";
+      // A PR opening moves work into review, but never drags a finished,
+      // filed-away, or abandoned issue backwards — the URL is still recorded so
+      // the dashboard can link out. `archived` is listed for the same reason as
+      // `done`: a pull request that opens a day late must not yank settled
+      // history back onto the active board.
+      const advancesToReview =
+        issue.status !== "done" && issue.status !== "canceled" && issue.status !== "archived";
       const occurredAt = yield* nowIso;
       return {
         ...(yield* withEventBase({

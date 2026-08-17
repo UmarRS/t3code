@@ -316,8 +316,9 @@ export function requireValidIssueDependencies(input: {
  * The start gate. Work on an issue may not begin while a dependency is
  * unfinished — that is the whole point of recording the dependency, and letting
  * an agent loose on a story whose groundwork is missing wastes a worktree and a
- * turn. Only `done` counts; a canceled dependency is an unresolved decision,
- * so the user must edit the graph rather than have the gate guess.
+ * turn. Only finished work counts — `done`, or the `archived` it becomes after
+ * a day — while a canceled dependency is an unresolved decision, so the user
+ * must edit the graph rather than have the gate guess.
  */
 export function requireIssueDependenciesSatisfied(input: {
   readonly readModel: OrchestrationReadModel;

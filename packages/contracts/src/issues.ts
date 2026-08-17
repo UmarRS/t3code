@@ -34,8 +34,10 @@ export type IssueDescription = typeof IssueDescription.Type;
 /**
  * Status is a plain label, not a state machine: every transition is allowed in
  * both directions. `done` going back to `backlog` is a normal correction, and
- * the only automatic moves are `in_progress` on start and `in_review` when a
- * pull request opens for the linked thread.
+ * the automatic moves are `in_progress` on start, `in_review` when a pull
+ * request opens for the linked thread, and `archived` once finished work has
+ * sat in `done` for a day (see `isIssueDueForArchive`). Archiving is filing,
+ * not deleting: a user may pull an issue back out of it like any other move.
  */
 export const IssueStatus = Schema.Literals([
   "backlog",
@@ -43,6 +45,7 @@ export const IssueStatus = Schema.Literals([
   "in_review",
   "done",
   "canceled",
+  "archived",
 ]);
 export type IssueStatus = typeof IssueStatus.Type;
 export const DEFAULT_ISSUE_STATUS: IssueStatus = "backlog";
@@ -157,9 +160,17 @@ export function issueNeedsAttention(issue: {
   return issue.needsAttentionAt != null;
 }
 
-/** Statuses that count as finished work for dependency gating. */
+/**
+ * Statuses that count as finished work for dependency gating.
+ *
+ * `archived` counts exactly like `done`, because it *is* done — filed away by
+ * the archive sweep after a day of quiet. Filing finished work must never
+ * re-block the issues that were waiting on it, which is what would happen if
+ * this only accepted `done`: a dependent left in the backlog over a weekend
+ * would silently become unstartable.
+ */
 export function isIssueDependencySatisfied(status: IssueStatus): boolean {
-  return status === "done";
+  return status === "done" || status === "archived";
 }
 
 /**
@@ -384,4 +395,39 @@ export function isAutonomousRunComplete(issues: ReadonlyArray<AutonomousIssueVie
   return (
     startableAutonomousIssues(issues).length === 0 && activeAutonomousIssues(issues).length === 0
   );
+}
+
+/**
+ * Archiving finished work. A board that keeps every issue it ever finished
+ * stops being a board, so `done` issues file themselves away after a day of
+ * quiet. The rule lives here rather than in the server's sweep for the same
+ * reason the autonomous derivations do: the reactor, its tests, and any client
+ * that wants to explain the move all read one definition.
+ */
+
+/** How long an issue must sit untouched in `done` before it archives. */
+export const ISSUE_ARCHIVE_AFTER_MS = 24 * 60 * 60 * 1000;
+
+/**
+ * Whether `issue` has been finished long enough to file away.
+ *
+ * "Untouched" means `updatedAt`, which is deliberately the whole rule: editing
+ * a done issue — retitling it, re-prioritising it, moving it back and forth —
+ * bumps `updatedAt` and so restarts the day. The one thing that does not
+ * restart it is re-setting the status it already has: the decider re-emits
+ * `issue.status-set` with the existing `updatedAt` when the status is
+ * unchanged, so a repeated archive dispatch cannot push the deadline out from
+ * under itself and the sweep stays idempotent.
+ *
+ * Only `done` archives. `canceled` is an abandoned decision a human may still
+ * want to revisit in place, and nothing else is finished at all.
+ */
+export function isIssueDueForArchive(
+  issue: { readonly status: IssueStatus; readonly updatedAt: string },
+  nowMs: number,
+): boolean {
+  if (issue.status !== "done") return false;
+  const updatedAtMs = Date.parse(issue.updatedAt);
+  if (Number.isNaN(updatedAtMs)) return false;
+  return nowMs - updatedAtMs >= ISSUE_ARCHIVE_AFTER_MS;
 }

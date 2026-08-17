@@ -105,6 +105,7 @@ it.effect("launchStartupHeartbeat does not block the caller while counts are loa
           getIssueDetailById: () => Effect.succeed(Option.none()),
           getIssueByReviewerThreadId: () => Effect.succeed(Option.none()),
           listIssuesByProjectId: () => Effect.succeed([]),
+          listIssuesDueForArchive: () => Effect.succeed([]),
           searchThreads: () => Effect.succeed({ matches: [] }),
         }),
         Effect.provideService(AnalyticsService.AnalyticsService, {
@@ -177,6 +178,7 @@ it.effect("resolveAutoBootstrapWelcomeTargets returns existing project and threa
         getIssueDetailById: () => Effect.succeed(Option.none()),
         getIssueByReviewerThreadId: () => Effect.succeed(Option.none()),
         listIssuesByProjectId: () => Effect.succeed([]),
+        listIssuesDueForArchive: () => Effect.succeed([]),
         searchThreads: () => Effect.succeed({ matches: [] }),
       }),
       Effect.provideService(OrchestrationEngine.OrchestrationEngineService, {
@@ -230,6 +232,7 @@ it.effect("resolveAutoBootstrapWelcomeTargets creates a project and thread when 
         getIssueDetailById: () => Effect.succeed(Option.none()),
         getIssueByReviewerThreadId: () => Effect.succeed(Option.none()),
         listIssuesByProjectId: () => Effect.succeed([]),
+        listIssuesDueForArchive: () => Effect.succeed([]),
         searchThreads: () => Effect.succeed({ matches: [] }),
       }),
       Effect.provideService(OrchestrationEngine.OrchestrationEngineService, {
@@ -289,6 +292,7 @@ it.effect("resolveAutoBootstrapWelcomeTargets preserves typed UUID generation fa
         getIssueDetailById: () => Effect.succeed(Option.none()),
         getIssueByReviewerThreadId: () => Effect.succeed(Option.none()),
         listIssuesByProjectId: () => Effect.succeed([]),
+        listIssuesDueForArchive: () => Effect.succeed([]),
         searchThreads: () => Effect.succeed({ matches: [] }),
       }),
       Effect.provideService(OrchestrationEngine.OrchestrationEngineService, {

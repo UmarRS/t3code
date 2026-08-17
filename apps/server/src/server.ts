@@ -48,6 +48,7 @@ import * as Keybindings from "./keybindings.ts";
 import * as ServerRuntimeStartup from "./serverRuntimeStartup.ts";
 import { AutonomousRunReactorLive } from "./orchestration/Layers/AutonomousRunReactor.ts";
 import { AutonomousScheduleReactorLive } from "./orchestration/Layers/AutonomousScheduleReactor.ts";
+import { IssueArchiveReactorLive } from "./orchestration/Layers/IssueArchiveReactor.ts";
 import { IssueStartCoordinatorLive } from "./orchestration/Layers/IssueStartCoordinator.ts";
 import { LinkedProjectCoordinatorLive } from "./orchestration/Layers/LinkedProjectCoordinator.ts";
 import { OrchestrationReactorLive } from "./orchestration/Layers/OrchestrationReactor.ts";
@@ -225,6 +226,7 @@ const ReactorLayerLive = Layer.empty.pipe(
   // decides *when* a parked thread is due, and hands the restart itself to the
   // same service that parked it.
   Layer.provideMerge(LimitResumeReactorLive),
+  Layer.provideMerge(IssueArchiveReactorLive),
   // Re-exported because the MCP toolkit delegates on an agent's behalf, so the
   // tool handlers need it from outside the reactor stack.
   Layer.provideMerge(LinkedProjectCoordinatorLive),
