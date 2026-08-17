@@ -87,7 +87,13 @@ import type {
   OrchestrationSubscribeThreadInput,
   OrchestrationThreadStreamItem,
 } from "./orchestration.ts";
-import { EnvironmentId, NonNegativeInt, ThreadId, TrimmedNonEmptyString } from "./baseSchemas.ts";
+import {
+  EnvironmentId,
+  NonNegativeInt,
+  ProjectId,
+  ThreadId,
+  TrimmedNonEmptyString,
+} from "./baseSchemas.ts";
 import { AuthAccessTokenResult, AuthSessionState, AuthWebSocketTicketResult } from "./auth.ts";
 import { AdvertisedEndpoint } from "./remoteAccess.ts";
 import { ExecutionEnvironmentDescriptor } from "./environment.ts";
@@ -972,14 +978,45 @@ export const DesktopPreviewAutomationWaitForInputSchema = Schema.Struct({
   input: PreviewAutomationWaitForInput,
 });
 
-/** The thread a native notification opens when the user clicks it. Null on a
- *  rollup alert that stands for several threads at once — clicking one of
- *  those only brings the window forward. */
-export const DesktopAttentionTargetSchema = Schema.Struct({
+/** The thread a native notification opens when the user clicks it. */
+export const DesktopAttentionThreadTargetSchema = Schema.Struct({
   environmentId: EnvironmentId,
   threadId: ThreadId,
 });
+export type DesktopAttentionThreadTarget = typeof DesktopAttentionThreadTargetSchema.Type;
+
+/** The issues board a notification opens: the board itself, or its Review tab. */
+export const DesktopAttentionBoardTargetSchema = Schema.Struct({
+  environmentId: EnvironmentId,
+  projectId: ProjectId,
+  view: Schema.Literals(["board", "review"]),
+});
+export type DesktopAttentionBoardTarget = typeof DesktopAttentionBoardTargetSchema.Type;
+
+/**
+ * Where a native notification lands when the user clicks it. Null on a rollup
+ * alert that stands for several items at once — clicking one of those only
+ * brings the window forward.
+ *
+ * Untagged on purpose: the thread target keeps the exact shape older renderers
+ * and older main processes already exchange, so a version-skewed pair still
+ * round-trips. The members stay unambiguous without a tag because neither's
+ * required keys are a subset of the other's — a board target has no `threadId`
+ * and a thread target has no `projectId`/`view` — so the payload decode on the
+ * publish channel can only ever match one member.
+ */
+export const DesktopAttentionTargetSchema = Schema.Union([
+  DesktopAttentionThreadTargetSchema,
+  DesktopAttentionBoardTargetSchema,
+]);
 export type DesktopAttentionTarget = typeof DesktopAttentionTargetSchema.Type;
+
+/** Narrows the untagged target union on the field that discriminates it. */
+export function isDesktopAttentionThreadTarget(
+  target: DesktopAttentionTarget,
+): target is DesktopAttentionThreadTarget {
+  return "threadId" in target;
+}
 
 /**
  * One native notification. The renderer composes the copy: it owns the

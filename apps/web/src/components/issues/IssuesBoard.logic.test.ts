@@ -8,7 +8,9 @@ import {
 import { describe, expect, it } from "vite-plus/test";
 
 import {
+  appendIssueDecompositionInstructions,
   buildIssueBoardColumns,
+  buildIssueDecompositionInstructions,
   buildIssueDecompositionPrompt,
   countDelegationTargetProjects,
   describeDelegationTargetProjects,
@@ -257,6 +259,58 @@ describe("buildIssueDecompositionPrompt", () => {
       prompt.indexOf("t3-issues"),
     );
     expect(prompt).toContain("codex: gpt-5.6");
+  });
+});
+
+describe("buildIssueDecompositionInstructions", () => {
+  it("opens with the project framing line and closes with the canonical instructions", () => {
+    const instructions = buildIssueDecompositionInstructions({ projectTitle: "Atlas" });
+    expect(instructions.startsWith("Break this work for Atlas into stories.")).toBe(true);
+    expect(instructions).toContain("t3-issues");
+    expect(instructions).not.toContain(ISSUE_DECOMPOSITION_PROMPT_PLACEHOLDER);
+  });
+
+  it("lists configured worker models when given any", () => {
+    const instructions = buildIssueDecompositionInstructions({
+      projectTitle: "Atlas",
+      availableModels: [{ instanceId: "codex", model: "gpt-5.6" }],
+    });
+    expect(instructions).toContain("Configured worker models");
+    expect(instructions).toContain("codex: gpt-5.6");
+  });
+
+  it("omits the worker-model section when none are configured", () => {
+    const instructions = buildIssueDecompositionInstructions({ projectTitle: "Atlas" });
+    expect(instructions).not.toContain("Configured worker models");
+  });
+});
+
+describe("appendIssueDecompositionInstructions", () => {
+  it("appends the instructions after the user's own message", () => {
+    const result = appendIssueDecompositionInstructions({
+      promptText: "Add dark mode support",
+      projectTitle: "Atlas",
+    });
+    expect(
+      result.startsWith("Add dark mode support\n\nBreak this work for Atlas into stories."),
+    ).toBe(true);
+    expect(result).not.toContain(ISSUE_DECOMPOSITION_PROMPT_PLACEHOLDER);
+  });
+
+  it("trims the user's text before appending", () => {
+    const result = appendIssueDecompositionInstructions({
+      promptText: "  Add dark mode support  \n",
+      projectTitle: "Atlas",
+    });
+    expect(result.startsWith("Add dark mode support\n\nBreak this work")).toBe(true);
+  });
+
+  it("returns just the instructions when the user left no text", () => {
+    const result = appendIssueDecompositionInstructions({
+      promptText: "   ",
+      projectTitle: "Atlas",
+    });
+    expect(result.startsWith("Break this work for Atlas into stories.")).toBe(true);
   });
 });
 

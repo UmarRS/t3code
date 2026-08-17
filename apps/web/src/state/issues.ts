@@ -11,6 +11,7 @@ import type {
 } from "@t3tools/contracts";
 import { Atom } from "effect/unstable/reactivity";
 
+import { environmentCatalog } from "../connection/catalog";
 import { connectionAtomRuntime } from "../connection/runtime";
 import { appAtomRegistry } from "../rpc/atomRegistry";
 import { environmentSnapshotAtom } from "./shell";
@@ -40,6 +41,61 @@ export function useEnvironmentIssues(
       ? EMPTY_ISSUES_ATOM
       : environmentIssues.environmentIssuesAtom(environmentId),
   );
+}
+
+/** An issue carrying the environment it lives in, for cross-environment views. */
+export interface EnvironmentIssue extends OrchestrationIssue {
+  readonly environmentId: EnvironmentId;
+}
+
+const EMPTY_SCOPED_ISSUES: ReadonlyArray<EnvironmentIssue> = Object.freeze([]);
+
+/**
+ * One environment's issues, each tagged with its environment. Re-scopes only
+ * when the underlying rows change, so the flattened list below can compare
+ * slices by identity.
+ */
+const scopedEnvironmentIssuesAtom = Atom.family((environmentId: EnvironmentId) => {
+  let previousSource: ReadonlyArray<OrchestrationIssue> | null = null;
+  let previous: ReadonlyArray<EnvironmentIssue> = EMPTY_SCOPED_ISSUES;
+  return Atom.make((get): ReadonlyArray<EnvironmentIssue> => {
+    const source = get(environmentIssues.environmentIssuesAtom(environmentId));
+    if (source === previousSource) {
+      return previous;
+    }
+    previousSource = source;
+    previous =
+      source.length === 0
+        ? EMPTY_SCOPED_ISSUES
+        : source.map((issue) => ({ ...issue, environmentId }));
+    return previous;
+  }).pipe(Atom.withLabel(`web-environment-scoped-issues:${environmentId}`));
+});
+
+let previousIssueSlices: ReadonlyArray<ReadonlyArray<EnvironmentIssue>> = [];
+let previousAllIssues: ReadonlyArray<EnvironmentIssue> = EMPTY_SCOPED_ISSUES;
+const allEnvironmentIssuesAtom = Atom.make((get): ReadonlyArray<EnvironmentIssue> => {
+  const slices: ReadonlyArray<EnvironmentIssue>[] = [];
+  for (const environmentId of get(environmentCatalog.catalogValueAtom).entries.keys()) {
+    slices.push(get(scopedEnvironmentIssuesAtom(environmentId)));
+  }
+  if (
+    slices.length === previousIssueSlices.length &&
+    slices.every((slice, index) => slice === previousIssueSlices[index])
+  ) {
+    return previousAllIssues;
+  }
+  previousIssueSlices = slices;
+  previousAllIssues = slices.flat();
+  return previousAllIssues;
+}).pipe(Atom.withLabel("web-all-environment-issues"));
+
+/**
+ * Every issue in every connected environment. Only the cross-cutting surfaces
+ * (attention notifications) need this much; a board reads its own project.
+ */
+export function useAllEnvironmentIssues(): ReadonlyArray<EnvironmentIssue> {
+  return useAtomValue(allEnvironmentIssuesAtom);
 }
 
 export function readEnvironmentIssues(

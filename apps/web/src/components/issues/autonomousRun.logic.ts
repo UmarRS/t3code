@@ -1,6 +1,5 @@
 import {
   activeAutonomousIssues,
-  isIssueDependencySatisfied,
   isProviderAvailable,
   issueNeedsAttention,
   startableAutonomousIssues,
@@ -74,10 +73,18 @@ export interface AutonomousProgress {
   readonly queued: number;
   readonly inProgress: number;
   readonly inReview: number;
-  /** Finished work, whether still on the Done column or archived off it. */
+  /**
+   * Finished work still worth showing in this run's readout. An issue drops
+   * out of this the moment the server files it away as `archived` (a day of
+   * quiet in `done`): archived work belongs to project history, not to a
+   * running or just-finished progress readout. Counting it forever was the
+   * bug this replaced — every board eventually read "N done / M" for a run
+   * whose actual issues had long since archived, with the header stuck
+   * announcing "finished" indefinitely.
+   */
   readonly done: number;
   readonly needsAttention: number;
-  /** Everything the run counts as work: canceled issues are out of scope. */
+  /** Everything the run counts as work: canceled and archived issues are out of scope. */
   readonly total: number;
 }
 
@@ -89,16 +96,19 @@ export function summarizeAutonomousProgress(
   issues: ReadonlyArray<ProgressIssueView>,
 ): AutonomousProgress {
   const active = activeAutonomousIssues(issues);
+  // needsAttention is counted over every issue, archived included, before the
+  // in-scope filter below — flagged work must never be hidden by its siblings
+  // archiving out from under it. In practice this never matters: a flagged
+  // issue is rarely `done`, so it is rarely eligible to archive at all.
+  const needsAttention = issues.filter((issue) => issueNeedsAttention(issue)).length;
+  const inScope = issues.filter((issue) => issue.status !== "archived");
   return {
     queued: startableAutonomousIssues(issues).length,
     inProgress: active.filter((issue) => issue.status === "in_progress").length,
     inReview: active.filter((issue) => issue.status === "in_review").length,
-    // Archived issues are done issues the server filed away after a day. A
-    // board reopened later must not read "0 done / 12" for a run that finished
-    // everything.
-    done: issues.filter((issue) => isIssueDependencySatisfied(issue.status)).length,
-    needsAttention: issues.filter((issue) => issueNeedsAttention(issue)).length,
-    total: issues.filter((issue) => issue.status !== "canceled").length,
+    done: inScope.filter((issue) => issue.status === "done").length,
+    needsAttention,
+    total: inScope.filter((issue) => issue.status !== "canceled").length,
   };
 }
 
@@ -134,7 +144,17 @@ export function describeAutonomousRunStatus(input: {
         detail: formatAutonomousProgressLabel(input.progress),
         tone: "active",
       };
-    case "finished":
+    case "finished": {
+      // The finished badge retires when its work is filed away: once every
+      // issue the run touched has archived (or the run never had any in
+      // scope to begin with), `total` reads zero and there is nothing left
+      // to announce — present as idle rather than an eternal "finished".
+      // Flagged work is the one exception: it needs a human regardless of
+      // what has archived around it, so it keeps the finished/needs-you
+      // presentation even at total 0.
+      if (input.progress.total === 0 && input.progress.needsAttention === 0) {
+        return { label: "Autonomous", detail: null, tone: "idle" };
+      }
       return {
         label: "Autonomous finished",
         detail:
@@ -145,6 +165,7 @@ export function describeAutonomousRunStatus(input: {
             : `${input.progress.done} done / ${input.progress.total}`,
         tone: "complete",
       };
+    }
     case "stopped":
       return {
         label: "Autonomous stopped",

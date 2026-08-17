@@ -1,5 +1,5 @@
 import { assert, describe, it } from "@effect/vitest";
-import { EnvironmentId, ThreadId, type DesktopAttentionAlert } from "@t3tools/contracts";
+import { EnvironmentId, ProjectId, ThreadId, type DesktopAttentionAlert } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
@@ -18,6 +18,12 @@ const targetedAlert: DesktopAttentionAlert = {
   title: "Approval needed",
   body: "Fix the flaky test",
   target: { environmentId, threadId },
+};
+
+const boardAlert: DesktopAttentionAlert = {
+  title: "Issue needs you",
+  body: "Ship the importer",
+  target: { environmentId, projectId: ProjectId.make("project-1"), view: "review" },
 };
 
 const rollupAlert: DesktopAttentionAlert = {
@@ -138,6 +144,23 @@ describe("DesktopAttention", () => {
       assert.deepEqual(harness.revealedWindowIds, [7]);
       assert.deepEqual(harness.sent, [
         { channel: ATTENTION_ACTIVATE_CHANNEL, args: [{ environmentId, threadId }] },
+      ]);
+    }).pipe(Effect.provide(harness.layer));
+  });
+
+  it.effect("forwards a board target verbatim, main staying a dumb presenter", () => {
+    const harness = makeHarness();
+
+    return Effect.gen(function* () {
+      const attention = yield* DesktopAttention.DesktopAttention;
+      yield* attention.publish({ badgeCount: 1, alerts: [boardAlert] });
+
+      harness.shown[0]?.onClick();
+      yield* Effect.yieldNow;
+      yield* Effect.yieldNow;
+
+      assert.deepEqual(harness.sent, [
+        { channel: ATTENTION_ACTIVATE_CHANNEL, args: [boardAlert.target] },
       ]);
     }).pipe(Effect.provide(harness.layer));
   });

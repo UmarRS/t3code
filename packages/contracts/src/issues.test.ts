@@ -2,14 +2,17 @@ import { describe, expect, it } from "vite-plus/test";
 
 import { IssueId } from "./baseSchemas.ts";
 import {
+  activeAutonomousIssues,
   encodeIssueDecompositionBlock,
   findIssueDependencyCycle,
+  isAutonomousRunComplete,
   isIssueDependencySatisfied,
   isIssueDueForArchive,
   ISSUE_ARCHIVE_AFTER_MS,
   ISSUE_DECOMPOSITION_BLOCK_LANGUAGE,
   ISSUE_DECOMPOSITION_PROMPT_INSTRUCTIONS,
   ISSUE_REVIEW_PROMPT_INSTRUCTIONS,
+  startableAutonomousIssues,
 } from "./issues.ts";
 
 const id = (value: string) => IssueId.make(value);
@@ -88,6 +91,53 @@ describe("issue dependency gating", () => {
     for (const status of ["backlog", "in_progress", "in_review", "canceled"] as const) {
       expect(isIssueDependencySatisfied(status)).toBe(false);
     }
+  });
+});
+
+describe("autonomous derivations exclude archived issues", () => {
+  const view = (
+    key: string,
+    overrides: {
+      status?: "backlog" | "in_progress" | "in_review" | "done" | "canceled" | "archived";
+      dependsOn?: ReadonlyArray<string>;
+      threadId?: string | null;
+      needsAttentionAt?: string | null;
+    } = {},
+  ) => ({
+    id: id(key),
+    status: overrides.status ?? "backlog",
+    dependsOn: (overrides.dependsOn ?? []).map(id),
+    threadId: overrides.threadId ?? null,
+    needsAttentionAt: overrides.needsAttentionAt ?? null,
+  });
+
+  it("never lists an archived issue as startable, even though its shape fits", () => {
+    const startable = startableAutonomousIssues([view("filed", { status: "archived" })]);
+    expect(startable).toEqual([]);
+  });
+
+  it("never lists an archived issue as active", () => {
+    const active = activeAutonomousIssues([view("filed", { status: "archived" })]);
+    expect(active).toEqual([]);
+  });
+
+  it("still unblocks a dependent whose dependency has archived", () => {
+    const startable = startableAutonomousIssues([
+      view("filed", { status: "archived" }),
+      view("next", { dependsOn: ["filed"] }),
+    ]);
+    expect(startable.map((issue) => issue.id)).toEqual([id("next")]);
+  });
+
+  // A backlog holding nothing but filed-away history has nothing left to start
+  // and nothing still moving, so it reads exactly like an empty one: complete.
+  it("reads a backlog of only-archived issues as a complete run", () => {
+    expect(
+      isAutonomousRunComplete([
+        view("first", { status: "archived" }),
+        view("second", { status: "archived" }),
+      ]),
+    ).toBe(true);
   });
 });
 

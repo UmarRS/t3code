@@ -1739,6 +1739,72 @@ describe("composerDraftStore runtime and interaction settings", () => {
   });
 });
 
+describe("composerDraftStore generateStories toggle", () => {
+  const threadId = ThreadId.make("thread-generate-stories");
+  const threadRef = scopeThreadRef(TEST_ENVIRONMENT_ID, threadId);
+
+  beforeEach(async () => {
+    resetComposerDraftStore();
+    const { name, storage } = useComposerDraftStore.persist.getOptions();
+    if (name) await storage?.removeItem(name);
+  });
+
+  afterEach(async () => {
+    const { name, storage } = useComposerDraftStore.persist.getOptions();
+    if (name) await storage?.removeItem(name);
+  });
+
+  it("defaults to off for a fresh draft", () => {
+    expect(draftFor(threadId, TEST_ENVIRONMENT_ID)?.generateStories ?? false).toBe(false);
+  });
+
+  it("turns on, and drops the empty draft once turned back off", () => {
+    const store = useComposerDraftStore.getState();
+
+    store.setGenerateStories(threadRef, true);
+    expect(draftFor(threadId, TEST_ENVIRONMENT_ID)?.generateStories).toBe(true);
+
+    store.setGenerateStories(threadRef, false);
+    expect(draftFor(threadId, TEST_ENVIRONMENT_ID)).toBeUndefined();
+  });
+
+  it("survives the prompt clearing once a message is sent, so the caller controls the one-shot reset", () => {
+    const store = useComposerDraftStore.getState();
+
+    store.setPrompt(threadRef, "hello");
+    store.setGenerateStories(threadRef, true);
+    store.setPrompt(threadRef, "");
+
+    expect(draftFor(threadId, TEST_ENVIRONMENT_ID)?.generateStories).toBe(true);
+  });
+
+  it("decodes drafts persisted before the toggle existed as off", async () => {
+    const threadKey = scopedThreadKey(threadRef);
+    const { name, storage } = useComposerDraftStore.persist.getOptions();
+    if (!name) throw new Error("Expected composer draft persistence to have a storage name");
+    await storage?.setItem(name, {
+      state: {
+        draftsByThreadKey: {
+          [threadKey]: {
+            prompt: "keep me",
+            attachments: [],
+          },
+        },
+      },
+      version: 8,
+    });
+    // The store's storage writes go through a debounced wrapper (real
+    // localStorage writes are throttled); give the pending write a chance to
+    // land before asking the store to read it back.
+    await new Promise((resolve) => setTimeout(resolve, 350));
+
+    await useComposerDraftStore.persist.rehydrate();
+
+    expect(draftFor(threadId, TEST_ENVIRONMENT_ID)?.prompt).toBe("keep me");
+    expect(draftFor(threadId, TEST_ENVIRONMENT_ID)?.generateStories).toBe(false);
+  });
+});
+
 // ---------------------------------------------------------------------------
 // createDebouncedStorage
 // ---------------------------------------------------------------------------

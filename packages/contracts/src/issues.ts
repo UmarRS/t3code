@@ -340,6 +340,13 @@ export function encodeIssueReviewBlock(block: IssueReviewBlock): string {
  * define exactly which issues it may pick up and when a run is finished, and
  * they live here so the server's reactor and any UI progress indicator agree
  * without the client re-implementing the rules.
+ *
+ * Archived work is out of scope for a run: `startableAutonomousIssues` only
+ * ever looks at `backlog`, and `activeAutonomousIssues` only at `in_progress`
+ * / `in_review`, so an issue the server has already filed away can be neither
+ * — it is history, not something a run can start or is still moving. A
+ * backlog left with nothing but archived issues therefore reads as complete,
+ * same as an empty one.
  */
 
 /** The shape the autonomous derivations need. Any issue summary satisfies it. */
