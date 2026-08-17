@@ -269,6 +269,7 @@ import {
   shouldShowThreadErrorBanner,
   ThreadErrorBanner,
 } from "./chat/ThreadErrorBanner";
+import { resolveThreadErrorBannerMode } from "./chat/threadLimitPark";
 import { resolveThreadPr } from "./ThreadStatusIndicators";
 import { ComposerBannerStack, type ComposerBannerStackItem } from "./chat/ComposerBannerStack";
 import { ThreadSyncStatusPill } from "./chat/ThreadSyncStatusPill";
@@ -1218,6 +1219,10 @@ function ChatViewContent(props: ChatViewProps) {
     reportFailure: false,
   });
   const startThreadTurn = useAtomCommand(threadEnvironment.startTurn, { reportFailure: false });
+  const stopThreadSession = useAtomCommand(threadEnvironment.stopSession, {
+    reportFailure: false,
+  });
+  const resumeThreadTurn = useAtomCommand(threadEnvironment.resumeTurn, "thread resume");
   const interruptThreadTurn = useAtomCommand(threadEnvironment.interruptTurn, {
     reportFailure: false,
   });
@@ -1521,6 +1526,36 @@ function ChatViewContent(props: ChatViewProps) {
   // session.lastError. Bump a tick so the banner hides immediately. Mirrors
   // the branch mismatch banner.
   const [, setThreadErrorBannerDismissTick] = useState(0);
+  // A parked session is never masked: the dismissal set is keyed by the error
+  // text, and hiding "resuming at 12:10 AM" would hide the only place the
+  // automatic restart is visible — along with both ways out of it.
+  const threadErrorBannerMode = resolveThreadErrorBannerMode({
+    error: activeServerThread?.session?.resumeAt != null ? threadError : visibleThreadError,
+    session: activeServerThread?.session ?? null,
+    nowMs: Date.now(),
+  });
+  // Resuming is the server's job, not a pair of client commands: it rebuilds
+  // the interrupted turn from the thread's own last user message, so a message
+  // that carried attachments restarts whole even though the client no longer
+  // holds the uploaded bytes. It is also exactly what the resume ticker runs,
+  // so pressing the button and waiting out the limit end up in the same place.
+  const canRestartInterruptedTurn =
+    activeServerThread !== null &&
+    activeServerThread.messages.some((message) => message.role === "user");
+  const restartInterruptedTurn = useCallback(async () => {
+    if (activeServerThread === null) {
+      return;
+    }
+    await resumeThreadTurn({ environmentId, input: { threadId: activeServerThread.id } });
+  }, [activeServerThread, environmentId, resumeThreadTurn]);
+  // Stopping the session is the whole cancel: the server clears `resumeAt` on
+  // every stop, so the ticker stops seeing this thread as due.
+  const stopWaitingForLimitReset = useCallback(async () => {
+    if (activeServerThread === null) {
+      return;
+    }
+    await stopThreadSession({ environmentId, input: { threadId: activeServerThread.id } });
+  }, [activeServerThread, environmentId, stopThreadSession]);
   const runtimeMode = composerRuntimeMode ?? activeThread?.runtimeMode ?? DEFAULT_RUNTIME_MODE;
   // Plan mode is legacy (Settings → Beta). With the flag off the effective
   // mode is forced to "default" — even for threads with a stored plan mode —
@@ -6070,12 +6105,16 @@ function ChatViewContent(props: ChatViewProps) {
         </header>
 
         <ThreadErrorBanner
-          error={visibleThreadError}
+          mode={threadErrorBannerMode}
           onDismiss={() => {
             setThreadError(activeThread.id, null);
             dismissThreadErrorBannerForSession(threadErrorBannerKey);
             setThreadErrorBannerDismissTick((tick) => tick + 1);
           }}
+          {...(canRestartInterruptedTurn ? { onResumeNow: restartInterruptedTurn } : {})}
+          {...(threadErrorBannerMode?.kind === "parked"
+            ? { onStopWaiting: stopWaitingForLimitReset }
+            : {})}
         />
         {/* Main content area with optional plan sidebar */}
         <div className="flex min-h-0 min-w-0 flex-1">

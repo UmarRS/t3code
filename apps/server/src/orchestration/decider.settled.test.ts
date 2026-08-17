@@ -65,6 +65,7 @@ function makeSession(status: OrchestrationSession["status"]): OrchestrationSessi
     runtimeMode: "full-access",
     activeTurnId: null,
     lastError: null,
+    resumeAt: null,
     updatedAt: NOW,
   };
 }

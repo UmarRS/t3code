@@ -45,6 +45,7 @@ function makeShell(input: {
             runtimeMode: "full-access",
             activeTurnId: null,
             lastError: input.sessionStatus === "error" ? "boom" : null,
+            resumeAt: null,
             updatedAt: "2026-04-10T11:00:00.000Z",
           },
     latestTurn:

@@ -291,9 +291,43 @@ export const OrchestrationSession = Schema.Struct({
   runtimeMode: RuntimeMode.pipe(Schema.withDecodingDefault(Effect.succeed(DEFAULT_RUNTIME_MODE))),
   activeTurnId: Schema.NullOr(TurnId),
   lastError: Schema.NullOr(TrimmedNonEmptyString),
+  /**
+   * When set, the session failed because the provider account ran out of
+   * capacity and the server will restart the interrupted turn by itself at this
+   * instant. Null for every other error, and cleared the moment the turn
+   * restarts — so "has a resumeAt" is exactly "parked, waiting for the limit to
+   * lift" and the UI can offer resuming now or cancelling instead.
+   */
+  resumeAt: Schema.NullOr(IsoDateTime).pipe(Schema.withDecodingDefault(Effect.succeed(null))),
   updatedAt: IsoDateTime,
 });
 export type OrchestrationSession = typeof OrchestrationSession.Type;
+
+/** A session waiting out a provider limit, which the server will resume itself. */
+export function isSessionParkedForResume(
+  session: Pick<OrchestrationSession, "resumeAt"> | null | undefined,
+): boolean {
+  return (session?.resumeAt ?? null) !== null;
+}
+
+/**
+ * The `resumeAt` a session write should carry forward.
+ *
+ * A park survives the statuses a waiting thread actually passes through: it
+ * failed ("error"), and the provider process it was using usually exits right
+ * after ("stopped"). It is dropped the moment the thread is alive again, which
+ * is the invariant that stops the resume ticker from restarting work already in
+ * flight. An interrupt drops it too — that is a person saying stop.
+ *
+ * Note this is about *derived* session writes. An explicit `thread.session.stop`
+ * command always clears the park, whoever sent it.
+ */
+export function resumeAtForSessionStatus(
+  session: Pick<OrchestrationSession, "resumeAt"> | null | undefined,
+  status: OrchestrationSessionStatus,
+): string | null {
+  return status === "error" || status === "stopped" ? (session?.resumeAt ?? null) : null;
+}
 
 export const OrchestrationCheckpointFile = Schema.Struct({
   path: TrimmedNonEmptyString,
@@ -964,6 +998,23 @@ const ThreadSessionStopCommand = Schema.Struct({
 });
 
 /**
+ * Pick a thread's interrupted work back up: restart the turn its last failure
+ * cut off, on the thread's current model and provider session.
+ *
+ * The client sends only the thread id — the server rebuilds the turn from the
+ * thread's own last user message, so a message with attachments restarts whole
+ * even though the client no longer holds the uploaded bytes. This is the same
+ * restart the resume ticker runs when a parked limit lifts, which is what makes
+ * "resume now" and "resume when the limit lifts" indistinguishable afterwards.
+ */
+const ThreadTurnResumeCommand = Schema.Struct({
+  type: Schema.Literal("thread.turn.resume"),
+  commandId: CommandId,
+  threadId: ThreadId,
+  createdAt: IsoDateTime,
+});
+
+/**
  * Turn on autonomous mode for a project: from here the server starts every
  * startable issue in parallel and merges them one at a time, until the backlog
  * has nothing left it can advance.
@@ -1164,6 +1215,7 @@ const DispatchableClientOrchestrationCommand = Schema.Union([
   ThreadUserInputRespondCommand,
   ThreadCheckpointRevertCommand,
   ThreadSessionStopCommand,
+  ThreadTurnResumeCommand,
   IssueCreateCommand,
   IssueUpdateCommand,
   IssueStatusSetCommand,
@@ -1204,6 +1256,7 @@ export const ClientOrchestrationCommand = Schema.Union([
   ThreadUserInputRespondCommand,
   ThreadCheckpointRevertCommand,
   ThreadSessionStopCommand,
+  ThreadTurnResumeCommand,
   IssueCreateCommand,
   IssueUpdateCommand,
   IssueStatusSetCommand,

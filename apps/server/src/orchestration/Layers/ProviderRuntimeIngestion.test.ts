@@ -24,6 +24,7 @@ import {
   TurnId,
 } from "@t3tools/contracts";
 import * as Clock from "effect/Clock";
+import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Layer from "effect/Layer";
@@ -48,6 +49,7 @@ import { OrchestrationProjectionSnapshotQueryLive } from "./ProjectionSnapshotQu
 import * as ThreadBackgroundLiveness from "../ThreadBackgroundLiveness.ts";
 import * as ThreadPlanProgress from "../ThreadPlanProgress.ts";
 import { ModelFailoverLive } from "./ModelFailover.ts";
+import { ModelFailoverService } from "../Services/ModelFailover.ts";
 import { ProviderRuntimeIngestionLive } from "./ProviderRuntimeIngestion.ts";
 import { OrchestrationEngineService } from "../Services/OrchestrationEngine.ts";
 import { ProviderRuntimeIngestionService } from "../Services/ProviderRuntimeIngestion.ts";
@@ -196,7 +198,10 @@ async function waitForThread(
 
 describe("ProviderRuntimeIngestion", () => {
   let runtime: ManagedRuntime.ManagedRuntime<
-    OrchestrationEngineService | ProviderRuntimeIngestionService | ProjectionSnapshotQuery,
+    | OrchestrationEngineService
+    | ProviderRuntimeIngestionService
+    | ProjectionSnapshotQuery
+    | ModelFailoverService,
     unknown
   > | null = null;
   let scope: Scope.Closeable | null = null;
@@ -256,6 +261,7 @@ describe("ProviderRuntimeIngestion", () => {
     const engine = await runtime.runPromise(Effect.service(OrchestrationEngineService));
     const snapshotQuery = await runtime.runPromise(Effect.service(ProjectionSnapshotQuery));
     const ingestion = await runtime.runPromise(Effect.service(ProviderRuntimeIngestionService));
+    const modelFailover = await runtime.runPromise(Effect.service(ModelFailoverService));
     scope = await Effect.runPromise(Scope.make("sequential"));
     await Effect.runPromise(ingestion.start().pipe(Scope.provide(scope)));
     const drain = () => Effect.runPromise(ingestion.drain);
@@ -302,6 +308,7 @@ describe("ProviderRuntimeIngestion", () => {
         activeTurnId: null,
         updatedAt: createdAt,
         lastError: null,
+        resumeAt: null,
       },
       createdAt,
     });
@@ -320,6 +327,8 @@ describe("ProviderRuntimeIngestion", () => {
       readModel: () => Effect.runPromise(snapshotQuery.getSnapshot()),
       emit: provider.emit,
       setProviderSession: provider.setSession,
+      resumeParkedThread: (threadId: ThreadId, createdAt: string) =>
+        Effect.runPromise(modelFailover.resumeParkedThread({ threadId, createdAt })),
       drain,
     };
   }
@@ -532,6 +541,7 @@ describe("ProviderRuntimeIngestion", () => {
             runtimeMode: "approval-required",
             activeTurnId: staleTurnId,
             lastError: null,
+            resumeAt: null,
             updatedAt: "2026-01-01T00:00:01.000Z",
           },
           createdAt: "2026-01-01T00:00:01.000Z",
@@ -634,6 +644,7 @@ describe("ProviderRuntimeIngestion", () => {
           runtimeMode: "approval-required",
           activeTurnId: null,
           lastError: null,
+          resumeAt: null,
           updatedAt: "2026-01-01T00:00:01.000Z",
         },
         createdAt: "2026-01-01T00:00:01.000Z",
@@ -649,6 +660,7 @@ describe("ProviderRuntimeIngestion", () => {
           runtimeMode: "approval-required",
           activeTurnId: null,
           lastError: null,
+          resumeAt: null,
           updatedAt: stoppedAt,
         },
         createdAt: stoppedAt,
@@ -754,6 +766,7 @@ describe("ProviderRuntimeIngestion", () => {
           activeTurnId: null,
           updatedAt: seededAt,
           lastError: null,
+          resumeAt: null,
         },
         createdAt: seededAt,
       }),
@@ -862,6 +875,7 @@ describe("ProviderRuntimeIngestion", () => {
         activeTurnId: null,
         updatedAt: seededAt,
         lastError: null,
+        resumeAt: null,
       },
       createdAt: seededAt,
     });
@@ -901,6 +915,7 @@ describe("ProviderRuntimeIngestion", () => {
         activeTurnId: null,
         updatedAt: seededAt,
         lastError: null,
+        resumeAt: null,
       },
       createdAt: seededAt,
     });
@@ -1268,6 +1283,7 @@ describe("ProviderRuntimeIngestion", () => {
           activeTurnId: null,
           updatedAt: createdAt,
           lastError: null,
+          resumeAt: null,
         },
         createdAt,
       }),
@@ -1303,6 +1319,7 @@ describe("ProviderRuntimeIngestion", () => {
           activeTurnId: null,
           updatedAt: createdAt,
           lastError: null,
+          resumeAt: null,
         },
         createdAt,
       }),
@@ -1454,6 +1471,7 @@ describe("ProviderRuntimeIngestion", () => {
             activeTurnId: null,
             updatedAt: createdAt,
             lastError: null,
+            resumeAt: null,
           },
           createdAt,
         }),
@@ -1694,6 +1712,7 @@ describe("ProviderRuntimeIngestion", () => {
           activeTurnId: null,
           updatedAt: createdAt,
           lastError: null,
+          resumeAt: null,
         },
         createdAt,
       }),
@@ -1729,6 +1748,7 @@ describe("ProviderRuntimeIngestion", () => {
           activeTurnId: null,
           updatedAt: createdAt,
           lastError: null,
+          resumeAt: null,
         },
         createdAt,
       }),
@@ -3601,6 +3621,7 @@ describe("ProviderRuntimeIngestion", () => {
           activeTurnId: asTurnId("turn-claude-1"),
           updatedAt: seededAt,
           lastError: null,
+          resumeAt: null,
         },
         createdAt: seededAt,
       });
@@ -3637,14 +3658,104 @@ describe("ProviderRuntimeIngestion", () => {
         (activity: ProviderRuntimeTestActivity) => activity.kind === "model.failover",
       );
 
-    it("restarts an exhausted Claude turn on the mapped codex backup and records the switch", async () => {
+    const parkActivities = (thread: ProviderRuntimeTestThread) =>
+      thread.activities.filter(
+        (activity: ProviderRuntimeTestActivity) => activity.kind === "model.limit.parked",
+      );
+
+    it("parks a rate-limited Claude turn until the reset instead of switching models", async () => {
       const harness = await createHarness();
       await seedClaudeThread(harness);
 
-      emitClaudeTurnFailure(
-        harness,
-        "Claude usage limit reached. Your limit will reset at 3am (UTC).",
+      emitClaudeTurnFailure(harness, "You've hit your session limit \u00b7 resets 3am (UTC)");
+
+      const thread = await waitForThread(
+        harness.readModel,
+        (entry) => entry.session?.resumeAt != null,
       );
+      // Waiting keeps the thread on its own model and provider session, which
+      // is the whole point: the restarted turn continues rather than starting
+      // over somewhere else.
+      expect(thread.modelSelection).toEqual({
+        instanceId: ProviderInstanceId.make("claudeAgent"),
+        model: "claude-opus-5",
+      });
+      expect(failoverActivities(thread)).toHaveLength(0);
+      expect(thread.session?.status).toBe("error");
+      const resumeAt = thread.session?.resumeAt;
+      expect(resumeAt).toBeDefined();
+      // 3am UTC, and always the next one — parking on an instant already past
+      // would make the ticker fire immediately into the same wall.
+      const resumeAtMs = DateTime.toEpochMillis(DateTime.makeUnsafe(resumeAt!));
+      expect(DateTime.getPart(DateTime.makeUnsafe(resumeAtMs), "hour")).toBe(3);
+      expect(resumeAtMs).toBeGreaterThan(await Effect.runPromise(Clock.currentTimeMillis));
+      const [activity] = parkActivities(thread);
+      expect(activity?.summary).toContain("Resuming automatically");
+    });
+
+    it("keeps the park when the provider process exits after the failed turn", async () => {
+      const harness = await createHarness();
+      await seedClaudeThread(harness);
+
+      emitClaudeTurnFailure(harness, "You've hit your session limit \u00b7 resets 3am (UTC)");
+      await waitForThread(harness.readModel, (entry) => entry.session?.resumeAt != null);
+
+      // The Claude CLI ends right after a limit failure. That exit must not
+      // look like the thread stopped waiting — it is the ordinary shape of a
+      // parked thread, and wiping the park here would strand the work.
+      harness.emit({
+        type: "session.exited",
+        eventId: asEventId("evt-park-session-exited"),
+        provider: ProviderDriverKind.make("claudeAgent"),
+        createdAt: seededAt,
+        threadId: asThreadId("thread-1"),
+        payload: { code: 0 },
+      });
+      await harness.drain();
+
+      const snapshot = await harness.readModel();
+      const thread = snapshot.threads.find((entry) => entry.id === asThreadId("thread-1"));
+      expect(thread?.session?.status).toBe("stopped");
+      expect(thread?.session?.resumeAt).not.toBeNull();
+    });
+
+    it("restarts the interrupted turn on the same model when the park is resumed", async () => {
+      const harness = await createHarness();
+      await seedClaudeThread(harness);
+
+      emitClaudeTurnFailure(harness, "You've hit your session limit \u00b7 resets 3am (UTC)");
+      await waitForThread(harness.readModel, (entry) => entry.session?.resumeAt != null);
+
+      const result = await harness.resumeParkedThread(
+        ThreadId.make("thread-1"),
+        "2026-01-01T03:00:00.000Z",
+      );
+      expect(result.resumed).toBe(true);
+
+      // Clearing the park rides on the session stop, which the command reactor
+      // owns (and which this ingestion-only harness does not run) — see
+      // ProviderCommandReactor.test.ts for that half.
+      const thread = await waitForThread(harness.readModel, (entry) =>
+        entry.activities.some((activity) => activity.kind === "model.limit.resumed"),
+      );
+      expect(thread.modelSelection).toEqual({
+        instanceId: ProviderInstanceId.make("claudeAgent"),
+        model: "claude-opus-5",
+      });
+      expect(failoverActivities(thread)).toHaveLength(0);
+      // The restarted turn is the one the limit cut off, replayed under its own
+      // message id — so the chat does not grow a duplicate of what the user
+      // already sent.
+      const userMessages = thread.messages.filter((message) => message.role === "user");
+      expect(userMessages).toHaveLength(1);
+      expect(userMessages[0]?.text).toBe("Implement the issue");
+    });
+
+    it("restarts an exhausted Claude turn on the mapped codex backup when no reset is named", async () => {
+      const harness = await createHarness();
+      await seedClaudeThread(harness);
+
+      emitClaudeTurnFailure(harness, "Claude usage limit reached.");
 
       const thread = await waitForThread(
         harness.readModel,
@@ -3703,7 +3814,7 @@ describe("ProviderRuntimeIngestion", () => {
       const harness = await createHarness();
       await seedClaudeThread(harness);
 
-      emitClaudeTurnFailure(harness, "Claude usage limit reached. Resets at 3am.");
+      emitClaudeTurnFailure(harness, "Claude usage limit reached.");
       await waitForThread(
         harness.readModel,
         (entry) => entry.modelSelection.model === "gpt-5.6-sol",
@@ -3722,6 +3833,7 @@ describe("ProviderRuntimeIngestion", () => {
           activeTurnId: asTurnId("turn-codex-1"),
           updatedAt: seededAt,
           lastError: null,
+          resumeAt: null,
         },
         createdAt: seededAt,
       });

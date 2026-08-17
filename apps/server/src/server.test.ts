@@ -123,6 +123,7 @@ import * as BrowserTraceCollector from "./observability/BrowserTraceCollector.ts
 import * as ProjectFaviconResolver from "./project/ProjectFaviconResolver.ts";
 import * as T3ProjectFileLoader from "./project/T3ProjectFileLoader.ts";
 import * as IssueStartCoordinatorService from "./orchestration/Services/IssueStartCoordinator.ts";
+import { ModelFailoverService } from "./orchestration/Services/ModelFailover.ts";
 import * as ProjectSetupScriptRunner from "./project/ProjectSetupScriptRunner.ts";
 import * as RepositoryIdentityResolver from "./project/RepositoryIdentityResolver.ts";
 import * as ServerEnvironment from "./environment/ServerEnvironment.ts";
@@ -730,6 +731,9 @@ const buildAppUnderTest = (options?: {
             startIssue: () => Effect.succeed({ sequence: 0 }),
             startIssueReview: () => Effect.succeed({ sequence: 0 }),
             ...options?.layers?.issueStartCoordinator,
+          }),
+          Layer.mock(ModelFailoverService)({
+            resumeParkedThread: () => Effect.succeed({ resumed: false, sequence: 0 }),
           }),
         ),
       ),
@@ -5263,6 +5267,7 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
                       runtimeMode: "full-access",
                       activeTurnId: null,
                       lastError: null,
+                      resumeAt: null,
                       updatedAt: now,
                     },
                   }),
@@ -5341,6 +5346,7 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
                           runtimeMode: "full-access",
                           activeTurnId: null,
                           lastError: null,
+                          resumeAt: null,
                           updatedAt: now,
                         },
                       }),
@@ -5465,6 +5471,7 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
                         runtimeMode: "full-access",
                         activeTurnId: null,
                         lastError: null,
+                        resumeAt: null,
                         updatedAt: now,
                       },
                     }),
@@ -5531,6 +5538,7 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
                       runtimeMode: "full-access",
                       activeTurnId: null,
                       lastError: null,
+                      resumeAt: null,
                       updatedAt: now,
                     },
                   }),
@@ -5658,6 +5666,7 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
                       runtimeMode: "full-access",
                       activeTurnId: null,
                       lastError: null,
+                      resumeAt: null,
                       updatedAt: now,
                     },
                   }),
@@ -5730,6 +5739,7 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
                       runtimeMode: "full-access",
                       activeTurnId: null,
                       lastError: null,
+                      resumeAt: null,
                       updatedAt: now,
                     },
                   }),

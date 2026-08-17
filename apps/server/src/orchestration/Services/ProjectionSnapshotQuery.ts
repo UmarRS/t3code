@@ -152,6 +152,16 @@ export interface ProjectionSnapshotQueryShape {
   >;
 
   /**
+   * Threads whose session is parked on a provider limit that has now lifted.
+   *
+   * Like the schedule query this runs once a minute, so it reads one column of
+   * the few sessions that carry a resume instant rather than the read model.
+   */
+  readonly listThreadIdsDueForResume: (
+    now: string,
+  ) => Effect.Effect<ReadonlyArray<ThreadId>, ProjectionRepositoryError>;
+
+  /**
    * Read a single active project shell row by id.
    */
   readonly getProjectShellById: (

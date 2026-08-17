@@ -72,7 +72,7 @@ describe("ThreadErrorBanner", () => {
   it("aligns the warning and dismiss icons with the first line of a multi-line error", () => {
     const markup = renderToStaticMarkup(
       <ThreadErrorBanner
-        error={"The first error line\ncontinues on a second line"}
+        mode={{ kind: "error", message: "The first error line\ncontinues on a second line" }}
         onDismiss={() => {}}
       />,
     );
@@ -84,5 +84,44 @@ describe("ThreadErrorBanner", () => {
     expect(markup).toContain("min-h-7 pt-1 sm:min-h-6 sm:pt-0.5");
     expect(markup).toContain("h-lh w-4");
     expect(markup).toContain("h-lh self-start");
+  });
+
+  it("offers both ways out of a limit park, and names when it resumes", () => {
+    const markup = renderToStaticMarkup(
+      <ThreadErrorBanner
+        mode={{
+          kind: "parked",
+          message: "You've hit your session limit",
+          resumeAtLabel: "12:10 AM",
+          relativeLabel: "in 2h 22m",
+        }}
+        onResumeNow={() => {}}
+        onStopWaiting={() => {}}
+      />,
+    );
+
+    expect(markup).toContain("Resuming at 12:10 AM (in 2h 22m)");
+    expect(markup).toContain("Resume now");
+    expect(markup).toContain("Stop waiting");
+    // The park is not an error state to be dismissed — hiding it would hide
+    // the only place the automatic restart is visible.
+    expect(markup).not.toContain('aria-label="Dismiss error"');
+  });
+
+  it("drops the countdown once the resume instant has passed", () => {
+    const markup = renderToStaticMarkup(
+      <ThreadErrorBanner
+        mode={{
+          kind: "parked",
+          message: "You've hit your session limit",
+          resumeAtLabel: "12:10 AM",
+          relativeLabel: null,
+        }}
+        onResumeNow={() => {}}
+      />,
+    );
+
+    expect(markup).toContain("Resuming at 12:10 AM.");
+    expect(markup).not.toContain("Resuming at 12:10 AM (");
   });
 });

@@ -36,6 +36,7 @@ function makeSession(status: "running" | "starting" | "idle") {
     runtimeMode: DEFAULT_RUNTIME_MODE,
     activeTurnId: null,
     lastError: null,
+    resumeAt: null,
     updatedAt: "2026-03-09T10:05:00.000Z",
   } as const;
 }

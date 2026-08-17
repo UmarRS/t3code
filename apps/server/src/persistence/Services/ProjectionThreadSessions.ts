@@ -29,6 +29,8 @@ export const ProjectionThreadSession = Schema.Struct({
   runtimeMode: RuntimeMode,
   activeTurnId: Schema.NullOr(TurnId),
   lastError: Schema.NullOr(Schema.String),
+  /** Set only while the session is parked waiting for a provider limit to lift. */
+  resumeAt: Schema.NullOr(IsoDateTime),
   updatedAt: IsoDateTime,
 });
 export type ProjectionThreadSession = typeof ProjectionThreadSession.Type;

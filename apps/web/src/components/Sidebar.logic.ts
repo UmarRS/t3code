@@ -1,5 +1,5 @@
 import * as React from "react";
-import type { ContextMenuItem } from "@t3tools/contracts";
+import { isSessionParkedForResume, type ContextMenuItem } from "@t3tools/contracts";
 import type { SidebarProjectSortOrder, SidebarThreadSortOrder } from "@t3tools/contracts/settings";
 import {
   getThreadSortTimestamp,
@@ -125,7 +125,8 @@ export interface ThreadStatusPill {
     | "Completed"
     | "Pending Approval"
     | "Awaiting Input"
-    | "Plan Ready";
+    | "Plan Ready"
+    | "Rate Limited";
   colorClass: string;
   dotClass: string;
   pulse: boolean;
@@ -135,10 +136,14 @@ export interface ThreadStatusPill {
 // then active work, then the actionable plan prompt, then passive
 // monitoring. A Monitoring sibling must never hide a Plan Ready thread.
 const THREAD_STATUS_PRIORITY: Record<ThreadStatusPill["label"], number> = {
-  "Pending Approval": 6,
-  "Awaiting Input": 5,
-  Working: 4,
-  Connecting: 4,
+  "Pending Approval": 7,
+  "Awaiting Input": 6,
+  Working: 5,
+  Connecting: 5,
+  // Below live work — a project with one thread still running is working, not
+  // waiting — but above the states that merely report, so a project whose only
+  // threads are parked says so instead of looking idle.
+  "Rate Limited": 4,
   "Plan Ready": 3,
   Monitoring: 2,
   Completed: 1,
@@ -705,6 +710,18 @@ export function resolveThreadStatusPill(input: {
       label: "Awaiting Input",
       colorClass: "text-indigo-600 dark:text-indigo-300/90",
       dotClass: "bg-indigo-500 dark:bg-indigo-300/90",
+      pulse: false,
+    };
+  }
+
+  // Parked beats every liveness state below: the thread is not working, not
+  // stalled, and not waiting on a person — it is waiting on a clock, and saying
+  // so is what stops it reading as a dead thread nobody restarted.
+  if (isSessionParkedForResume(thread.session)) {
+    return {
+      label: "Rate Limited",
+      colorClass: "text-amber-600 dark:text-amber-300/90",
+      dotClass: "bg-amber-500 dark:bg-amber-300/90",
       pulse: false,
     };
   }

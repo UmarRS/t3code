@@ -65,6 +65,7 @@ import {
 } from "../src/orchestration/Services/OrchestrationEngine.ts";
 import { AutonomousRunReactor } from "../src/orchestration/Services/AutonomousRunReactor.ts";
 import { AutonomousScheduleReactor } from "../src/orchestration/Services/AutonomousScheduleReactor.ts";
+import { LimitResumeReactor } from "../src/orchestration/Services/LimitResumeReactor.ts";
 import { ThreadDeletionReactor } from "../src/orchestration/Services/ThreadDeletionReactor.ts";
 import { OrchestrationReactor } from "../src/orchestration/Services/OrchestrationReactor.ts";
 import { ProjectionSnapshotQuery } from "../src/orchestration/Services/ProjectionSnapshotQuery.ts";
@@ -395,6 +396,14 @@ export const makeOrchestrationIntegrationHarness = (
         Layer.succeed(AutonomousScheduleReactor, {
           start: () => Effect.void,
           runDueAt: () => Effect.void,
+        }),
+      ),
+      // The resume ticker has its own tests; here it would only add a minute
+      // timer to every provider/checkpoint scenario.
+      Layer.provideMerge(
+        Layer.succeed(LimitResumeReactor, {
+          start: () => Effect.void,
+          runDueAt: () => Effect.succeed(0),
         }),
       ),
     );

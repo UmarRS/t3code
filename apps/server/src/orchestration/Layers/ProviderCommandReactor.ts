@@ -11,6 +11,7 @@ import {
   type ProviderSession,
   type RuntimeMode,
   type TurnId,
+  resumeAtForSessionStatus,
 } from "@t3tools/contracts";
 import { isTemporaryWorktreeBranch, WORKTREE_BRANCH_PREFIX } from "@t3tools/shared/git";
 import * as Cache from "effect/Cache";
@@ -422,6 +423,7 @@ const make = Effect.gen(function* () {
       return;
     }
     const session = thread.session;
+    const status = session?.status === "stopped" ? "stopped" : "error";
     yield* setThreadSession({
       threadId: input.threadId,
       session: {
@@ -431,9 +433,10 @@ const make = Effect.gen(function* () {
           providerInstanceId: thread.modelSelection.instanceId,
           runtimeMode: thread.runtimeMode,
         }),
-        status: session?.status === "stopped" ? "stopped" : "error",
+        status,
         activeTurnId: null,
         lastError: input.detail,
+        resumeAt: resumeAtForSessionStatus(session, status),
         updatedAt: input.createdAt,
       },
       createdAt: input.createdAt,
@@ -575,6 +578,7 @@ const make = Effect.gen(function* () {
           runtimeMode: desiredRuntimeMode,
           activeTurnId: null,
           lastError: null,
+          resumeAt: null,
           updatedAt: createdAt,
         },
         createdAt,
@@ -647,20 +651,22 @@ const make = Effect.gen(function* () {
             detail: `Provider session '${session.threadId}' started without a provider instance id.`,
           });
         }
+        const status =
+          options?.pendingTurnStart === true && session.status === "ready"
+            ? "starting"
+            : mapProviderSessionStatusToOrchestrationStatus(session.status);
         yield* setThreadSession({
           threadId,
           session: {
             threadId,
-            status:
-              options?.pendingTurnStart === true && session.status === "ready"
-                ? "starting"
-                : mapProviderSessionStatusToOrchestrationStatus(session.status),
+            status,
             providerName: session.provider,
             providerInstanceId: session.providerInstanceId,
             runtimeMode: desiredRuntimeMode,
             // Provider turn ids are not orchestration turn ids.
             activeTurnId: null,
             lastError: session.lastError ?? null,
+            resumeAt: resumeAtForSessionStatus(thread.session, status),
             updatedAt: session.updatedAt,
           },
           createdAt,
@@ -1166,12 +1172,13 @@ const make = Effect.gen(function* () {
             ),
           ),
         ),
-        // Exhausted-credit/limit failures on a Claude model restart the turn
-        // on the codex backup; anything else already surfaced above. The
-        // classifier sees the full cause text because start failures wrap the
-        // exhaustion reason in a generic "failed to start" detail.
+        // Exhausted-credit/limit failures park the thread until the limit
+        // lifts, or restart the turn on the codex backup when no reset instant
+        // is known; anything else already surfaced above. The classifier sees
+        // the full cause text because start failures wrap the exhaustion
+        // reason in a generic "failed to start" detail.
         Effect.flatMap(() =>
-          modelFailover.maybeFailoverToBackup({
+          modelFailover.recoverFromExhaustion({
             threadId: event.payload.threadId,
             failureDetail: `${detail}\n${Cause.pretty(cause)}`,
             createdAt: event.payload.createdAt,
@@ -1352,6 +1359,10 @@ const make = Effect.gen(function* () {
         runtimeMode: thread.session?.runtimeMode ?? DEFAULT_RUNTIME_MODE,
         activeTurnId: null,
         lastError: thread.session?.lastError ?? null,
+        // Stopping is the way out of a limit park, whether the server is
+        // stopping to restart the turn itself or the user asked to stop
+        // waiting. A stopped session never resumes on its own.
+        resumeAt: null,
         updatedAt: now,
       },
       createdAt: now,

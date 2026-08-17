@@ -415,6 +415,7 @@ describe("applyThreadDetailEvent", () => {
           runtimeMode: "full-access",
           activeTurnId: TurnId.make("turn-1"),
           lastError: null,
+          resumeAt: null,
           updatedAt: "2026-04-01T06:59:00.000Z",
         },
         latestTurn: {
@@ -484,6 +485,7 @@ describe("applyThreadDetailEvent", () => {
             runtimeMode: "full-access",
             activeTurnId: null,
             lastError: null,
+            resumeAt: null,
             updatedAt: "2026-04-01T08:00:00.000Z",
           },
         },
@@ -513,6 +515,7 @@ describe("applyThreadDetailEvent", () => {
             runtimeMode: "full-access",
             activeTurnId: TurnId.make("turn-1"),
             lastError: null,
+            resumeAt: null,
             updatedAt: "2026-04-01T08:00:00.000Z",
           },
         },
@@ -538,6 +541,7 @@ describe("applyThreadDetailEvent", () => {
           runtimeMode: "full-access",
           activeTurnId: TurnId.make("turn-1"),
           lastError: null,
+          resumeAt: null,
           updatedAt: "2026-04-01T08:00:00.000Z",
         },
       };

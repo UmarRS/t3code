@@ -2220,6 +2220,7 @@ describe("ProviderCommandReactor", () => {
           runtimeMode: "full-access",
           activeTurnId: null,
           lastError: null,
+          resumeAt: null,
           updatedAt: now,
         },
         createdAt: now,
@@ -2401,6 +2402,7 @@ describe("ProviderCommandReactor", () => {
           runtimeMode: "approval-required",
           activeTurnId: null,
           lastError: null,
+          resumeAt: null,
           updatedAt: now,
         },
         createdAt: now,
@@ -2466,6 +2468,7 @@ describe("ProviderCommandReactor", () => {
           runtimeMode: "approval-required",
           activeTurnId: asTurnId("turn-1"),
           lastError: null,
+          resumeAt: null,
           updatedAt: now,
         },
         createdAt: now,
@@ -2504,6 +2507,7 @@ describe("ProviderCommandReactor", () => {
           runtimeMode: "approval-required",
           activeTurnId: null,
           lastError: null,
+          resumeAt: null,
           updatedAt: now,
         },
         createdAt: now,
@@ -2559,6 +2563,7 @@ describe("ProviderCommandReactor", () => {
           runtimeMode: "approval-required",
           activeTurnId: null,
           lastError: null,
+          resumeAt: null,
           updatedAt: now,
         },
         createdAt: now,
@@ -2630,6 +2635,7 @@ describe("ProviderCommandReactor", () => {
           runtimeMode: "approval-required",
           activeTurnId: null,
           lastError: null,
+          resumeAt: null,
           updatedAt: now,
         },
         createdAt: now,
@@ -2671,6 +2677,7 @@ describe("ProviderCommandReactor", () => {
           runtimeMode: "approval-required",
           activeTurnId: null,
           lastError: null,
+          resumeAt: null,
           updatedAt: now,
         },
         createdAt: now,
@@ -2725,6 +2732,7 @@ describe("ProviderCommandReactor", () => {
           runtimeMode: "approval-required",
           activeTurnId: null,
           lastError: null,
+          resumeAt: null,
           updatedAt: now,
         },
         createdAt: now,
@@ -2820,6 +2828,7 @@ describe("ProviderCommandReactor", () => {
           runtimeMode: "approval-required",
           activeTurnId: null,
           lastError: null,
+          resumeAt: null,
           updatedAt: now,
         },
         createdAt: now,
@@ -2921,6 +2930,7 @@ describe("ProviderCommandReactor", () => {
           runtimeMode: "approval-required",
           activeTurnId: null,
           lastError: null,
+          resumeAt: null,
           updatedAt: now,
         },
         createdAt: now,
@@ -2944,5 +2954,50 @@ describe("ProviderCommandReactor", () => {
     expect(thread?.session?.threadId).toBe("thread-1");
     expect(thread?.session?.providerInstanceId).toBe(ProviderInstanceId.make("codex_work"));
     expect(thread?.session?.activeTurnId).toBeNull();
+  });
+
+  it("clears a limit park when the session is stopped", async () => {
+    const harness = await createHarness();
+    const now = "2026-01-01T00:00:00.000Z";
+
+    await harness.runEffect(
+      harness.engine.dispatch({
+        type: "thread.session.set",
+        commandId: CommandId.make("cmd-session-set-parked"),
+        threadId: ThreadId.make("thread-1"),
+        session: {
+          threadId: ThreadId.make("thread-1"),
+          status: "error",
+          providerName: "codex",
+          providerInstanceId: ProviderInstanceId.make("codex_work"),
+          runtimeMode: "approval-required",
+          activeTurnId: null,
+          lastError: "You've hit your session limit",
+          resumeAt: "2026-01-01T05:00:00.000Z",
+          updatedAt: now,
+        },
+        createdAt: now,
+      }),
+    );
+
+    await harness.runEffect(
+      harness.engine.dispatch({
+        type: "thread.session.stop",
+        commandId: CommandId.make("cmd-session-stop-parked"),
+        threadId: ThreadId.make("thread-1"),
+        createdAt: now,
+      }),
+    );
+
+    await waitFor(() => harness.stopSession.mock.calls.length === 1);
+    const readModel = await harness.readModel();
+    const thread = readModel.threads.find((entry) => entry.id === ThreadId.make("thread-1"));
+    // Stopping is both halves of the way out: the user giving up on the wait,
+    // and the server's own resume clearing the park before it restarts. A
+    // stopped session must never be picked up by the resume ticker.
+    expect(thread?.session?.status).toBe("stopped");
+    expect(thread?.session?.resumeAt).toBeNull();
+    // The failure that caused the park is still on the record.
+    expect(thread?.session?.lastError).toBe("You've hit your session limit");
   });
 });

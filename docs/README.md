@@ -10,6 +10,7 @@
 - [Scope a thread to a folder](./user/thread-scope.md)
 - [Link a project to another codebase](./user/linked-projects.md)
 - [Review usage](./user/usage.md)
+- [When a model runs out of capacity](./user/rate-limits.md)
 - [Customize a project icon](./user/project-settings.md)
 - [Remote access](./user/remote-access.md)
 - [Source control integrations](./user/source-control.md)

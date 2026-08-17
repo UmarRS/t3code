@@ -8,6 +8,7 @@ import { afterEach, describe, expect, it } from "vite-plus/test";
 import { AutonomousRunReactor } from "../Services/AutonomousRunReactor.ts";
 import { AutonomousScheduleReactor } from "../Services/AutonomousScheduleReactor.ts";
 import { CheckpointReactor } from "../Services/CheckpointReactor.ts";
+import { LimitResumeReactor } from "../Services/LimitResumeReactor.ts";
 import { ProviderCommandReactor } from "../Services/ProviderCommandReactor.ts";
 import { ProviderRuntimeIngestionService } from "../Services/ProviderRuntimeIngestion.ts";
 import { ThreadDeletionReactor } from "../Services/ThreadDeletionReactor.ts";
@@ -24,7 +25,7 @@ describe("OrchestrationReactor", () => {
     runtime = null;
   });
 
-  it("starts provider ingestion, provider command, checkpoint, thread deletion, and autonomous reactors", async () => {
+  it("starts provider ingestion, provider command, checkpoint, thread deletion, autonomous, and limit-resume reactors", async () => {
     const started: string[] = [];
 
     runtime = ManagedRuntime.make(
@@ -83,6 +84,15 @@ describe("OrchestrationReactor", () => {
             runDueAt: () => Effect.void,
           }),
         ),
+        Layer.provideMerge(
+          Layer.succeed(LimitResumeReactor, {
+            start: () => {
+              started.push("limit-resume-reactor");
+              return Effect.void;
+            },
+            runDueAt: () => Effect.succeed(0),
+          }),
+        ),
       ),
     );
 
@@ -97,6 +107,7 @@ describe("OrchestrationReactor", () => {
       "thread-deletion-reactor",
       "autonomous-run-reactor",
       "autonomous-schedule-reactor",
+      "limit-resume-reactor",
     ]);
 
     await Effect.runPromise(Scope.close(scope, Exit.void));

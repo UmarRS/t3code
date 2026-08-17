@@ -210,6 +210,9 @@ const ProjectIdLookupInput = Schema.Struct({
 const ThreadIdLookupInput = Schema.Struct({
   threadId: ThreadId,
 });
+const ResumeDueInput = Schema.Struct({
+  now: IsoDateTime,
+});
 const CompanionThreadLookupInput = Schema.Struct({
   parentThreadId: ThreadId,
   targetProjectId: ProjectId,
@@ -381,6 +384,7 @@ function mapSessionRow(
     runtimeMode: row.runtimeMode,
     activeTurnId: row.activeTurnId,
     lastError: row.lastError,
+    resumeAt: row.resumeAt,
     updatedAt: row.updatedAt,
   };
 }
@@ -853,6 +857,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           runtime_mode AS "runtimeMode",
           active_turn_id AS "activeTurnId",
           last_error AS "lastError",
+          resume_at AS "resumeAt",
           updated_at AS "updatedAt"
         FROM projection_thread_sessions
         ORDER BY thread_id ASC
@@ -874,6 +879,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           sessions.runtime_mode AS "runtimeMode",
           sessions.active_turn_id AS "activeTurnId",
           sessions.last_error AS "lastError",
+          sessions.resume_at AS "resumeAt",
           sessions.updated_at AS "updatedAt"
         FROM projection_thread_sessions sessions
         INNER JOIN projection_threads threads
@@ -899,6 +905,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           sessions.runtime_mode AS "runtimeMode",
           sessions.active_turn_id AS "activeTurnId",
           sessions.last_error AS "lastError",
+          sessions.resume_at AS "resumeAt",
           sessions.updated_at AS "updatedAt"
         FROM projection_thread_sessions sessions
         INNER JOIN projection_threads threads
@@ -1172,6 +1179,27 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
       `,
   });
 
+  // Parked sessions are rare and the partial index covers the predicate, so the
+  // once-a-minute due check reads nothing at all on an environment where
+  // nothing is waiting on a provider limit.
+  const listThreadSessionsDueForResumeRows = SqlSchema.findAll({
+    Request: ResumeDueInput,
+    Result: ProjectionThreadIdLookupRowSchema,
+    execute: ({ now }) =>
+      sql`
+        SELECT
+          sessions.thread_id AS "threadId"
+        FROM projection_thread_sessions sessions
+        INNER JOIN projection_threads threads
+          ON threads.thread_id = sessions.thread_id
+        WHERE sessions.resume_at IS NOT NULL
+          AND sessions.resume_at <= ${now}
+          AND threads.deleted_at IS NULL
+          AND threads.archived_at IS NULL
+        ORDER BY sessions.resume_at ASC, sessions.thread_id ASC
+      `,
+  });
+
   const getFirstActiveThreadIdByProject = SqlSchema.findOneOption({
     Request: ProjectIdLookupInput,
     Result: ProjectionThreadIdLookupRowSchema,
@@ -1347,6 +1375,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           runtime_mode AS "runtimeMode",
           active_turn_id AS "activeTurnId",
           last_error AS "lastError",
+          resume_at AS "resumeAt",
           updated_at AS "updatedAt"
         FROM projection_thread_sessions
         WHERE thread_id = ${threadId}
@@ -1857,6 +1886,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
                   runtimeMode: row.runtimeMode,
                   activeTurnId: row.activeTurnId,
                   lastError: row.lastError,
+                  resumeAt: row.resumeAt,
                   updatedAt: row.updatedAt,
                 });
               }
@@ -2640,6 +2670,19 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
       ),
     );
 
+  const listThreadIdsDueForResume: ProjectionSnapshotQueryShape["listThreadIdsDueForResume"] = (
+    now,
+  ) =>
+    listThreadSessionsDueForResumeRows({ now }).pipe(
+      Effect.mapError(
+        toPersistenceSqlOrDecodeError(
+          "ProjectionSnapshotQuery.listThreadIdsDueForResume:query",
+          "ProjectionSnapshotQuery.listThreadIdsDueForResume:decodeRow",
+        ),
+      ),
+      Effect.map((rows) => rows.map((row) => row.threadId)),
+    );
+
   const getFirstActiveThreadIdByProjectId: ProjectionSnapshotQueryShape["getFirstActiveThreadIdByProjectId"] =
     (projectId) =>
       getFirstActiveThreadIdByProject({ projectId }).pipe(
@@ -3192,6 +3235,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
     getProjectShellById,
     getProjectLinksById,
     listScheduledProjects,
+    listThreadIdsDueForResume,
     getFirstActiveThreadIdByProjectId,
     getCompanionThreadId,
     getThreadCheckpointContext,

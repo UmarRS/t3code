@@ -14,8 +14,10 @@ import {
   ProjectCreatedPayload,
   ProjectMetaUpdatedPayload,
   OrchestrationProposedPlan,
+  isSessionParkedForResume,
   OrchestrationSession,
   OrchestrationThread,
+  resumeAtForSessionStatus,
   OrchestrationThreadShell,
   ProjectCreateCommand,
   ThreadMetaUpdatedPayload,
@@ -935,3 +937,30 @@ it.effect("project favicon overrides accept only supported image files", () =>
     assert.strictEqual(invalid._tag, "Failure");
   }),
 );
+
+it("keeps a limit park across the statuses a waiting thread passes through", () => {
+  const parked = { resumeAt: "2026-08-17T04:10:00.000Z" };
+
+  // The turn failed and the provider process exits right after; the thread is
+  // still waiting on the clock through both.
+  assert.equal(resumeAtForSessionStatus(parked, "error"), "2026-08-17T04:10:00.000Z");
+  assert.equal(resumeAtForSessionStatus(parked, "stopped"), "2026-08-17T04:10:00.000Z");
+
+  // Alive again, or stopped by a person: nothing left to resume.
+  assert.isNull(resumeAtForSessionStatus(parked, "starting"));
+  assert.isNull(resumeAtForSessionStatus(parked, "running"));
+  assert.isNull(resumeAtForSessionStatus(parked, "ready"));
+  assert.isNull(resumeAtForSessionStatus(parked, "idle"));
+  assert.isNull(resumeAtForSessionStatus(parked, "interrupted"));
+
+  // An unparked session never grows a park from a status change.
+  assert.isNull(resumeAtForSessionStatus({ resumeAt: null }, "error"));
+  assert.isNull(resumeAtForSessionStatus(null, "error"));
+});
+
+it("reads whether a session is parked for resume", () => {
+  assert.isTrue(isSessionParkedForResume({ resumeAt: "2026-08-17T04:10:00.000Z" }));
+  assert.isFalse(isSessionParkedForResume({ resumeAt: null }));
+  assert.isFalse(isSessionParkedForResume(null));
+  assert.isFalse(isSessionParkedForResume(undefined));
+});

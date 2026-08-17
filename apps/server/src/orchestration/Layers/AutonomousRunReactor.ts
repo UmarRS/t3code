@@ -2,6 +2,7 @@ import {
   activeAutonomousIssues,
   CommandId,
   isAutonomousRunComplete,
+  isSessionParkedForResume,
   IssueId,
   MessageId,
   type OrchestrationEvent,
@@ -761,6 +762,13 @@ const make = Effect.gen(function* () {
     }
     if (event.type === "thread.session-set") {
       const status = event.payload.session.status;
+      // A session parked on a provider limit has not finished its turn — the
+      // server restarts it when the limit lifts. Treating that as a turn end
+      // would park the issue for a human over a wait the run recovers from on
+      // its own, which is the whole point of the park.
+      if (isSessionParkedForResume(event.payload.session)) {
+        return;
+      }
       // Only a session that has left "running" marks the end of a turn.
       if (status !== "starting" && status !== "running") {
         yield* handleWorkerTurnEnd(event.payload.threadId, status);
