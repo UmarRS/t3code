@@ -128,15 +128,46 @@ describe("summarizeAutonomousProgress", () => {
     });
   });
 
-  // An issue the server filed away a day after finishing is still finished
-  // work, and still part of what the run was asked to get through.
-  it("keeps counting an archived issue as done", () => {
+  // An issue the server filed away a day after finishing drops out of every
+  // tally: it belongs to project history, not to this run's readout, and
+  // counting it forever is what made a finished board read "finished" long
+  // after the fact.
+  it("excludes an archived issue from every tally", () => {
     const progress = summarizeAutonomousProgress([
       ...issues,
       issue("filed-away", { status: "archived" }),
     ]);
-    expect(progress.done).toBe(2);
-    expect(progress.total).toBe(7);
+    expect(progress.done).toBe(1);
+    expect(progress.total).toBe(6);
+  });
+
+  it("reads a backlog of only-archived issues as no work at all", () => {
+    const progress = summarizeAutonomousProgress([
+      issue("filed-1", { status: "archived" }),
+      issue("filed-2", { status: "archived" }),
+    ]);
+    expect(progress).toEqual({
+      queued: 0,
+      inProgress: 0,
+      inReview: 0,
+      done: 0,
+      needsAttention: 0,
+      total: 0,
+    });
+  });
+
+  // Flagged work must survive its siblings archiving out from under it, even
+  // though in practice a flagged issue is rarely `done` enough to archive.
+  it("still counts a flagged issue after everything else has archived", () => {
+    const progress = summarizeAutonomousProgress([
+      issue("filed-away", { status: "archived" }),
+      issue("parked", {
+        status: "in_progress",
+        threadId: "thread-1",
+        needsAttentionAt: "2026-08-01T00:00:00.000Z",
+      }),
+    ]);
+    expect(progress.needsAttention).toBe(1);
   });
 
   it("does not count a flagged issue as active or startable", () => {
@@ -182,6 +213,67 @@ describe("describeAutonomousRunStatus", () => {
     const status = describeAutonomousRunStatus({
       state: { kind: "finished", finishedAt: null },
       progress: flagged,
+    });
+    expect(status.tone).toBe("complete");
+    expect(status.detail).toBe("1 issue needs you");
+  });
+
+  // Once every issue the run touched has archived off the board, "Autonomous
+  // finished · 0 done / 0" is not a status worth announcing forever — it
+  // retires to plain idle instead.
+  it("retires a finished run to idle once its work has all archived", () => {
+    const emptied = summarizeAutonomousProgress([issue("filed-away", { status: "archived" })]);
+    const status = describeAutonomousRunStatus({
+      state: { kind: "finished", finishedAt: "2026-08-01T00:00:00.000Z" },
+      progress: emptied,
+    });
+    expect(status).toEqual({ label: "Autonomous", detail: null, tone: "idle" });
+  });
+
+  // A never-run project reads the same way: nothing has ever been in scope.
+  it("reads a finished state with nothing ever in scope as idle", () => {
+    const status = describeAutonomousRunStatus({
+      state: { kind: "finished", finishedAt: null },
+      progress: summarizeAutonomousProgress([]),
+    });
+    expect(status.tone).toBe("idle");
+  });
+
+  // Flagged work is never hidden by archiving of its siblings: the badge
+  // keeps pointing at it even though total reads 0.
+  it("keeps the finished/needs-you presentation when total is 0 but something is flagged", () => {
+    const flaggedOnly = summarizeAutonomousProgress([
+      issue("filed-away", { status: "archived" }),
+      issue("parked", {
+        status: "in_progress",
+        threadId: "thread-1",
+        needsAttentionAt: "2026-08-01T00:00:00.000Z",
+      }),
+    ]);
+    expect(flaggedOnly.total).toBe(1);
+    const status = describeAutonomousRunStatus({
+      state: { kind: "finished", finishedAt: null },
+      progress: flaggedOnly,
+    });
+    expect(status.tone).toBe("complete");
+    expect(status.detail).toBe("1 issue needs you");
+  });
+
+  // The guard checks needsAttention independently of total, so even the
+  // (practically unreachable, since flagged work is rarely `done` enough to
+  // archive) case of total reading 0 alongside a nonzero needsAttention still
+  // keeps the finished/needs-you presentation rather than falling to idle.
+  it("never falls to idle on needsAttention alone, whatever total says", () => {
+    const status = describeAutonomousRunStatus({
+      state: { kind: "finished", finishedAt: null },
+      progress: {
+        queued: 0,
+        inProgress: 0,
+        inReview: 0,
+        done: 0,
+        needsAttention: 1,
+        total: 0,
+      },
     });
     expect(status.tone).toBe("complete");
     expect(status.detail).toBe("1 issue needs you");

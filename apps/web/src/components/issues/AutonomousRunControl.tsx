@@ -129,6 +129,13 @@ export function AutonomousRunControl({
           </span>
         ) : null}
 
+        {/*
+          Kept on the raw run state, not the badge's tone: archiving is filing,
+          not deleting (see isIssueDueForArchive), so a run whose issues have
+          all archived off the board's progress readout still has real merged
+          and needs-attention history for the Review tab to show. The tab's own
+          empty state covers the case where there is truly nothing to see.
+        */}
         {runState.kind === "finished" ? (
           <Button size="sm" variant="ghost" onClick={onOpenReview}>
             Review results
