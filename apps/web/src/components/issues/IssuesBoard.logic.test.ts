@@ -55,13 +55,14 @@ describe("buildIssueBoardColumns", () => {
       "in_review",
       "done",
       "canceled",
+      "archived",
     ]);
   });
 
   it("mutes only the finished columns", () => {
     expect(
       ISSUE_STATUS_COLUMNS.filter((column) => column.muted).map((column) => column.status),
-    ).toEqual(["done", "canceled"]);
+    ).toEqual(["done", "canceled", "archived"]);
   });
 
   it("groups issues into their status column", () => {
@@ -69,6 +70,7 @@ describe("buildIssueBoardColumns", () => {
       issue("a", { status: "in_review" }),
       issue("b", { status: "backlog" }),
       issue("c", { status: "canceled" }),
+      issue("d", { status: "archived" }),
     ]);
     expect(
       Object.fromEntries(
@@ -80,6 +82,7 @@ describe("buildIssueBoardColumns", () => {
       in_review: ["a"],
       done: [],
       canceled: ["c"],
+      archived: ["d"],
     });
   });
 
@@ -117,6 +120,12 @@ describe("resolveIssueBlockers", () => {
     const done = issue("dep", { status: "done" });
     const target = issue("target", { dependsOn: ["dep"] });
     expect(resolveIssueBlockers(target, indexIssuesById([done, target]))).toEqual([]);
+  });
+
+  it("stays clear once the done dependency is archived", () => {
+    const archived = issue("dep", { status: "archived" });
+    const target = issue("target", { dependsOn: ["dep"] });
+    expect(resolveIssueBlockers(target, indexIssuesById([archived, target]))).toEqual([]);
   });
 
   it("still blocks on a canceled dependency", () => {

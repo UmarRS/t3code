@@ -65,6 +65,7 @@ import {
 } from "../src/orchestration/Services/OrchestrationEngine.ts";
 import { AutonomousRunReactor } from "../src/orchestration/Services/AutonomousRunReactor.ts";
 import { AutonomousScheduleReactor } from "../src/orchestration/Services/AutonomousScheduleReactor.ts";
+import { IssueArchiveReactor } from "../src/orchestration/Services/IssueArchiveReactor.ts";
 import { LimitResumeReactor } from "../src/orchestration/Services/LimitResumeReactor.ts";
 import { ThreadDeletionReactor } from "../src/orchestration/Services/ThreadDeletionReactor.ts";
 import { OrchestrationReactor } from "../src/orchestration/Services/OrchestrationReactor.ts";
@@ -402,6 +403,14 @@ export const makeOrchestrationIntegrationHarness = (
       // timer to every provider/checkpoint scenario.
       Layer.provideMerge(
         Layer.succeed(LimitResumeReactor, {
+          start: () => Effect.void,
+          runDueAt: () => Effect.succeed(0),
+        }),
+      ),
+      // Same reasoning: the archive sweep has its own tests, and a live minute
+      // ticker would only add noise here.
+      Layer.provideMerge(
+        Layer.succeed(IssueArchiveReactor, {
           start: () => Effect.void,
           runDueAt: () => Effect.succeed(0),
         }),

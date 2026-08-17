@@ -38,13 +38,20 @@ interface IssueStatusColumnDefinition {
   readonly muted: boolean;
 }
 
-/** Left-to-right column order. Fixed: the board is a pipeline, not a filter. */
+/**
+ * Left-to-right column order. Fixed: the board is a pipeline, not a filter.
+ * Archived sits at the far right, past the other two finished columns, because
+ * it is where work goes to stop being looked at — the server files a `done`
+ * issue there after a day of quiet, and reaching it is the last thing that
+ * happens to an issue.
+ */
 export const ISSUE_STATUS_COLUMNS: ReadonlyArray<IssueStatusColumnDefinition> = [
   { status: "backlog", label: "Backlog", muted: false },
   { status: "in_progress", label: "In Progress", muted: false },
   { status: "in_review", label: "In Review", muted: false },
   { status: "done", label: "Done", muted: true },
   { status: "canceled", label: "Canceled", muted: true },
+  { status: "archived", label: "Archived", muted: true },
 ];
 
 export const ISSUE_STATUS_LABEL: Readonly<Record<IssueStatus, string>> = {
@@ -53,6 +60,7 @@ export const ISSUE_STATUS_LABEL: Readonly<Record<IssueStatus, string>> = {
   in_review: "In Review",
   done: "Done",
   canceled: "Canceled",
+  archived: "Archived",
 };
 
 export const ISSUE_PRIORITY_LABEL: Readonly<Record<IssuePriority, string>> = {
@@ -106,7 +114,8 @@ export function indexIssuesById<TIssue extends BoardIssue>(
 /**
  * The dependencies still standing between an issue and its start. A dependency
  * whose issue was deleted no longer blocks — the server agrees — and only
- * `done` satisfies one, so a canceled dependency still gates the work.
+ * finished work satisfies one (`done`, or the `archived` it becomes after a
+ * day), so a canceled dependency still gates the work.
  */
 export function resolveIssueBlockers<TIssue extends BoardIssue>(
   issue: BoardIssue,

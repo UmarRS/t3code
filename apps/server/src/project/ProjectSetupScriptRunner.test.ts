@@ -52,6 +52,7 @@ const makeProjectionSnapshotQueryLayer = (project: OrchestrationProject) =>
     getIssueDetailById: () => Effect.succeed(Option.none()),
     getIssueByReviewerThreadId: () => Effect.succeed(Option.none()),
     listIssuesByProjectId: () => Effect.succeed([]),
+    listIssuesDueForArchive: () => Effect.succeed([]),
     searchThreads: () => Effect.succeed({ matches: [] }),
   });
 

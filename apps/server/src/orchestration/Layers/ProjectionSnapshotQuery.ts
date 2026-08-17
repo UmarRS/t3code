@@ -251,6 +251,13 @@ const ProjectionProjectLookupRowSchema = ProjectionProjectDbRowSchema;
 const ProjectionThreadIdLookupRowSchema = Schema.Struct({
   threadId: ThreadId,
 });
+const ArchiveDueInput = Schema.Struct({
+  cutoff: Schema.String,
+});
+const ProjectionIssueDueForArchiveRowSchema = Schema.Struct({
+  issueId: IssueId,
+  updatedAt: IsoDateTime,
+});
 const ProjectionThreadCheckpointContextThreadRowSchema = Schema.Struct({
   threadId: ThreadId,
   projectId: ProjectId,
@@ -652,6 +659,25 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
         WHERE project_id = ${projectId}
           AND deleted_at IS NULL
         ORDER BY created_at ASC, issue_id ASC
+      `,
+  });
+
+  // The status predicate does the filtering: on a board where nothing has been
+  // finished for a day, the once-a-minute sweep reads no rows at all. Ordered
+  // oldest first so the longest-finished work is filed first.
+  const listIssueRowsDueForArchive = SqlSchema.findAll({
+    Request: ArchiveDueInput,
+    Result: ProjectionIssueDueForArchiveRowSchema,
+    execute: ({ cutoff }) =>
+      sql`
+        SELECT
+          issue_id AS "issueId",
+          updated_at AS "updatedAt"
+        FROM projection_issues
+        WHERE status = 'done'
+          AND updated_at <= ${cutoff}
+          AND deleted_at IS NULL
+        ORDER BY updated_at ASC, issue_id ASC
       `,
   });
 
@@ -3223,6 +3249,18 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
       ),
     );
 
+  const listIssuesDueForArchive: ProjectionSnapshotQueryShape["listIssuesDueForArchive"] = (
+    cutoffIso,
+  ) =>
+    listIssueRowsDueForArchive({ cutoff: cutoffIso }).pipe(
+      Effect.mapError(
+        toPersistenceSqlOrDecodeError(
+          "ProjectionSnapshotQuery.listIssuesDueForArchive:query",
+          "ProjectionSnapshotQuery.listIssuesDueForArchive:decodeRows",
+        ),
+      ),
+    );
+
   return {
     getCommandReadModel,
     getSnapshot,
@@ -3247,6 +3285,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
     getIssueDetailById,
     getIssueByReviewerThreadId,
     listIssuesByProjectId,
+    listIssuesDueForArchive,
   } satisfies ProjectionSnapshotQueryShape;
 });
 

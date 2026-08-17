@@ -30,7 +30,7 @@ import {
   SparklesIcon,
   TriangleAlertIcon,
 } from "lucide-react";
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { isElectron } from "~/env";
 import { useNewThreadHandler } from "~/hooks/useHandleNewThread";
@@ -38,6 +38,7 @@ import { resolveNewDraftStartFromOrigin } from "~/lib/chatThreadActions";
 import { useOpenPrLink } from "~/lib/openPullRequestLink";
 import { cn, newMessageId, newThreadId } from "~/lib/utils";
 import { useComposerDraftStore } from "~/composerDraftStore";
+import { useLastBoardStore } from "~/lastBoardStore";
 import { resolveDefaultProviderModelSelection } from "~/providerInstances";
 import { useProject, useProjects, useThreadShells } from "~/state/entities";
 import { issueEnvironment, useEnvironmentIssues, useProjectIssues } from "~/state/issues";
@@ -123,6 +124,14 @@ export function IssuesBoardPage({
     () => scopeProjectRef(environmentId, projectId),
     [environmentId, projectId],
   );
+  const setLastBoardRef = useLastBoardStore((store) => store.setLastBoardRef);
+  // Remember every board the user lands on (both the board and review tabs
+  // route here) so the sidebar's single-click "Issues" button and the
+  // command palette can return to it without asking the user to pick a
+  // project again.
+  useEffect(() => {
+    setLastBoardRef(projectRef);
+  }, [projectRef, setLastBoardRef]);
   const project = useProject(projectRef);
   const projects = useProjects();
   const issues = useProjectIssues(projectRef);

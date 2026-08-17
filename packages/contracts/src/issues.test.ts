@@ -5,6 +5,8 @@ import {
   encodeIssueDecompositionBlock,
   findIssueDependencyCycle,
   isIssueDependencySatisfied,
+  isIssueDueForArchive,
+  ISSUE_ARCHIVE_AFTER_MS,
   ISSUE_DECOMPOSITION_BLOCK_LANGUAGE,
   ISSUE_DECOMPOSITION_PROMPT_INSTRUCTIONS,
   ISSUE_REVIEW_PROMPT_INSTRUCTIONS,
@@ -79,11 +81,68 @@ describe("findIssueDependencyCycle", () => {
 });
 
 describe("issue dependency gating", () => {
-  it("treats only done as satisfied", () => {
+  it("treats finished work as satisfied", () => {
     expect(isIssueDependencySatisfied("done")).toBe(true);
+    // Filing finished work away must never re-block what was waiting on it.
+    expect(isIssueDependencySatisfied("archived")).toBe(true);
     for (const status of ["backlog", "in_progress", "in_review", "canceled"] as const) {
       expect(isIssueDependencySatisfied(status)).toBe(false);
     }
+  });
+});
+
+describe("isIssueDueForArchive", () => {
+  const finishedAt = "2026-01-01T00:00:00.000Z";
+  const finishedAtMs = Date.parse(finishedAt);
+
+  it("archives a done issue once the threshold has fully elapsed", () => {
+    expect(isIssueDueForArchive({ status: "done", updatedAt: finishedAt }, finishedAtMs + 1)).toBe(
+      false,
+    );
+    expect(
+      isIssueDueForArchive(
+        { status: "done", updatedAt: finishedAt },
+        finishedAtMs + ISSUE_ARCHIVE_AFTER_MS - 1,
+      ),
+    ).toBe(false);
+    expect(
+      isIssueDueForArchive(
+        { status: "done", updatedAt: finishedAt },
+        finishedAtMs + ISSUE_ARCHIVE_AFTER_MS,
+      ),
+    ).toBe(true);
+  });
+
+  it("still archives work the server slept through", () => {
+    expect(
+      isIssueDueForArchive(
+        { status: "done", updatedAt: finishedAt },
+        finishedAtMs + ISSUE_ARCHIVE_AFTER_MS * 30,
+      ),
+    ).toBe(true);
+  });
+
+  it("leaves every other status alone, however old", () => {
+    const longAfter = finishedAtMs + ISSUE_ARCHIVE_AFTER_MS * 10;
+    for (const status of ["backlog", "in_progress", "in_review", "canceled", "archived"] as const) {
+      expect(isIssueDueForArchive({ status, updatedAt: finishedAt }, longAfter)).toBe(false);
+    }
+  });
+
+  // Editing a done issue bumps updatedAt, and the day starts over from there.
+  it("restarts the clock when a done issue is touched", () => {
+    const twoDaysOn = finishedAtMs + ISSUE_ARCHIVE_AFTER_MS * 2;
+    const editedAt = "2026-01-02T23:00:00.000Z";
+    expect(isIssueDueForArchive({ status: "done", updatedAt: editedAt }, twoDaysOn)).toBe(false);
+  });
+
+  it("never archives on an unparseable timestamp", () => {
+    expect(
+      isIssueDueForArchive(
+        { status: "done", updatedAt: "not a date" },
+        finishedAtMs + ISSUE_ARCHIVE_AFTER_MS * 10,
+      ),
+    ).toBe(false);
   });
 });
 

@@ -128,6 +128,17 @@ describe("summarizeAutonomousProgress", () => {
     });
   });
 
+  // An issue the server filed away a day after finishing is still finished
+  // work, and still part of what the run was asked to get through.
+  it("keeps counting an archived issue as done", () => {
+    const progress = summarizeAutonomousProgress([
+      ...issues,
+      issue("filed-away", { status: "archived" }),
+    ]);
+    expect(progress.done).toBe(2);
+    expect(progress.total).toBe(7);
+  });
+
   it("does not count a flagged issue as active or startable", () => {
     const progress = summarizeAutonomousProgress([
       issue("parked", { needsAttentionAt: "2026-08-01T00:00:00.000Z" }),

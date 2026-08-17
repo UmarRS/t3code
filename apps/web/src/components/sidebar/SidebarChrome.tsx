@@ -6,6 +6,7 @@ import { APP_DISPLAY_NAME, APP_VERSION } from "../../branding";
 import { useProjects } from "../../state/entities";
 import { resolveAutonomousRunState } from "../issues/autonomousRun.logic";
 import { useEnvironmentIdentificationMode } from "../../hooks/useSettings";
+import { useIssuesBoardProjectRef } from "../../hooks/useIssuesBoardTarget";
 import { cn } from "../../lib/utils";
 import {
   resolveEnvironmentIdentificationPillLabel,
@@ -15,8 +16,6 @@ import {
   useEnvironmentStageLabel,
 } from "../SidebarStageBackdrop";
 import { Badge } from "../ui/badge";
-import { Menu, MenuPopup, MenuTrigger } from "../ui/menu";
-import { IssuesProjectMenuGroup } from "../issues/IssuesProjectMenuGroup";
 import {
   SidebarFooter,
   SidebarHeader,
@@ -160,19 +159,20 @@ export const SidebarChromeFooter = memo(function SidebarChromeFooter() {
   }, [canGoBack, closeMobileSidebar, navigate]);
 
   const projects = useProjects();
-  const openIssues = useCallback(
-    (
-      environmentId: (typeof projects)[number]["environmentId"],
-      projectId: (typeof projects)[number]["id"],
-    ) => {
-      closeMobileSidebar();
-      void navigate({
-        to: "/issues/$environmentId/$projectId",
-        params: { environmentId, projectId },
-      });
-    },
-    [closeMobileSidebar, navigate, projects],
-  );
+  const issuesBoardProjectRef = useIssuesBoardProjectRef();
+  const handleIssuesClick = useCallback(() => {
+    if (issuesBoardProjectRef === null) {
+      return;
+    }
+    closeMobileSidebar();
+    void navigate({
+      to: "/issues/$environmentId/$projectId",
+      params: {
+        environmentId: issuesBoardProjectRef.environmentId,
+        projectId: issuesBoardProjectRef.projectId,
+      },
+    });
+  }, [closeMobileSidebar, issuesBoardProjectRef, navigate]);
   // A static dot, never a pulse: this sits in the chrome for the whole run.
   const autonomousRunning = projects.some(
     (project) => resolveAutonomousRunState(project).kind === "running",
@@ -193,34 +193,28 @@ export const SidebarChromeFooter = memo(function SidebarChromeFooter() {
         ) : (
           <>
             <SidebarMenuItem className="shrink-0">
-              <Menu>
-                <MenuTrigger
+              <Tooltip>
+                <TooltipTrigger
                   render={
                     <SidebarMenuButton
                       aria-label="Issues"
-                      disabled={projects.length === 0}
+                      disabled={projects.length === 0 || issuesBoardProjectRef === null}
+                      onClick={handleIssuesClick}
                       size="icon"
-                    />
+                    >
+                      <ListChecksIcon />
+                      {autonomousRunning ? (
+                        <span
+                          aria-label="Autonomous mode is running"
+                          className="absolute top-1 right-1 size-1.5 shrink-0 rounded-full bg-info"
+                          title="Autonomous mode is running"
+                        />
+                      ) : null}
+                    </SidebarMenuButton>
                   }
-                >
-                  <ListChecksIcon />
-                  {autonomousRunning ? (
-                    <span
-                      aria-label="Autonomous mode is running"
-                      className="absolute top-1 right-1 size-1.5 shrink-0 rounded-full bg-info"
-                      title="Autonomous mode is running"
-                    />
-                  ) : null}
-                </MenuTrigger>
-                <MenuPopup align="end" side="right" className="w-72">
-                  <IssuesProjectMenuGroup
-                    label="Choose a project board"
-                    projects={projects}
-                    showBoardIcon
-                    onSelect={(project) => openIssues(project.environmentId, project.id)}
-                  />
-                </MenuPopup>
-              </Menu>
+                />
+                <TooltipPopup side="top">Issues board</TooltipPopup>
+              </Tooltip>
             </SidebarMenuItem>
             <SidebarMenuItem className="shrink-0">
               <Tooltip>

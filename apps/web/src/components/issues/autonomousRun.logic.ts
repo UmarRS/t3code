@@ -1,5 +1,6 @@
 import {
   activeAutonomousIssues,
+  isIssueDependencySatisfied,
   isProviderAvailable,
   issueNeedsAttention,
   startableAutonomousIssues,
@@ -73,6 +74,7 @@ export interface AutonomousProgress {
   readonly queued: number;
   readonly inProgress: number;
   readonly inReview: number;
+  /** Finished work, whether still on the Done column or archived off it. */
   readonly done: number;
   readonly needsAttention: number;
   /** Everything the run counts as work: canceled issues are out of scope. */
@@ -91,7 +93,10 @@ export function summarizeAutonomousProgress(
     queued: startableAutonomousIssues(issues).length,
     inProgress: active.filter((issue) => issue.status === "in_progress").length,
     inReview: active.filter((issue) => issue.status === "in_review").length,
-    done: issues.filter((issue) => issue.status === "done").length,
+    // Archived issues are done issues the server filed away after a day. A
+    // board reopened later must not read "0 done / 12" for a run that finished
+    // everything.
+    done: issues.filter((issue) => isIssueDependencySatisfied(issue.status)).length,
     needsAttention: issues.filter((issue) => issueNeedsAttention(issue)).length,
     total: issues.filter((issue) => issue.status !== "canceled").length,
   };
