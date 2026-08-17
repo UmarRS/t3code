@@ -1,9 +1,10 @@
 import { ProviderInteractionMode, RuntimeMode } from "@t3tools/contracts";
 import { memo, type ReactNode } from "react";
-import { EllipsisIcon } from "lucide-react";
+import { EllipsisIcon, SparklesIcon } from "lucide-react";
 import { Button } from "../ui/button";
 import {
   Menu,
+  MenuCheckboxItem,
   MenuPopup,
   MenuRadioGroup,
   MenuRadioItem,
@@ -16,8 +17,13 @@ export const CompactComposerControlsMenu = memo(function CompactComposerControls
   runtimeMode: RuntimeMode;
   showInteractionModeToggle: boolean;
   traitsMenuContent?: ReactNode;
+  /** Whether the composer's "Generate stories" toggle is on for this target. */
+  generateStories: boolean;
+  /** Null when the composer target has no resolvable project — disables the toggle. */
+  generateStoriesProjectTitle: string | null;
   onToggleInteractionMode: () => void;
   onRuntimeModeChange: (mode: RuntimeMode) => void;
+  onToggleGenerateStories: () => void;
 }) {
   return (
     <Menu>
@@ -40,6 +46,17 @@ export const CompactComposerControlsMenu = memo(function CompactComposerControls
             <MenuDivider />
           </>
         ) : null}
+        <MenuCheckboxItem
+          checked={props.generateStories}
+          disabled={props.generateStoriesProjectTitle === null}
+          onCheckedChange={() => props.onToggleGenerateStories()}
+        >
+          <span className="inline-flex items-center gap-2">
+            <SparklesIcon aria-hidden="true" className="size-4" />
+            Generate stories
+          </span>
+        </MenuCheckboxItem>
+        <MenuDivider />
         {props.showInteractionModeToggle ? (
           <>
             <div className="px-2 py-1.5 font-medium text-muted-foreground text-xs">Mode</div>

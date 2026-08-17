@@ -190,18 +190,20 @@ export const ISSUE_DECOMPOSITION_PROMPT_PLACEHOLDER =
   "Replace this line with the feature you want broken down.";
 
 /**
- * The seed prompt for the story-decomposition thread: a place for the user's
- * feature description, then the canonical block instructions from contracts.
+ * The framing and rules for a story-decomposition turn: which project the
+ * work belongs to, which worker models the agent may assign, and the
+ * canonical block-format instructions from contracts. Shared by the board's
+ * prefill (which precedes this with a placeholder line for the user to
+ * replace) and the composer's "Generate stories" toggle (which appends it
+ * straight after the user's own message, so there is no line to replace).
  */
-export function buildIssueDecompositionPrompt(input: {
+export function buildIssueDecompositionInstructions(input: {
   readonly projectTitle: string;
   readonly availableModels?: ReadonlyArray<{ readonly instanceId: string; readonly model: string }>;
 }): string {
   const availableModels = input.availableModels ?? [];
   return [
     `Break this work for ${input.projectTitle} into stories. Ask me every clarifying question you have before emitting the block — once the stories exist they are worked without my input.`,
-    "",
-    ISSUE_DECOMPOSITION_PROMPT_PLACEHOLDER,
     "",
     ...(availableModels.length > 0
       ? [
@@ -212,8 +214,38 @@ export function buildIssueDecompositionPrompt(input: {
         ]
       : []),
     ISSUE_DECOMPOSITION_PROMPT_INSTRUCTIONS.trim(),
+  ].join("\n");
+}
+
+/**
+ * The seed prompt for the story-decomposition thread: a place for the user's
+ * feature description, then the canonical instructions.
+ */
+export function buildIssueDecompositionPrompt(input: {
+  readonly projectTitle: string;
+  readonly availableModels?: ReadonlyArray<{ readonly instanceId: string; readonly model: string }>;
+}): string {
+  return [
+    ISSUE_DECOMPOSITION_PROMPT_PLACEHOLDER,
+    "",
+    buildIssueDecompositionInstructions(input),
     "",
   ].join("\n");
+}
+
+/**
+ * What the composer's "Generate stories" toggle appends after the user's own
+ * message on send: the same canonical instructions the board prefills, minus
+ * the placeholder — the user's text already says what they want broken down.
+ */
+export function appendIssueDecompositionInstructions(input: {
+  readonly promptText: string;
+  readonly projectTitle: string;
+  readonly availableModels?: ReadonlyArray<{ readonly instanceId: string; readonly model: string }>;
+}): string {
+  const instructions = buildIssueDecompositionInstructions(input);
+  const text = input.promptText.trim();
+  return text.length > 0 ? `${text}\n\n${instructions}` : instructions;
 }
 
 /**
