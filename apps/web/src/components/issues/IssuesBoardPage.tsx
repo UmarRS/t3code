@@ -63,6 +63,7 @@ import { Badge } from "../ui/badge";
 import { Button } from "../ui/button";
 import {
   Menu,
+  MenuCheckboxItem,
   MenuItem,
   MenuPopup,
   MenuRadioGroup,
@@ -85,6 +86,7 @@ import {
 import { IssueDialog, type IssueDialogTarget } from "./IssueDialog";
 import { IssuesReviewTab } from "./IssuesReviewTab";
 import { IssuesProjectMenuGroup } from "./IssuesProjectMenuGroup";
+import { useDecompositionRoutingTargets } from "./useDecompositionRoutingTargets";
 import { useIssueAttentionActions } from "./useIssueAttentionActions";
 import {
   buildIssueBoardColumns,
@@ -100,8 +102,21 @@ import {
   resolveIssueBlockers,
   resolveIssueDelegationLinks,
   resolveIssueStartDisabledReason,
+  type IssueColumnAccent,
   type IssueDelegationLinks,
 } from "./IssuesBoard.logic";
+
+/**
+ * The column rule's colour per pipeline state. Written out rather than composed
+ * so Tailwind sees whole class names, and drawn from the semantic tokens so it
+ * follows the active theme instead of pinning a palette.
+ */
+const ISSUE_COLUMN_ACCENT_CLASS: Record<IssueColumnAccent, string> = {
+  waiting: "bg-border",
+  active: "bg-info",
+  review: "bg-update",
+  finished: "bg-success/60",
+};
 
 const PRIORITY_DOT_CLASS: Record<NonNullable<OrchestrationIssue["priority"]>, string> = {
   urgent: "bg-destructive",
@@ -151,6 +166,16 @@ export function IssuesBoardPage({
   const [issueToDelete, setIssueToDelete] = useState<OrchestrationIssue | null>(null);
   const [startingIssueId, setStartingIssueId] = useState<string | null>(null);
   const [stoppingIssueId, setStoppingIssueId] = useState<string | null>(null);
+  const routingTargets = useDecompositionRoutingTargets({ environmentId, projectId });
+  /**
+   * Linked projects the next decomposition may file stories on. Opt-in per
+   * generation rather than remembered: which repositories a feature touches is
+   * a property of that feature, and silently carrying the last answer forward
+   * would put stories on boards the user never considered for this one.
+   */
+  const [scopedProjectIds, setScopedProjectIds] = useState<ReadonlySet<ProjectId>>(
+    () => new Set<ProjectId>(),
+  );
   const attention = useIssueAttentionActions(environmentId);
   const runState = useMemo(() => resolveAutonomousRunState(project), [project]);
   const runActive = runState.kind === "running";
@@ -368,9 +393,10 @@ export function IssuesBoardPage({
               }))
             : [],
         ),
+        linkedProjects: routingTargets.filter((target) => scopedProjectIds.has(target.id)),
       }),
     );
-  }, [handleNewThread, project, projectRef, providers]);
+  }, [handleNewThread, project, projectRef, providers, routingTargets, scopedProjectIds]);
 
   const openThreadById = useCallback(
     async (threadId: ThreadId) => {
@@ -567,15 +593,55 @@ export function IssuesBoardPage({
                 onOpenReview={() => void openTab("review")}
               />
             )}
-            <Button
-              size="sm"
-              variant="outline"
-              disabled={project === null}
-              onClick={() => void handleGenerateStories()}
-            >
-              <SparklesIcon className="size-4" />
-              Generate stories
-            </Button>
+            {routingTargets.length === 0 ? (
+              <Button
+                size="sm"
+                variant="outline"
+                disabled={project === null}
+                onClick={() => void handleGenerateStories()}
+              >
+                <SparklesIcon className="size-4" />
+                Generate stories
+              </Button>
+            ) : (
+              <Menu>
+                <MenuTrigger
+                  render={<Button size="sm" variant="outline" disabled={project === null} />}
+                >
+                  <SparklesIcon className="size-4" />
+                  Generate stories
+                  <ChevronDownIcon className="size-3.5 opacity-60" />
+                </MenuTrigger>
+                <MenuPopup align="end">
+                  <div className="px-2 py-1.5 font-medium text-muted-foreground text-xs">
+                    Also plan for
+                  </div>
+                  {routingTargets.map((target) => (
+                    <MenuCheckboxItem
+                      checked={scopedProjectIds.has(target.id)}
+                      key={target.id}
+                      onCheckedChange={(checked) =>
+                        setScopedProjectIds((previous) => {
+                          const next = new Set(previous);
+                          if (checked) next.add(target.id);
+                          else next.delete(target.id);
+                          return next;
+                        })
+                      }
+                    >
+                      {target.title}
+                    </MenuCheckboxItem>
+                  ))}
+                  <MenuSeparator />
+                  <MenuItem onClick={() => void handleGenerateStories()}>
+                    <SparklesIcon className="size-4" />
+                    {scopedProjectIds.size === 0
+                      ? `Generate stories for ${title}`
+                      : `Generate stories across ${scopedProjectIds.size + 1} projects`}
+                  </MenuItem>
+                </MenuPopup>
+              </Menu>
+            )}
             <Button
               size="sm"
               disabled={project === null}
@@ -602,14 +668,39 @@ export function IssuesBoardPage({
                   key={column.status}
                   aria-label={column.label}
                   className={cn(
-                    "flex w-72 shrink-0 flex-col gap-2 rounded-xl border border-border/55 bg-card/20 p-2",
+                    "flex w-72 shrink-0 flex-col gap-2 overflow-hidden rounded-xl border border-border/55 bg-card/20 p-2",
                     column.muted && "opacity-72",
                   )}
                 >
-                  <header className="flex items-center justify-between px-1 py-0.5">
+                  {/* A rule rather than a tinted column: the accent has to read
+                      at a glance without washing the cards it sits above. */}
+                  <div
+                    aria-hidden="true"
+                    className={cn("-mx-2 -mt-2 h-0.5", ISSUE_COLUMN_ACCENT_CLASS[column.accent])}
+                  />
+                  <header className="flex items-center justify-between gap-2 px-1 py-0.5">
                     <span className="text-xs font-medium text-foreground">{column.label}</span>
-                    <span className="text-muted-foreground text-xs tabular-nums">
-                      {column.issues.length}
+                    <span className="flex items-center gap-1.5">
+                      {column.attentionCount > 0 ? (
+                        <Tooltip>
+                          <TooltipTrigger
+                            render={
+                              <span className="flex items-center gap-1 rounded-full bg-warning-surface px-1.5 py-0.5 font-medium text-[0.6875rem] text-warning tabular-nums">
+                                <TriangleAlertIcon aria-hidden="true" className="size-3" />
+                                {column.attentionCount}
+                              </span>
+                            }
+                          />
+                          <TooltipPopup>
+                            {column.attentionCount === 1
+                              ? "1 issue needs you"
+                              : `${column.attentionCount} issues need you`}
+                          </TooltipPopup>
+                        </Tooltip>
+                      ) : null}
+                      <span className="text-muted-foreground text-xs tabular-nums">
+                        {column.issues.length}
+                      </span>
                     </span>
                   </header>
                   {column.issues.length === 0 ? (

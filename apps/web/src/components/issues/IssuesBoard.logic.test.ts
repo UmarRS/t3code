@@ -38,6 +38,7 @@ function issue(
     priority?: IssuePriority | null;
     dependsOn?: ReadonlyArray<string>;
     createdAt?: string;
+    needsAttentionAt?: string | null;
   } = {},
 ): BoardIssue {
   return {
@@ -47,6 +48,7 @@ function issue(
     priority: overrides.priority ?? null,
     dependsOn: (overrides.dependsOn ?? []).map((id) => IssueId.make(id)),
     createdAt: overrides.createdAt ?? "2026-01-01T00:00:00.000Z",
+    needsAttentionAt: overrides.needsAttentionAt ?? null,
   };
 }
 
@@ -60,6 +62,46 @@ describe("buildIssueBoardColumns", () => {
       "canceled",
       "archived",
     ]);
+  });
+
+  it("accents each column by what the pipeline state means", () => {
+    expect(
+      Object.fromEntries(
+        buildIssueBoardColumns([]).map((column) => [column.status, column.accent]),
+      ),
+    ).toEqual({
+      backlog: "waiting",
+      in_progress: "active",
+      in_review: "review",
+      done: "finished",
+      canceled: "finished",
+      archived: "finished",
+    });
+  });
+
+  it("counts the flagged issues in each column", () => {
+    const columns = buildIssueBoardColumns([
+      issue("a", { status: "in_review", needsAttentionAt: "2026-01-02T00:00:00.000Z" }),
+      issue("b", { status: "in_review" }),
+      issue("c", { status: "backlog", needsAttentionAt: "2026-01-02T00:00:00.000Z" }),
+    ]);
+    expect(
+      Object.fromEntries(columns.map((column) => [column.status, column.attentionCount])),
+    ).toEqual({
+      backlog: 1,
+      in_progress: 0,
+      in_review: 1,
+      done: 0,
+      canceled: 0,
+      archived: 0,
+    });
+  });
+
+  it("treats an issue with no attention field as unflagged", () => {
+    const columns = buildIssueBoardColumns([
+      { ...issue("a"), needsAttentionAt: undefined } as BoardIssue,
+    ]);
+    expect(columns[0]?.attentionCount).toBe(0);
   });
 
   it("mutes only the finished columns", () => {
@@ -283,6 +325,26 @@ describe("buildIssueDecompositionInstructions", () => {
   it("omits the worker-model section when none are configured", () => {
     const instructions = buildIssueDecompositionInstructions({ projectTitle: "Atlas" });
     expect(instructions).not.toContain("Configured worker models");
+  });
+
+  it("lists the linked projects stories may be routed to", () => {
+    const instructions = buildIssueDecompositionInstructions({
+      projectTitle: "Atlas",
+      linkedProjects: [
+        {
+          title: "web-client",
+          workspaceRoot: "/repos/web-client",
+          description: "the browser front end",
+        },
+      ],
+    });
+    expect(instructions).toContain("/repos/web-client — web-client: the browser front end");
+    expect(instructions).toContain("Anything belonging to Atlas takes no `project` at all.");
+  });
+
+  it("omits the linked-project section when nothing is in scope", () => {
+    const instructions = buildIssueDecompositionInstructions({ projectTitle: "Atlas" });
+    expect(instructions).not.toContain("This work may also touch these linked projects");
   });
 });
 

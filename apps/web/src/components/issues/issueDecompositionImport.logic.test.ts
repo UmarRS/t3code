@@ -23,8 +23,21 @@ describe("parseIssueDecompositionForImport", () => {
     "```t3-issues\nnot json\n```",
     '```t3-issues\n[{"key":"a","title":"A","description":"A","dependsOn":["missing"]}]\n```',
     '```t3-issues\n[{"key":"a","title":"A","description":"A","dependsOn":["b"]},{"key":"b","title":"B","description":"B","dependsOn":["a"]}]\n```',
+    // A dependency across boards cannot be created, so the whole block is unusable.
+    '```t3-issues\n[{"key":"a","title":"A","description":"A"},{"key":"b","title":"B","description":"B","project":"/repos/other","dependsOn":["a"]}]\n```',
   ])("does not offer an import for unusable output", (markdown) => {
     expect(parseIssueDecompositionForImport(markdown)).toBeNull();
+  });
+
+  it("keeps a story routed to another project", () => {
+    const result = parseIssueDecompositionForImport(`\`\`\`t3-issues
+[
+  { "key": "api", "title": "Build API", "description": "Add the endpoint." },
+  { "key": "ui", "title": "Build UI", "description": "Add the screen.", "project": "/repos/web-client" }
+]
+\`\`\``);
+
+    expect(result?.map((entry) => entry.project)).toEqual([undefined, "/repos/web-client"]);
   });
 });
 
