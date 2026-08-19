@@ -249,6 +249,27 @@ export function appendIssueDecompositionInstructions(input: {
 }
 
 /**
+ * Makes story generation visible and editable before send. An empty composer
+ * gets the same placeholder template as the issues board; existing text is
+ * treated as the feature description and kept above the instructions.
+ */
+export function prepareIssueDecompositionPrompt(input: {
+  readonly promptText: string;
+  readonly projectTitle: string;
+  readonly availableModels?: ReadonlyArray<{ readonly instanceId: string; readonly model: string }>;
+}): string {
+  const instructions = buildIssueDecompositionInstructions(input);
+  const text = input.promptText.trim();
+  if (text.length === 0) {
+    return buildIssueDecompositionPrompt(input);
+  }
+  if (text.includes(instructions)) {
+    return input.promptText;
+  }
+  return appendIssueDecompositionInstructions({ ...input, promptText: text });
+}
+
+/**
  * Cross-project links for one issue.
  *
  * Delegation crosses boards in one direction — a worker in one project hands a

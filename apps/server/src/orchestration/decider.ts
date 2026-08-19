@@ -1993,7 +1993,23 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         },
       };
       if (command.verdict === "merged") {
-        return reviewEvent;
+        if (issue.needsAttentionAt === null) return reviewEvent;
+        return [
+          reviewEvent,
+          {
+            ...(yield* withEventBase({
+              aggregateKind: "issue",
+              aggregateId: command.issueId,
+              occurredAt,
+              commandId: command.commandId,
+            })),
+            type: "issue.attention-cleared" as const,
+            payload: {
+              issueId: command.issueId,
+              updatedAt: occurredAt,
+            },
+          },
+        ];
       }
       return [
         reviewEvent,

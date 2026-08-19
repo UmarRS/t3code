@@ -1,6 +1,7 @@
 import {
   type EnvironmentId,
   type MessageId,
+  type ProjectId,
   type ScopedThreadRef,
   type ServerProviderSkill,
   type TurnId,
@@ -106,6 +107,8 @@ import { cn } from "~/lib/utils";
 import { useUiStateStore } from "~/uiStateStore";
 import { type TimestampFormat } from "@t3tools/contracts/settings";
 import { formatChatTimestampTooltip, formatDayAwareTimestamp } from "../../timestampFormat";
+import { IssueDecompositionImportCard } from "../issues/IssueDecompositionImportCard";
+import { parseIssueDecompositionForImport } from "../issues/issueDecompositionImport.logic";
 
 import {
   buildInlineTerminalContextText,
@@ -137,6 +140,7 @@ interface TimelineRowSharedState {
   workspaceRoot: string | undefined;
   skills: ReadonlyArray<Pick<ServerProviderSkill, "name" | "displayName">>;
   activeThreadEnvironmentId: EnvironmentId;
+  activeThreadProjectId: ProjectId;
   onRevertUserMessage: (messageId: MessageId) => void;
   onImageExpand: (preview: ExpandedImagePreview) => void;
   onOpenTurnDiff: (turnId: TurnId, filePath?: string) => void;
@@ -220,6 +224,7 @@ interface MessagesTimelineProps {
   isRevertingCheckpoint: boolean;
   onImageExpand: (preview: ExpandedImagePreview) => void;
   activeThreadEnvironmentId: EnvironmentId;
+  activeThreadProjectId: ProjectId;
   markdownCwd: string | undefined;
   resolvedTheme: "light" | "dark";
   timestampFormat: TimestampFormat;
@@ -266,6 +271,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   isRevertingCheckpoint,
   onImageExpand,
   activeThreadEnvironmentId,
+  activeThreadProjectId,
   markdownCwd,
   resolvedTheme,
   timestampFormat,
@@ -510,6 +516,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       workspaceRoot,
       skills,
       activeThreadEnvironmentId,
+      activeThreadProjectId,
       onRevertUserMessage,
       onImageExpand,
       onOpenTurnDiff,
@@ -526,6 +533,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       workspaceRoot,
       skills,
       activeThreadEnvironmentId,
+      activeThreadProjectId,
       onRevertUserMessage,
       onImageExpand,
       onOpenTurnDiff,
@@ -1104,6 +1112,10 @@ function TurnFoldTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "turn-
 function AssistantTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "message" }> }) {
   const ctx = use(TimelineRowCtx);
   const messageText = row.message.text || (row.message.streaming ? "" : "(empty response)");
+  const issueDecomposition =
+    row.showAssistantMeta && !row.message.streaming
+      ? parseIssueDecompositionForImport(messageText)
+      : null;
 
   return (
     <>
@@ -1115,6 +1127,14 @@ function AssistantTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "mess
           isStreaming={Boolean(row.message.streaming)}
           skills={ctx.skills}
         />
+        {issueDecomposition ? (
+          <IssueDecompositionImportCard
+            entries={issueDecomposition}
+            environmentId={ctx.activeThreadEnvironmentId}
+            projectId={ctx.activeThreadProjectId}
+            messageId={row.message.id}
+          />
+        ) : null}
         <AssistantChangedFilesSection
           turnSummary={row.assistantTurnDiffSummary}
           routeThreadKey={ctx.routeThreadKey}

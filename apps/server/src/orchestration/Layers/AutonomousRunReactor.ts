@@ -222,12 +222,11 @@ const make = Effect.gen(function* () {
     const reviewerThreadId = issue.reviewerThreadId;
     if (
       issue.status !== "in_review" ||
-      issue.reviewVerdict !== null ||
+      issue.reviewVerdict === "merged" ||
       reviewerThreadId === null ||
       reviewerThreadId === undefined ||
       issue.threadId === null ||
-      issue.pullRequestUrl === null ||
-      issue.needsAttentionAt !== null
+      issue.pullRequestUrl === null
     ) {
       return false;
     }
@@ -287,6 +286,22 @@ const make = Effect.gen(function* () {
     }
 
     if (runIsLive) {
+      // A worker can finish while the run is paused. Its session event is
+      // deliberately ignored then, so resuming must derive the missed handoff
+      // from durable thread state just like startup derives the backlog.
+      for (const issue of issues) {
+        if (
+          issue.status !== "in_progress" ||
+          issue.threadId === null ||
+          issue.needsAttentionAt !== null ||
+          issue.pullRequestUrl !== null
+        ) {
+          continue;
+        }
+        yield* retryFinishedWorker(issue);
+      }
+      issues = yield* projectionSnapshotQuery.listIssuesByProjectId(projectId);
+
       const startable = startableAutonomousIssues(issues);
       const active = activeAutonomousIssues(issues);
 
@@ -403,6 +418,45 @@ const make = Effect.gen(function* () {
         issue.id,
         "The worker thread has no worktree, so no pull request could be opened.",
       );
+      return;
+    }
+
+    // The worker may have pushed or even merged this branch itself. Recover
+    // that provider state before looking at the local commit range: a stale
+    // local base is precisely what makes an already-merged branch look new.
+    // Full invalidation also bumps the provider PR-lookup epoch; invalidating
+    // only ahead/behind status would leave the slower branch-PR cache intact.
+    yield* gitWorkflow.invalidateStatus(cwd);
+    const existingPullRequest = yield* gitWorkflow.remoteStatus({ cwd }).pipe(
+      Effect.map((status) => status?.pr ?? null),
+      Effect.orElseSucceed(() => null),
+    );
+    if (existingPullRequest !== null) {
+      yield* orchestrationEngine
+        .dispatch({
+          type: "issue.pull-request.link",
+          commandId: yield* serverCommandId(`existing-pr-link:${issue.id}`),
+          threadId,
+          pullRequestUrl: existingPullRequest.url,
+        })
+        .pipe(Effect.ignoreCause({ log: true }));
+      yield* receipts.publish({
+        type: "autonomous.pull-request.opened",
+        issueId: issue.id,
+        threadId,
+        pullRequestUrl: existingPullRequest.url,
+        createdAt: yield* nowIso,
+      });
+      if (existingPullRequest.state === "merged") {
+        yield* orchestrationEngine
+          .dispatch({
+            type: "issue.status.set",
+            commandId: yield* serverCommandId(`existing-pr-merged:${issue.id}`),
+            issueId: issue.id,
+            status: "done",
+          })
+          .pipe(Effect.ignoreCause({ log: true }));
+      }
       return;
     }
 
@@ -527,7 +581,7 @@ const make = Effect.gen(function* () {
    *
    * This intentionally works while the autonomous run is off: runs with only
    * flagged work finish themselves, but "Retry pull request" must still do
-   * what it says. If the run is resumed, the linked PR proceeds to review.
+   * what it says. A successful explicit retry proceeds directly to review.
    */
   const retryPullRequestAfterAttentionClear = Effect.fn("retryPullRequestAfterAttentionClear")(
     function* (issueId: IssueId) {
@@ -555,8 +609,39 @@ const make = Effect.gen(function* () {
       yield* openPullRequestForIssue(issue, issue.threadId).pipe(
         Effect.ensuring(Effect.sync(() => pullRequestsInFlight.delete(issue.id))),
       );
+
+      const refreshed = yield* projectionSnapshotQuery.getIssueSummaryById(issue.id);
+      if (
+        Option.isSome(refreshed) &&
+        refreshed.value.status === "in_review" &&
+        refreshed.value.needsAttentionAt === null &&
+        refreshed.value.reviewVerdict === null &&
+        !queuedForMerge.has(issue.id)
+      ) {
+        queuedForMerge.add(issue.id);
+        yield* mergeQueue.enqueue({ issueId: issue.id });
+      }
     },
   );
+
+  /** Resume the PR handoff for a worker whose terminal event happened while paused. */
+  const retryFinishedWorker = Effect.fn("retryFinishedWorker")(function* (
+    issue: OrchestrationIssue,
+  ) {
+    if (issue.threadId === null) return;
+    const threadOption = yield* projectionSnapshotQuery.getThreadShellById(issue.threadId);
+    if (Option.isNone(threadOption)) return;
+    const thread = threadOption.value;
+    const workerFinished =
+      thread.latestTurn?.state === "completed" ||
+      (thread.latestTurn === null && thread.session?.status === "idle");
+    if (!workerFinished || thread.hasPendingUserInput || thread.hasPendingApprovals) return;
+    if (pullRequestsInFlight.has(issue.id)) return;
+    pullRequestsInFlight.add(issue.id);
+    yield* openPullRequestForIssue(issue, issue.threadId).pipe(
+      Effect.ensuring(Effect.sync(() => pullRequestsInFlight.delete(issue.id))),
+    );
+  });
 
   // --------------------------------------------------------------- reviewing
 
@@ -568,7 +653,9 @@ const make = Effect.gen(function* () {
     // user canceled the issue, flagged it, or stopped the run.
     if (issue.status !== "in_review" || issue.needsAttentionAt != null) return;
     if (issue.reviewVerdict != null) return;
-    if (!(yield* issueIsAutonomouslyWorked(issue))) return;
+    // An explicit PR retry owns the review handoff even if the project run was
+    // paused after the original failure.
+    if (!(yield* issueIsAutonomouslyWorked(issue)) && issue.pullRequestUrl === null) return;
 
     const workerThread =
       issue.threadId === null

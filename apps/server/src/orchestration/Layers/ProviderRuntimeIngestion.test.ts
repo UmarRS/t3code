@@ -15,6 +15,7 @@ import {
   CommandId,
   DEFAULT_PROVIDER_INTERACTION_MODE,
   EventId,
+  IssueId,
   MessageId,
   type OrchestrationCommand,
   ProjectId,
@@ -1072,6 +1073,92 @@ describe("ProviderRuntimeIngestion", () => {
     );
     expect(message?.text).toBe("assistant-only final text");
     expect(message?.streaming).toBe(false);
+  });
+
+  it("replaces an interim missing review verdict with a later structured merged verdict", async () => {
+    const harness = await createHarness();
+    const issueId = IssueId.make("issue-review-ingestion");
+    const reviewerThreadId = asThreadId("thread-1");
+    const now = "2026-01-01T00:00:00.000Z";
+
+    await harness.dispatch({
+      type: "issue.create",
+      commandId: CommandId.make("cmd-review-ingestion-issue"),
+      issueId,
+      projectId: asProjectId("project-1"),
+      title: "Review ingestion regression",
+      createdAt: now,
+    });
+    await harness.dispatch({
+      type: "issue.review.start",
+      commandId: CommandId.make("cmd-review-ingestion-start"),
+      issueId,
+      reviewerThreadId,
+    });
+
+    harness.emit({
+      type: "item.completed",
+      eventId: asEventId("evt-review-interim-message"),
+      provider: ProviderDriverKind.make("codex"),
+      createdAt: now,
+      threadId: reviewerThreadId,
+      turnId: asTurnId("turn-review-interim"),
+      itemId: asItemId("item-review-interim"),
+      payload: {
+        itemType: "assistant_message",
+        status: "completed",
+        detail: "I am still checking the pull request.",
+      },
+    });
+    harness.emit({
+      type: "turn.completed",
+      eventId: asEventId("evt-review-interim-completed"),
+      provider: ProviderDriverKind.make("codex"),
+      createdAt: now,
+      threadId: reviewerThreadId,
+      turnId: asTurnId("turn-review-interim"),
+      payload: { state: "completed" },
+    });
+
+    await harness.drain();
+    const provisional = (await harness.readModel()).issues.find((issue) => issue.id === issueId);
+    expect(provisional?.reviewVerdict).toBe("needs_attention");
+    expect(provisional?.needsAttentionAt).not.toBeNull();
+    expect(provisional?.needsAttentionReason).not.toContain("refused");
+
+    harness.emit({
+      type: "item.completed",
+      eventId: asEventId("evt-review-final-message"),
+      provider: ProviderDriverKind.make("codex"),
+      createdAt: "2026-01-01T00:01:00.000Z",
+      threadId: reviewerThreadId,
+      turnId: asTurnId("turn-review-final"),
+      itemId: asItemId("item-review-final"),
+      payload: {
+        itemType: "assistant_message",
+        status: "completed",
+        detail:
+          '```t3-review\n{"verdict":"merged","notes":"Checks passed and the pull request was merged."}\n```',
+      },
+    });
+    harness.emit({
+      type: "turn.completed",
+      eventId: asEventId("evt-review-final-completed"),
+      provider: ProviderDriverKind.make("codex"),
+      createdAt: "2026-01-01T00:01:00.000Z",
+      threadId: reviewerThreadId,
+      turnId: asTurnId("turn-review-final"),
+      payload: { state: "completed" },
+    });
+
+    await harness.drain();
+    const completed = (await harness.readModel()).issues.find((issue) => issue.id === issueId);
+    expect(completed).toMatchObject({
+      reviewVerdict: "merged",
+      status: "done",
+      needsAttentionAt: null,
+      needsAttentionReason: null,
+    });
   });
 
   it("preserves completed tool metadata on projected tool activities", async () => {

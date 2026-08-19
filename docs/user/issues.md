@@ -5,11 +5,11 @@ description, a priority, and the other issues it waits on. Starting an issue ope
 own worktree with the first turn already written from the issue text, so planning and doing stay
 one step apart instead of one copy-paste apart.
 
-Open the board from **Issues** in the sidebar, then choose the project whose board you want. The
-project name in the board title is also a project switcher. You can also open the current project's
-board from the command palette with **Open issues for [project]**. The board shows one project at a
-time, in five columns: Backlog, In Progress, In Review, Done, and Canceled. Done and Canceled are
-dimmed — finished work is history, not a queue.
+Open **Issues** in the sidebar for an overview of every project board. Each project card summarizes
+its columns and lets you start or stop autonomous mode independently. Open a card for the full
+board; the project name there is also a project switcher. The command palette can open either the
+overview or the current project's board. A full board has five columns: Backlog, In Progress, In
+Review, Done, and Canceled. Done and Canceled are dimmed — finished work is history, not a queue.
 
 ## Create an issue
 
@@ -70,12 +70,16 @@ a time.
 Select **Generate stories** to open a new thread with a planning prompt already in the composer.
 Replace the placeholder line with the feature you want broken down, then send it.
 
+The same action is available in any project chat composer. It inserts the editable planning prompt
+into that chat; if you already typed a feature description, Atlas keeps it and adds the story
+instructions underneath.
+
 The agent thinks through the work and ends its answer with a list of stories, each with a title, a
-description, a priority, a worker model, and the stories it depends on. Those stories are created as
-issues in the project automatically and appear on the board as soon as the turn finishes. Atlas
-settles the planning thread after the issues land, so it leaves the active inbox without manual
-cleanup. Nothing is created if the agent's answer is malformed; the thread's timeline says so when
-that happens.
+description, a priority, a worker model, and the stories it depends on. A valid plan has an **Add to
+board** button beneath it. Ask for changes in the same chat until the plan is right, then select that
+button to create the issues. The action is safe to retry and will not duplicate stories from the
+same response. Nothing is created until you select it, and malformed output does not offer the
+button.
 
 Review what arrives before starting anything. The agent proposes the plan; you own it.
 
@@ -91,8 +95,10 @@ archive.
 
 ## Autonomous mode
 
-Autonomous mode works the whole backlog for you. Select **Autonomous mode** in the dashboard header,
-confirm, and Atlas takes over the project's issues until there is nothing left it can advance.
+Autonomous mode works the whole backlog for you. Select **Autonomous mode** on a project card in the
+all-projects overview or in that board's header, confirm, and Atlas takes over only that project's
+issues until there is nothing left it can advance. Other projects can run independently at the
+same time.
 
 While a run is on, the header shows what it is doing — how much is in progress, in review, done, and
 waiting for you — and the Issues entry in the sidebar carries a dot. Cards the run is driving are
@@ -104,6 +110,9 @@ marked **Auto**, so it is always clear what you are looking at.
   tells each agent which siblings are working alongside it so they stay out of each other's way.
 - **It opens the pull request** when a worker finishes, and moves that issue to In Review. You do
   not have to open pull requests for autonomous work.
+- **It recovers work that already shipped.** Before opening a pull request, Atlas refreshes the
+  remote base and looks for an existing pull request from the issue branch. A merged one becomes
+  the delivery record and completes the issue instead of producing an empty-PR error.
 - **It reviews and merges one issue at a time.** A reviewer reads the change, fixes what it finds,
   rebases onto the latest main, and merges. Because merges are serial, each review sees the work
   that landed before it.
@@ -117,10 +126,11 @@ of merged, and the confirmation says so before you start.
 
 ### Issues that need you
 
-When a worker fails, a pull request cannot be opened, or a reviewer refuses to merge, the issue is
-flagged and set aside. Flagged issues keep whatever status they had reached — they are not moved
-backwards, so you can see how far the work got — and they carry a **Needs you** badge on the board
-with the reason.
+When a worker fails, a pull request cannot be opened, or a review finishes without a confirmed
+merge, the issue is flagged and set aside. Flagged issues keep whatever status they had reached —
+they are not moved backwards, so you can see how far the work got — and they carry a **Needs you**
+badge on the board with the reason. If a later reviewer turn reports a valid merged verdict, Atlas
+replaces that provisional flag and completes the issue.
 
 The **Review** tab collects them, newest first, alongside everything the run merged. Each entry links
 to its pull request, its worker thread, and its reviewer thread, and expands to show the reviewer's
@@ -130,8 +140,9 @@ Two ways out, from the card menu or the Review tab:
 
 - **Clear flag** removes the flag and leaves everything else alone. Use it when you have taken over
   the thread yourself.
-- **Retry pull request** appears when the worker already finished and pushed its branch. It retries
-  only the pull request step and keeps the completed worker thread and commit.
+- **Retry pull request** appears when the worker already finished and pushed its branch. It keeps
+  the completed worker thread and commit, retries the pull request step, and starts review as soon
+  as the pull request is linked — even if autonomous mode is paused.
 - **Clear & retry** also unlinks the thread and returns the issue to the backlog, so it is fresh
   work again. A live run picks it up on its next pass; if the run already finished, start it again.
 

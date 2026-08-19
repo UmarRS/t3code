@@ -140,6 +140,16 @@ describe("VcsProcess.run", () => {
     }).pipe(provideLive),
   );
 
+  it("turns known GitHub failures into actionable details without retaining stderr", () => {
+    const detail = VcsProcess.actionableCommandFailureDetail(
+      "gh",
+      "GraphQL: No commits between main and issue/test",
+    );
+
+    expect(detail).toBe("GitHub found no commits between the base and head branches.");
+    expect(detail).not.toContain("issue/test");
+  });
+
   it.effect("retains spawn causes without exposing process arguments in the error message", () =>
     Effect.gen(function* () {
       const secretArgument = "--token=super-secret-token";

@@ -230,20 +230,25 @@ describe("GitWorkflowService", () => {
     );
   });
 
-  it.effect("counts commits against the base branch when the working tree is clean", () => {
+  it.effect("counts commits against a freshly fetched origin base when the tree is clean", () => {
     const calls: Array<ReadonlyArray<string>> = [];
+    const fetched: string[] = [];
     return Effect.gen(function* () {
       const workflow = yield* GitWorkflowService.GitWorkflowService;
       const shippable = yield* workflow.hasShippableWork({ cwd: "/repo", baseBranch: "main" });
 
       assert.equal(shippable, true);
-      // Against the base branch, not the upstream: the branch may never have
-      // been pushed.
-      assert.deepStrictEqual(calls, [["rev-list", "--count", "main..HEAD"]]);
+      assert.deepStrictEqual(fetched, ["origin"]);
+      assert.deepStrictEqual(calls, [["rev-list", "--count", "remote-main-sha..HEAD"]]);
     }).pipe(
       Effect.provide(
         makeGitLayer({
           statusDetailsLocal: () => Effect.succeed({ hasWorkingTreeChanges: false }),
+          remoteExists: () => Effect.succeed(true),
+          fetchRemote: (input: { readonly remoteName: string }) =>
+            Effect.sync(() => fetched.push(input.remoteName)),
+          resolveRemoteTrackingCommit: () =>
+            Effect.succeed({ commitSha: "remote-main-sha", remoteRefName: "origin/main" }),
           execute: (input: { readonly args: ReadonlyArray<string> }) =>
             Effect.sync(() => {
               calls.push(input.args);
@@ -264,6 +269,7 @@ describe("GitWorkflowService", () => {
       Effect.provide(
         makeGitLayer({
           statusDetailsLocal: () => Effect.succeed({ hasWorkingTreeChanges: false }),
+          remoteExists: () => Effect.succeed(false),
           execute: () => Effect.succeed(executeResult("0\n")),
         }),
       ),
@@ -287,6 +293,7 @@ describe("GitWorkflowService", () => {
       Effect.provide(
         makeGitLayer({
           statusDetailsLocal: () => Effect.succeed({ hasWorkingTreeChanges: false }),
+          remoteExists: () => Effect.succeed(false),
           execute: () => Effect.succeed(executeResult("not a number")),
         }),
       ),

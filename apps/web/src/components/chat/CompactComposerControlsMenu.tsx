@@ -4,7 +4,7 @@ import { EllipsisIcon, SparklesIcon } from "lucide-react";
 import { Button } from "../ui/button";
 import {
   Menu,
-  MenuCheckboxItem,
+  MenuItem,
   MenuPopup,
   MenuRadioGroup,
   MenuRadioItem,
@@ -17,13 +17,11 @@ export const CompactComposerControlsMenu = memo(function CompactComposerControls
   runtimeMode: RuntimeMode;
   showInteractionModeToggle: boolean;
   traitsMenuContent?: ReactNode;
-  /** Whether the composer's "Generate stories" toggle is on for this target. */
-  generateStories: boolean;
-  /** Null when the composer target has no resolvable project — disables the toggle. */
+  /** Null when the composer target has no resolvable project — disables the action. */
   generateStoriesProjectTitle: string | null;
   onToggleInteractionMode: () => void;
   onRuntimeModeChange: (mode: RuntimeMode) => void;
-  onToggleGenerateStories: () => void;
+  onGenerateStories: () => void;
 }) {
   return (
     <Menu>
@@ -46,16 +44,13 @@ export const CompactComposerControlsMenu = memo(function CompactComposerControls
             <MenuDivider />
           </>
         ) : null}
-        <MenuCheckboxItem
-          checked={props.generateStories}
+        <MenuItem
           disabled={props.generateStoriesProjectTitle === null}
-          onCheckedChange={() => props.onToggleGenerateStories()}
+          onClick={props.onGenerateStories}
         >
-          <span className="inline-flex items-center gap-2">
-            <SparklesIcon aria-hidden="true" className="size-4" />
-            Generate stories
-          </span>
-        </MenuCheckboxItem>
+          <SparklesIcon aria-hidden="true" className="size-4" />
+          Generate stories
+        </MenuItem>
         <MenuDivider />
         {props.showInteractionModeToggle ? (
           <>

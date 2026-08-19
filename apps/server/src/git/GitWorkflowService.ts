@@ -71,10 +71,10 @@ export class GitWorkflowService extends Context.Service<
      * Whether this worktree holds anything a pull request could carry:
      * working-tree changes, or commits the base branch does not already have.
      *
-     * Deliberately measured against the base branch rather than the upstream:
-     * a branch that was never pushed has no upstream, and "ahead of nothing" is
-     * not the question. Callers that only want to know whether to bother
-     * committing and pushing get a cheap answer without running the workflow.
+     * Measured against a freshly fetched origin base when one exists. Local
+     * base branches are allowed to lag after a pull request is merged, which
+     * would otherwise make already-delivered commits look shippable again.
+     * Repositories without origin retain the local-base fallback.
      */
     readonly hasShippableWork: (input: {
       readonly cwd: string;
@@ -335,10 +335,24 @@ export const make = Effect.gen(function* () {
             // exactly wrong.
             const status = yield* git.statusDetailsLocal(input.cwd);
             if (status.hasWorkingTreeChanges) return true;
+            const hasOrigin = yield* git.remoteExists({
+              cwd: input.cwd,
+              remoteName: "origin",
+            });
+            let baseRef = input.baseBranch;
+            if (hasOrigin) {
+              yield* git.fetchRemote({ cwd: input.cwd, remoteName: "origin" });
+              const resolved = yield* git.resolveRemoteTrackingCommit({
+                cwd: input.cwd,
+                refName: input.baseBranch,
+                fallbackRemoteName: "origin",
+              });
+              baseRef = resolved.commitSha;
+            }
             const counted = yield* git.execute({
               operation: "GitWorkflowService.hasShippableWork.count",
               cwd: input.cwd,
-              args: ["rev-list", "--count", `${input.baseBranch}..HEAD`],
+              args: ["rev-list", "--count", `${baseRef}..HEAD`],
             });
             const parsed = Number.parseInt(counted.stdout.trim(), 10);
             // An unreadable count is a failure, not a "no": callers treat the
