@@ -1,6 +1,7 @@
 import {
   findIssueDependencyCycle,
   isIssueDependencySatisfied,
+  issueNeedsAttention,
   ISSUE_DECOMPOSITION_PROMPT_INSTRUCTIONS,
   type IssueId,
   type IssuePriority,
@@ -22,11 +23,45 @@ export interface BoardIssue {
   readonly priority: IssuePriority | null;
   readonly dependsOn: ReadonlyArray<IssueId>;
   readonly createdAt: string;
+  /**
+   * Optional so the dependency-picker views, which carry no attention state,
+   * still satisfy this shape. Absent simply reads as "not flagged".
+   */
+  readonly needsAttentionAt?: string | null | undefined;
 }
+
+/**
+ * What a column's colour is saying. Named for the state rather than the hue so
+ * the palette stays a rendering decision: `waiting` work is parked, `active`
+ * work has an agent on it, `review` is being checked by the reviewer agent, and
+ * `finished` is history.
+ *
+ * Deliberately not a per-status colour. Six distinct hues across the board
+ * would compete with the one signal that actually wants the user's eye — the
+ * needs-attention flag, which is orthogonal to status and can land in any
+ * column.
+ */
+export type IssueColumnAccent = "waiting" | "active" | "review" | "finished";
+
+const ISSUE_STATUS_ACCENT: Readonly<Record<IssueStatus, IssueColumnAccent>> = {
+  backlog: "waiting",
+  in_progress: "active",
+  in_review: "review",
+  done: "finished",
+  canceled: "finished",
+  archived: "finished",
+};
 
 export interface IssueBoardColumn<TIssue extends BoardIssue> {
   readonly status: IssueStatus;
   readonly label: string;
+  readonly accent: IssueColumnAccent;
+  /**
+   * Issues in this column flagged for a human. Surfaced per column so the
+   * board can say where the work needing a person is without the user opening
+   * every card.
+   */
+  readonly attentionCount: number;
   /** Finished work reads as history: rendered muted and collapsed by default. */
   readonly muted: boolean;
   readonly issues: ReadonlyArray<TIssue>;
@@ -90,19 +125,24 @@ export function issuePriorityRank(priority: IssuePriority | null): number {
 export function buildIssueBoardColumns<TIssue extends BoardIssue>(
   issues: ReadonlyArray<TIssue>,
 ): ReadonlyArray<IssueBoardColumn<TIssue>> {
-  return ISSUE_STATUS_COLUMNS.map((column) => ({
-    status: column.status,
-    label: column.label,
-    muted: column.muted,
-    issues: issues
+  return ISSUE_STATUS_COLUMNS.map((column) => {
+    const columnIssues = issues
       .filter((issue) => issue.status === column.status)
       .toSorted(
         (left, right) =>
           issuePriorityRank(left.priority) - issuePriorityRank(right.priority) ||
           left.createdAt.localeCompare(right.createdAt) ||
           left.id.localeCompare(right.id),
-      ),
-  }));
+      );
+    return {
+      status: column.status,
+      label: column.label,
+      muted: column.muted,
+      accent: ISSUE_STATUS_ACCENT[column.status],
+      attentionCount: columnIssues.filter((issue) => issueNeedsAttention(issue)).length,
+      issues: columnIssues,
+    };
+  });
 }
 
 export function indexIssuesById<TIssue extends BoardIssue>(
@@ -190,18 +230,43 @@ export const ISSUE_DECOMPOSITION_PROMPT_PLACEHOLDER =
   "Replace this line with the feature you want broken down.";
 
 /**
- * The framing and rules for a story-decomposition turn: which project the
- * work belongs to, which worker models the agent may assign, and the
- * canonical block-format instructions from contracts. Shared by the board's
- * prefill (which precedes this with a placeholder line for the user to
- * replace) and the composer's "Generate stories" toggle (which appends it
- * straight after the user's own message, so there is no line to replace).
+ * A linked project the user has put in scope for this decomposition, as the
+ * prompt needs to describe it: the workspace root is the handle the agent
+ * copies into a story's `project`, and the description is what tells it which
+ * stories belong there.
  */
-export function buildIssueDecompositionInstructions(input: {
+export interface IssueDecompositionLinkedProject {
+  readonly title: string;
+  readonly workspaceRoot: string;
+  readonly description: string;
+}
+
+/** Everything the decomposition prompt is built from, minus the user's own text. */
+export interface IssueDecompositionPromptContext {
   readonly projectTitle: string;
   readonly availableModels?: ReadonlyArray<{ readonly instanceId: string; readonly model: string }>;
-}): string {
+  /**
+   * Linked projects the stories may be routed to. Empty — the common case —
+   * leaves the routing section out entirely, so a single-project plan never
+   * reads instructions about repositories it cannot see.
+   */
+  readonly linkedProjects?: ReadonlyArray<IssueDecompositionLinkedProject>;
+}
+
+/**
+ * The framing and rules for a story-decomposition turn: which project the
+ * work belongs to, which worker models the agent may assign, which other
+ * repositories the plan may reach into, and the canonical block-format
+ * instructions from contracts. Shared by the board's prefill (which precedes
+ * this with a placeholder line for the user to replace) and the composer's
+ * "Generate stories" toggle (which appends it straight after the user's own
+ * message, so there is no line to replace).
+ */
+export function buildIssueDecompositionInstructions(
+  input: IssueDecompositionPromptContext,
+): string {
   const availableModels = input.availableModels ?? [];
+  const linkedProjects = input.linkedProjects ?? [];
   return [
     `Break this work for ${input.projectTitle} into stories. Ask me every clarifying question you have before emitting the block — once the stories exist they are worked without my input.`,
     "",
@@ -213,6 +278,16 @@ export function buildIssueDecompositionInstructions(input: {
           "",
         ]
       : []),
+    ...(linkedProjects.length > 0
+      ? [
+          `This work may also touch these linked projects. Each has its own board, and a story is created on the board of the project whose code it changes — so give a story a \`project\` when its work lands there, copying the path exactly as written here. Anything belonging to ${input.projectTitle} takes no \`project\` at all.`,
+          ...linkedProjects.map(
+            (project) => `- ${project.workspaceRoot} — ${project.title}: ${project.description}`,
+          ),
+          "Read the relevant code in these repositories before deciding what each story needs; do not assume their shape.",
+          "",
+        ]
+      : []),
     ISSUE_DECOMPOSITION_PROMPT_INSTRUCTIONS.trim(),
   ].join("\n");
 }
@@ -221,10 +296,7 @@ export function buildIssueDecompositionInstructions(input: {
  * The seed prompt for the story-decomposition thread: a place for the user's
  * feature description, then the canonical instructions.
  */
-export function buildIssueDecompositionPrompt(input: {
-  readonly projectTitle: string;
-  readonly availableModels?: ReadonlyArray<{ readonly instanceId: string; readonly model: string }>;
-}): string {
+export function buildIssueDecompositionPrompt(input: IssueDecompositionPromptContext): string {
   return [
     ISSUE_DECOMPOSITION_PROMPT_PLACEHOLDER,
     "",
@@ -238,11 +310,9 @@ export function buildIssueDecompositionPrompt(input: {
  * message on send: the same canonical instructions the board prefills, minus
  * the placeholder — the user's text already says what they want broken down.
  */
-export function appendIssueDecompositionInstructions(input: {
-  readonly promptText: string;
-  readonly projectTitle: string;
-  readonly availableModels?: ReadonlyArray<{ readonly instanceId: string; readonly model: string }>;
-}): string {
+export function appendIssueDecompositionInstructions(
+  input: IssueDecompositionPromptContext & { readonly promptText: string },
+): string {
   const instructions = buildIssueDecompositionInstructions(input);
   const text = input.promptText.trim();
   return text.length > 0 ? `${text}\n\n${instructions}` : instructions;
@@ -253,11 +323,9 @@ export function appendIssueDecompositionInstructions(input: {
  * gets the same placeholder template as the issues board; existing text is
  * treated as the feature description and kept above the instructions.
  */
-export function prepareIssueDecompositionPrompt(input: {
-  readonly promptText: string;
-  readonly projectTitle: string;
-  readonly availableModels?: ReadonlyArray<{ readonly instanceId: string; readonly model: string }>;
-}): string {
+export function prepareIssueDecompositionPrompt(
+  input: IssueDecompositionPromptContext & { readonly promptText: string },
+): string {
   const instructions = buildIssueDecompositionInstructions(input);
   const text = input.promptText.trim();
   if (text.length === 0) {

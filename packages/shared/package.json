@@ -87,6 +87,10 @@
       "types": "./src/httpReadiness.ts",
       "import": "./src/httpReadiness.ts"
     },
+    "./issueDecompositionRouting": {
+      "types": "./src/issueDecompositionRouting.ts",
+      "import": "./src/issueDecompositionRouting.ts"
+    },
     "./keybindings": {
       "types": "./src/keybindings.ts",
       "import": "./src/keybindings.ts"

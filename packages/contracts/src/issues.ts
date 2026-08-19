@@ -3,6 +3,7 @@ import * as Effect from "effect/Effect";
 
 import { IsoDateTime, IssueId, ProjectId, ThreadId, TrimmedNonEmptyString } from "./baseSchemas.ts";
 import { ModelSelection } from "./model.ts";
+import { ProjectLinkPath } from "./projectLink.ts";
 
 /**
  * Issues are the planning layer above threads. A project holds a backlog of
@@ -233,6 +234,11 @@ export type IssueDecompositionKey = typeof IssueDecompositionKey.Type;
  * other keys in the same block, and the server swaps them for real issue ids
  * when it creates the issues. Order does not matter — a key may be referenced
  * before it is defined.
+ *
+ * `project` is what keeps a plan that spans repositories from piling onto one
+ * board. It names a linked project by workspace root — the same handle
+ * `list_linked_projects` reports and the agent can see on disk, rather than a
+ * project id it has no way to learn.
  */
 export const IssueDecompositionEntry = Schema.Struct({
   key: IssueDecompositionKey,
@@ -240,6 +246,11 @@ export const IssueDecompositionEntry = Schema.Struct({
   description: IssueDescription,
   priority: Schema.optional(IssuePriority),
   modelSelection: Schema.optional(ModelSelection),
+  /**
+   * Workspace root of the linked project this story belongs on. Absent means
+   * the project the decomposition was requested from.
+   */
+  project: Schema.optional(ProjectLinkPath),
   dependsOn: Schema.optional(
     Schema.Array(IssueDecompositionKey).check(Schema.isMaxLength(ISSUE_MAX_DEPENDENCIES)),
   ),
@@ -271,14 +282,16 @@ End your final message with a single fenced code block tagged \`${ISSUE_DECOMPOS
 - \`description\` (required): markdown explaining the work, the acceptance criteria, and anything the implementer must not break.
 - \`priority\` (optional): one of "low", "medium", "high", "urgent".
 - \`modelSelection\` (optional only when no configured worker list was supplied): the worker to use, as \`{ "instanceId": "...", "model": "..." }\`. When configured workers were included earlier in the prompt, choose one for every story. Otherwise omit it to inherit the project's default.
-- \`dependsOn\` (optional): keys of other stories in this same block that must be finished first. Order does not matter — you may reference a key defined later in the array. Never create a dependency cycle, and never depend on yourself.
+- \`project\` (optional, and only ever one of the linked projects listed earlier in this prompt): the workspace root of the repository the story's work belongs in, copied exactly as it was listed. Omit it for work in the project you were asked about — that is the default and the common case. Set it only when the story's changes genuinely land in the other repository, so each story is created on the board of the project that owns the code.
+- \`dependsOn\` (optional): keys of other stories in this same block that must be finished first. Order does not matter — you may reference a key defined later in the array. Never create a dependency cycle, and never depend on yourself. Dependencies may only name stories with the same \`project\` as the story declaring them: every board tracks its own work, so a story cannot wait on one from another repository. When one repository's work genuinely has to land first, say so in the dependent story's description instead — it will be worked by an agent that can hand work to the linked project and wait for it.
 
 Emit at most ${ISSUE_DECOMPOSITION_MAX_ENTRIES} stories, emit the block only once, and put nothing but JSON inside it. Example:
 
 \`\`\`${ISSUE_DECOMPOSITION_BLOCK_LANGUAGE}
 [
   { "key": "schema", "title": "Add the session table", "description": "Create the migration and the row schema.", "priority": "high", "modelSelection": { "instanceId": "codex", "model": "gpt-5.6" } },
-  { "key": "api", "title": "Expose session endpoints", "description": "CRUD over the new table.", "dependsOn": ["schema"] }
+  { "key": "api", "title": "Expose session endpoints", "description": "CRUD over the new table.", "dependsOn": ["schema"] },
+  { "key": "login-ui", "title": "Build the login screen", "description": "Calls the session endpoints. The API story is planned in parallel; assume the documented request shape.", "project": "/Users/me/src/web-client" }
 ]
 \`\`\`
 `;

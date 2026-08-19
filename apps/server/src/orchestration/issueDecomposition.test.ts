@@ -166,3 +166,48 @@ describe("resolveIssueDecomposition", () => {
     }),
   );
 });
+
+describe("parseIssueDecomposition routing", () => {
+  it.effect("carries the project a story names", () =>
+    Effect.gen(function* () {
+      const result = yield* parseIssueDecomposition(
+        fence(`[
+  { "key": "api", "title": "Expose session endpoints", "description": "CRUD." },
+  { "key": "ui", "title": "Build the login screen", "description": "Calls the endpoints.", "project": "/repos/smartcanvass-fe" }
+]`),
+      );
+      expect(result.kind).toBe("parsed");
+      if (result.kind !== "parsed") return;
+      expect(result.entries.map((entry) => entry.project)).toEqual([
+        null,
+        "/repos/smartcanvass-fe",
+      ]);
+    }),
+  );
+
+  it.effect("rejects a dependency that crosses projects", () =>
+    Effect.gen(function* () {
+      const result = yield* parseIssueDecomposition(
+        fence(`[
+  { "key": "api", "title": "Expose session endpoints", "description": "CRUD." },
+  { "key": "ui", "title": "Build the login screen", "description": "Calls the endpoints.", "project": "/repos/smartcanvass-fe", "dependsOn": ["api"] }
+]`),
+      );
+      expect(result.kind).toBe("invalid");
+      if (result.kind !== "invalid") return;
+      expect(result.detail).toContain("another project's board");
+    }),
+  );
+
+  it.effect("allows a dependency between two stories on the same linked project", () =>
+    Effect.gen(function* () {
+      const result = yield* parseIssueDecomposition(
+        fence(`[
+  { "key": "ui", "title": "Build the login screen", "description": "Form.", "project": "/repos/smartcanvass-fe" },
+  { "key": "ui-tests", "title": "Cover the login screen", "description": "Specs.", "project": "/repos/smartcanvass-fe", "dependsOn": ["ui"] }
+]`),
+      );
+      expect(result.kind).toBe("parsed");
+    }),
+  );
+});
