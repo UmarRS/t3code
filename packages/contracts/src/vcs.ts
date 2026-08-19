@@ -130,6 +130,7 @@ export class VcsProcessExitError extends Schema.TaggedErrorClass<VcsProcessExitE
     context: VcsProcessErrorContext,
     error: VcsProcessExitFailure,
     failureKind: VcsProcessExitFailureKind,
+    commandFailureDetail?: string,
   ) {
     const detail =
       failureKind === "authentication"
@@ -140,7 +141,7 @@ export class VcsProcessExitError extends Schema.TaggedErrorClass<VcsProcessExitE
             : context.command === "gh" || context.command === "az"
               ? "Pull request not found."
               : "VCS resource not found."
-          : "Process exited with a non-zero status.";
+          : (commandFailureDetail ?? "Process exited with a non-zero status.");
 
     return new VcsProcessExitError({
       ...context,

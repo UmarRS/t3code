@@ -459,6 +459,40 @@ it.layer(NodeServices.layer)("autonomous mode decider", (it) => {
       }),
     );
 
+    it.effect("a later merged verdict replaces provisional review attention", () =>
+      Effect.gen(function* () {
+        const events = yield* decide(
+          {
+            type: "issue.review.record",
+            commandId: CommandId.make("cmd-review-final"),
+            issueId: IssueId.make("issue-a"),
+            reviewerThreadId: REVIEWER_THREAD_ID,
+            verdict: "merged",
+            notes: "The final reviewer turn merged the pull request.",
+          },
+          makeReadModel({
+            issues: [
+              issue("issue-a", {
+                status: "in_review",
+                reviewVerdict: "needs_attention",
+                needsAttentionAt: NOW,
+                needsAttentionReason: "The interim turn did not include a review verdict.",
+              }),
+            ],
+          }),
+        );
+
+        expect(events.map((event) => event.type)).toEqual([
+          "issue.review-recorded",
+          "issue.attention-cleared",
+        ]);
+        if (events[0]?.type === "issue.review-recorded") {
+          expect(events[0].payload.verdict).toBe("merged");
+          expect(events[0].payload.status).toBe("done");
+        }
+      }),
+    );
+
     it.effect("rejects recording a review for an unknown issue", () =>
       Effect.gen(function* () {
         const error = yield* Effect.flip(

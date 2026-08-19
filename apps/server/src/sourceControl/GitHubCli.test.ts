@@ -52,6 +52,23 @@ describe("GitHubCli.layer", () => {
     assert.notProperty(commandFailure, "operation");
   });
 
+  it("preserves an actionable VCS detail for command failures", () => {
+    const context = { command: "gh", cwd: "/repo" } as const;
+    const cause = new VcsProcessExitError({
+      operation: "GitHubCli.execute",
+      command: "gh",
+      cwd: context.cwd,
+      exitCode: 1,
+      failureKind: "command-failed",
+      detail: "GitHub found no commits between the base and head branches.",
+    });
+
+    const commandFailure = GitHubCli.fromVcsError(context, cause);
+
+    assert.equal(commandFailure.detail, cause.detail);
+    assert.equal(commandFailure.message.includes(cause.detail), true);
+  });
+
   it.effect("parses pull request view output", () =>
     Effect.gen(function* () {
       mockRun.mockReturnValueOnce(

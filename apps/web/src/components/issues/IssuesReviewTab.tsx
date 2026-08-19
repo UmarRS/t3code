@@ -152,7 +152,7 @@ function ReviewCard({
             {flagged ? (
               <Badge variant="warning" size="sm" className="gap-1">
                 <TriangleAlertIcon className="size-3" />
-                {attentionPresentation.fromReview ? "Review refused" : "Needs you"}
+                {attentionPresentation.fromReview ? "Review needs attention" : "Needs you"}
               </Badge>
             ) : (
               <Badge variant="success" size="sm" className="gap-1">

@@ -6,7 +6,6 @@ import { APP_DISPLAY_NAME, APP_VERSION } from "../../branding";
 import { useProjects } from "../../state/entities";
 import { resolveAutonomousRunState } from "../issues/autonomousRun.logic";
 import { useEnvironmentIdentificationMode } from "../../hooks/useSettings";
-import { useIssuesBoardProjectRef } from "../../hooks/useIssuesBoardTarget";
 import { cn } from "../../lib/utils";
 import {
   resolveEnvironmentIdentificationPillLabel,
@@ -159,20 +158,10 @@ export const SidebarChromeFooter = memo(function SidebarChromeFooter() {
   }, [canGoBack, closeMobileSidebar, navigate]);
 
   const projects = useProjects();
-  const issuesBoardProjectRef = useIssuesBoardProjectRef();
   const handleIssuesClick = useCallback(() => {
-    if (issuesBoardProjectRef === null) {
-      return;
-    }
     closeMobileSidebar();
-    void navigate({
-      to: "/issues/$environmentId/$projectId",
-      params: {
-        environmentId: issuesBoardProjectRef.environmentId,
-        projectId: issuesBoardProjectRef.projectId,
-      },
-    });
-  }, [closeMobileSidebar, issuesBoardProjectRef, navigate]);
+    void navigate({ to: "/issues" });
+  }, [closeMobileSidebar, navigate]);
   // A static dot, never a pulse: this sits in the chrome for the whole run.
   const autonomousRunning = projects.some(
     (project) => resolveAutonomousRunState(project).kind === "running",
@@ -198,7 +187,7 @@ export const SidebarChromeFooter = memo(function SidebarChromeFooter() {
                   render={
                     <SidebarMenuButton
                       aria-label="Issues"
-                      disabled={projects.length === 0 || issuesBoardProjectRef === null}
+                      disabled={projects.length === 0}
                       onClick={handleIssuesClick}
                       size="icon"
                     >

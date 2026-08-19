@@ -107,7 +107,7 @@ import { buildExpandedImagePreview, type ExpandedImagePreview } from "./Expanded
 import { basenameOfPath } from "../../pierre-icons";
 import { cn, randomUUID } from "~/lib/utils";
 import { useProject } from "~/state/entities";
-import { appendIssueDecompositionInstructions } from "../issues/IssuesBoard.logic";
+import { prepareIssueDecompositionPrompt } from "../issues/IssuesBoard.logic";
 import { Separator } from "../ui/separator";
 
 type ComposerCommandMenuPosition = {
@@ -390,21 +390,17 @@ const ComposerFooterModeControls = memo(function ComposerFooterModeControls(prop
 });
 
 /**
- * Footer button for the composer's "Generate stories" toggle: turns the next
- * message into a story-decomposition request instead of ordinary chat. See
- * `CompactComposerControlsMenu` for the equivalent control at narrow widths.
+ * Inserts an editable story-decomposition prompt into the composer. See
+ * `CompactComposerControlsMenu` for the equivalent action at narrow widths.
  */
-const ComposerGenerateStoriesToggle = memo(function ComposerGenerateStoriesToggle(props: {
-  enabled: boolean;
+const ComposerGenerateStoriesAction = memo(function ComposerGenerateStoriesAction(props: {
   projectTitle: string | null;
-  onToggle: () => void;
+  onClick: () => void;
 }) {
   const disabled = props.projectTitle === null;
   const tooltip = disabled
     ? "Story generation needs a project — open this composer from a project thread."
-    : props.enabled
-      ? `Your next message will generate stories for ${props.projectTitle} instead of a normal reply.`
-      : `Turn on to have your next message generate stories for ${props.projectTitle}.`;
+    : `Insert an editable prompt that will generate stories for ${props.projectTitle}.`;
 
   return (
     <>
@@ -414,15 +410,9 @@ const ComposerGenerateStoriesToggle = memo(function ComposerGenerateStoriesToggl
           render={
             <ComposerControl
               type="button"
-              aria-pressed={props.enabled}
               disabled={disabled}
-              onClick={props.onToggle}
-              className={cn(
-                "shrink-0 whitespace-nowrap",
-                props.enabled
-                  ? "bg-accent text-accent-foreground hover:bg-accent/80"
-                  : "text-secondary-label hover:text-foreground",
-              )}
+              onClick={props.onClick}
+              className="shrink-0 whitespace-nowrap text-secondary-label hover:text-foreground"
             />
           }
         >
@@ -761,20 +751,17 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     (store) => store.syncPersistedAttachments,
   );
   const getComposerDraft = useComposerDraftStore((store) => store.getComposerDraft);
-  const setComposerDraftGenerateStories = useComposerDraftStore(
-    (store) => store.setGenerateStories,
-  );
 
   // ------------------------------------------------------------------
-  // "Generate stories" toggle
+  // "Generate stories" action
   // ------------------------------------------------------------------
   // The composer target's project, when one is resolvable: an existing
   // thread's project comes straight from the thread; a pre-thread draft's
   // project lives in the draft-session record the store tracks for it (a
-  // real thread ref carries no draft session of its own). The toggle needs
-  // this to build the canonical instructions (project title, configured
-  // worker models) and to disable itself when there is nothing to attribute
-  // the stories to.
+  // real thread ref carries no draft session of its own). The action needs
+  // this to build the canonical prompt (project title, configured worker
+  // models) and to disable itself when there is nothing to attribute the
+  // stories to.
   const draftSessionProjectId = useComposerDraftStore((state) =>
     typeof composerDraftTarget === "string"
       ? (state.draftThreadsByThreadKey[composerDraftTarget]?.projectId ?? null)
@@ -808,11 +795,6 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       ),
     [providerStatuses],
   );
-  const generateStoriesEnabled = composerDraft.generateStories;
-  const toggleGenerateStories = useCallback(() => {
-    setComposerDraftGenerateStories(composerDraftTarget, !generateStoriesEnabled);
-  }, [composerDraftTarget, generateStoriesEnabled, setComposerDraftGenerateStories]);
-
   // ------------------------------------------------------------------
   // Model state
   // ------------------------------------------------------------------
@@ -1295,6 +1277,17 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     },
     [composerDraftTarget, promptRef, scheduleComposerFocus, setComposerDraftPrompt],
   );
+
+  const prepareGenerateStoriesPrompt = useCallback(() => {
+    if (!generateStoriesProject) return;
+    setPromptFromTraits(
+      prepareIssueDecompositionPrompt({
+        promptText: promptRef.current,
+        projectTitle: generateStoriesProject.title,
+        availableModels: generateStoriesAvailableModels,
+      }),
+    );
+  }, [generateStoriesAvailableModels, generateStoriesProject, promptRef, setPromptFromTraits]);
 
   const providerTraitsMenuContent = renderProviderTraitsMenuContent({
     provider: selectedProvider,
@@ -1924,21 +1917,6 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
         });
         return;
       }
-      if (generateStoriesEnabled && generateStoriesProject) {
-        // Splice the canonical decomposition instructions onto the outgoing
-        // text right before `onSend` reads `promptRef` for the turn. Only
-        // the ref is touched — the store's prompt (and the visible editor)
-        // are left as the user typed them, since a blocked send below would
-        // otherwise strand the instructions in the box. One-shot: the toggle
-        // goes back off now that its content is headed out, so a follow-up
-        // message sends as ordinary chat.
-        promptRef.current = appendIssueDecompositionInstructions({
-          promptText: promptRef.current,
-          projectTitle: generateStoriesProject.title,
-          availableModels: generateStoriesAvailableModels,
-        });
-        setComposerDraftGenerateStories(composerDraftTarget, false);
-      }
       onSend(event);
       if (shouldBlurMobileComposerOnSubmit()) {
         blurMobileComposerAfterSend();
@@ -1947,15 +1925,10 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     [
       activeThreadId,
       blurMobileComposerAfterSend,
-      composerDraftTarget,
-      generateStoriesAvailableModels,
-      generateStoriesEnabled,
-      generateStoriesProject,
       isSendDisabled,
       noProviderAvailable,
       onSend,
       promptRef,
-      setComposerDraftGenerateStories,
       shouldBlurMobileComposerOnSubmit,
     ],
   );
@@ -3273,11 +3246,10 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                     runtimeMode={runtimeMode}
                     showInteractionModeToggle={composerProviderControls.showInteractionModeToggle}
                     traitsMenuContent={providerTraitsMenuContent}
-                    generateStories={generateStoriesEnabled}
                     generateStoriesProjectTitle={generateStoriesProject?.title ?? null}
                     onToggleInteractionMode={toggleInteractionMode}
                     onRuntimeModeChange={handleRuntimeModeChange}
-                    onToggleGenerateStories={toggleGenerateStories}
+                    onGenerateStories={prepareGenerateStoriesPrompt}
                   />
                 ) : (
                   <>
@@ -3294,10 +3266,9 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                       onToggleInteractionMode={toggleInteractionMode}
                       onRuntimeModeChange={handleRuntimeModeChange}
                     />
-                    <ComposerGenerateStoriesToggle
-                      enabled={generateStoriesEnabled}
+                    <ComposerGenerateStoriesAction
                       projectTitle={generateStoriesProject?.title ?? null}
-                      onToggle={toggleGenerateStories}
+                      onClick={prepareGenerateStoriesPrompt}
                     />
                   </>
                 )}

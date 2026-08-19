@@ -110,3 +110,11 @@ export function formatContextWindowTokens(value: number | null): string {
   }
   return `${(value / 1_000_000).toFixed(1).replace(/\.0$/, "")}m`;
 }
+
+/** Prefer cumulative chat usage for the always-visible counter when available. */
+export function visibleThreadTokenCount(usage: ContextWindowSnapshot): number {
+  const totalProcessedTokens = usage.totalProcessedTokens;
+  return typeof totalProcessedTokens === "number" && totalProcessedTokens > 0
+    ? totalProcessedTokens
+    : usage.usedTokens;
+}

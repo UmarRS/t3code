@@ -12,6 +12,7 @@ import {
   buildIssueBoardColumns,
   buildIssueDecompositionInstructions,
   buildIssueDecompositionPrompt,
+  prepareIssueDecompositionPrompt,
   countDelegationTargetProjects,
   describeDelegationTargetProjects,
   describeDelegationTargets,
@@ -311,6 +312,44 @@ describe("appendIssueDecompositionInstructions", () => {
       projectTitle: "Atlas",
     });
     expect(result.startsWith("Break this work for Atlas into stories.")).toBe(true);
+  });
+});
+
+describe("prepareIssueDecompositionPrompt", () => {
+  it("inserts the editable placeholder template into an empty composer", () => {
+    const result = prepareIssueDecompositionPrompt({
+      promptText: "",
+      projectTitle: "Atlas",
+    });
+
+    expect(result).toBe(buildIssueDecompositionPrompt({ projectTitle: "Atlas" }));
+    expect(result).toContain(ISSUE_DECOMPOSITION_PROMPT_PLACEHOLDER);
+  });
+
+  it("keeps an existing feature description above the story instructions", () => {
+    const result = prepareIssueDecompositionPrompt({
+      promptText: "Add offline support",
+      projectTitle: "Atlas",
+    });
+
+    expect(
+      result.startsWith("Add offline support\n\nBreak this work for Atlas into stories."),
+    ).toBe(true);
+    expect(result).not.toContain(ISSUE_DECOMPOSITION_PROMPT_PLACEHOLDER);
+  });
+
+  it("does not duplicate instructions when invoked again", () => {
+    const once = prepareIssueDecompositionPrompt({
+      promptText: "Add offline support",
+      projectTitle: "Atlas",
+    });
+
+    expect(
+      prepareIssueDecompositionPrompt({
+        promptText: once,
+        projectTitle: "Atlas",
+      }),
+    ).toBe(once);
   });
 });
 

@@ -232,7 +232,7 @@ const DEFAULT_ATTENTION_REASON = "Autonomous mode could not finish this issue.";
 
 export interface IssueAttentionPresentation {
   readonly reason: string;
-  /** True when a reviewer looked at the work and refused to merge it. */
+  /** True when the attention state came from the review pipeline. */
   readonly fromReview: boolean;
 }
 

@@ -1510,6 +1510,19 @@ function OpenCommandPaletteDialog(props: {
     },
   });
 
+  if (projects.length > 0) {
+    actionItems.push({
+      kind: "action",
+      value: "action:issues",
+      searchTerms: ["issues", "backlog", "boards", "stories", "kanban", "all projects"],
+      title: "Open all project boards",
+      icon: <ListChecksIcon className={ITEM_ICON_CLASS} />,
+      run: async () => {
+        await navigate({ to: "/issues" });
+      },
+    });
+  }
+
   if (issuesProjectRef !== null) {
     const issuesRouteParams = {
       environmentId: issuesProjectRef.environmentId,
@@ -1525,8 +1538,8 @@ function OpenCommandPaletteDialog(props: {
 
     actionItems.push({
       kind: "action",
-      value: "action:issues",
-      searchTerms: ["issues", "backlog", "board", "stories", "kanban", "go to issues"],
+      value: "action:issues-project",
+      searchTerms: ["issues", "backlog", "board", "stories", "kanban", "current project"],
       title: `Open issues for ${issuesProjectTitle}`,
       icon: <ListChecksIcon className={ITEM_ICON_CLASS} />,
       run: async () => {

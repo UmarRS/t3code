@@ -64,6 +64,7 @@ export function buildIssueStartPrompt(input: IssueStartPromptInput): string {
       [
         "## Working agreement",
         "You are running unattended: no one is available to answer questions. Treat the description above as the source of truth, make reasonable decisions yourself where it is silent, and note those decisions in your final message. Finish the work and leave the tree committed-ready rather than stopping to ask.",
+        "Atlas owns commit, push, pull-request, review, and merge orchestration for this issue. Do not create, close, or merge pull requests yourself. If work belongs in a linked repository, represent it through that linked project's issue workflow rather than changing or shipping it outside Atlas's lifecycle.",
       ].join("\n"),
     );
   }

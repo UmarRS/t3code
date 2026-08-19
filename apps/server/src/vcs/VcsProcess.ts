@@ -90,6 +90,22 @@ const classifyNonZeroExit = (command: string, stderr: string): VcsProcessExitFai
   return "command-failed";
 };
 
+export const actionableCommandFailureDetail = (command: string, stderr: string): string => {
+  const normalized = stderr.toLowerCase();
+  if (command === "gh") {
+    if (normalized.includes("no commits between")) {
+      return "GitHub found no commits between the base and head branches.";
+    }
+    if (normalized.includes("a pull request already exists")) {
+      return "A pull request already exists for this branch.";
+    }
+    if (normalized.includes("head ref must be a branch")) {
+      return "GitHub could not find the head branch. Push the branch, then retry.";
+    }
+  }
+  return "Process exited with a non-zero status.";
+};
+
 export const make = Effect.gen(function* () {
   const processRunner = yield* ProcessRunner.ProcessRunner;
 
@@ -150,6 +166,7 @@ export const make = Effect.gen(function* () {
     }
 
     if (!input.allowNonZeroExit && result.code !== 0) {
+      const failureKind = classifyNonZeroExit(input.command, result.stderr);
       return yield* VcsProcessExitError.fromProcessExit(
         baseError,
         {
@@ -157,7 +174,10 @@ export const make = Effect.gen(function* () {
           stderr: result.stderr,
           stderrTruncated: result.stderrTruncated,
         },
-        classifyNonZeroExit(input.command, result.stderr),
+        failureKind,
+        failureKind === "command-failed"
+          ? actionableCommandFailureDetail(input.command, result.stderr)
+          : undefined,
       );
     }
 

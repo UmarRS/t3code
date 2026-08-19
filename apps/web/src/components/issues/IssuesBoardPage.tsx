@@ -24,6 +24,7 @@ import {
   EllipsisIcon,
   ExternalLinkIcon,
   LockIcon,
+  ListChecksIcon,
   MessageSquareIcon,
   PlayIcon,
   PlusIcon,
@@ -346,9 +347,9 @@ export function IssuesBoardPage({
     }
   }, [deleteIssue, environmentId, issueToDelete, reportFailure]);
 
-  // Story generation is an ordinary new thread whose composer is pre-filled:
-  // the agent answers with a decomposition block and the server turns it into
-  // issues, so this surface has nothing else to do afterwards.
+  // Story generation is an ordinary new thread whose composer is pre-filled.
+  // The completed response offers an explicit Add to board action so the user
+  // can revise the plan in chat without creating stale issues first.
   const handleGenerateStories = useCallback(async () => {
     if (project === null) return;
     await handleNewThread(projectRef);
@@ -455,6 +456,11 @@ export function IssuesBoardPage({
         <ChevronDownIcon className="size-3 shrink-0 text-muted-foreground" />
       </MenuTrigger>
       <MenuPopup align="start" className="w-72">
+        <MenuItem onClick={() => void navigate({ to: "/issues" })}>
+          <ListChecksIcon />
+          <span className="min-w-0 flex-1">All projects</span>
+        </MenuItem>
+        <MenuSeparator />
         <IssuesProjectMenuGroup
           currentProjectRef={projectRef}
           label="Project board"

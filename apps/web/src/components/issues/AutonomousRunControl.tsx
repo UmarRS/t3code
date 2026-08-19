@@ -9,7 +9,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { cn } from "~/lib/utils";
 import { projectEnvironment } from "~/state/projects";
-import { primaryServerProvidersAtom } from "~/state/server";
+import { EMPTY_SERVER_PROVIDERS, serverEnvironment } from "~/state/server";
 import { useAtomCommand } from "~/state/use-atom-command";
 import {
   AlertDialog,
@@ -50,14 +50,18 @@ export function AutonomousRunControl({
   issues,
   runState,
   onOpenReview,
+  listenForExternalPrompt = true,
 }: {
   readonly environmentId: EnvironmentId;
   readonly projectId: ProjectId;
   readonly issues: ReadonlyArray<OrchestrationIssue>;
   readonly runState: AutonomousRunState;
   readonly onOpenReview: () => void;
+  /** Only the detailed board owns the command-palette prompt event. */
+  readonly listenForExternalPrompt?: boolean;
 }) {
-  const providers = useAtomValue(primaryServerProvidersAtom);
+  const providers =
+    useAtomValue(serverEnvironment.providersValueAtom(environmentId)) ?? EMPTY_SERVER_PROVIDERS;
   const enableAutonomous = useAtomCommand(projectEnvironment.enableAutonomous, {
     reportFailure: false,
   });
@@ -79,8 +83,11 @@ export function AutonomousRunControl({
   // The palette navigates here and then asks for the prompt, so starting a run
   // always goes through the same confirmation.
   useEffect(
-    () => onAutonomousRunPrompt(() => setConfirming(running ? "stop" : "enable")),
-    [running],
+    () =>
+      listenForExternalPrompt
+        ? onAutonomousRunPrompt(() => setConfirming(running ? "stop" : "enable"))
+        : undefined,
+    [listenForExternalPrompt, running],
   );
 
   const dispatchRunChange = useCallback(

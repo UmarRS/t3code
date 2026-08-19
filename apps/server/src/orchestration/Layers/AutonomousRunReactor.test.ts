@@ -99,6 +99,8 @@ function makeHarness(options?: {
   /** The tier the stubbed classifier answers with. Defaults to the safe tier. */
   readonly reviewTier?: IssueReviewComplexityTier;
   readonly providers?: ReadonlyArray<unknown>;
+  /** Existing provider PR state for the worker branch, when one already exists. */
+  readonly existingPullRequestState?: "open" | "closed" | "merged";
 }) {
   const started: StartedIssue[] = [];
   const reviews: IssueReviewStartInput[] = [];
@@ -147,6 +149,24 @@ function makeHarness(options?: {
   ).pipe(Layer.provide(orchestrationLayer));
 
   const gitLayer = Layer.mock(GitWorkflowService.GitWorkflowService)({
+    invalidateStatus: () => Effect.void,
+    remoteStatus: () =>
+      Effect.succeed({
+        hasUpstream: true,
+        aheadCount: 0,
+        behindCount: 0,
+        pr:
+          options?.existingPullRequestState === undefined
+            ? null
+            : {
+                number: 9,
+                title: "Existing issue PR",
+                url: "https://example.test/pr/9",
+                baseRef: "main",
+                headRef: "issue/issue-a",
+                state: options.existingPullRequestState,
+              },
+      }),
     hasShippableWork: (input: { readonly cwd: string; readonly baseBranch: string }) =>
       Effect.suspend(() => {
         shippableChecks.push(input);
@@ -499,7 +519,6 @@ describe("AutonomousRunReactor", () => {
 
       yield* run.endTurn(threadId, "idle");
       yield* run.reactor.drain;
-
       expect(harness.stackedActions).toEqual([]);
       expect(harness.reviews).toEqual([]);
     }).pipe(Effect.scoped, Effect.provide(harness.layer));
@@ -577,6 +596,97 @@ describe("AutonomousRunReactor", () => {
       // Claimed before the review runs, so ingestion can recognise the thread
       // and a restart cannot review it twice.
       expect(issue?.reviewerThreadId).toBe(harness.reviews[0]?.threadId);
+    }).pipe(Effect.scoped, Effect.provide(harness.layer));
+  });
+
+  it.effect("links an existing open pull request before trying to create another", () => {
+    const harness = makeHarness({ existingPullRequestState: "open" });
+    return Effect.gen(function* () {
+      const run = yield* bootRun();
+      yield* run.createProject();
+      yield* run.createIssue("issue-a");
+      yield* run.enableAutonomous();
+      yield* run.reactor.drain;
+
+      const threadId = harness.started[0]?.command.threadId;
+      if (!threadId) throw new Error("expected the issue to have started");
+      yield* run.createWorkerThread(threadId, "/tmp/acme-worktrees/issue-a", "issue/issue-a");
+      const seen = yield* run.receiptsWhile(2, run.endTurn(threadId, "idle"));
+
+      expect(seen).toContain("autonomous.pull-request.opened");
+      expect(seen).toContain("autonomous.review.started");
+      expect(harness.stackedActions).toEqual([]);
+      expect(harness.shippableChecks).toEqual([]);
+      expect((yield* run.findIssue("issue-a"))?.pullRequestUrl).toBe("https://example.test/pr/9");
+      expect(harness.reviews).toHaveLength(1);
+    }).pipe(Effect.scoped, Effect.provide(harness.layer));
+  });
+
+  it.effect("links an existing closed pull request instead of creating a duplicate", () => {
+    const harness = makeHarness({ existingPullRequestState: "closed" });
+    return Effect.gen(function* () {
+      const run = yield* bootRun();
+      yield* run.createProject();
+      yield* run.createIssue("issue-a");
+      yield* run.enableAutonomous();
+      yield* run.reactor.drain;
+
+      const threadId = harness.started[0]?.command.threadId;
+      if (!threadId) throw new Error("expected the issue to have started");
+      yield* run.createWorkerThread(threadId, "/tmp/acme-worktrees/issue-a", "issue/issue-a");
+      yield* run.receiptsWhile(2, run.endTurn(threadId, "idle"));
+
+      expect(harness.stackedActions).toEqual([]);
+      expect((yield* run.findIssue("issue-a"))?.pullRequestUrl).toBe("https://example.test/pr/9");
+      expect(harness.reviews).toHaveLength(1);
+    }).pipe(Effect.scoped, Effect.provide(harness.layer));
+  });
+
+  it.effect("recognizes an existing merged pull request as completed delivery", () => {
+    const harness = makeHarness({ existingPullRequestState: "merged" });
+    return Effect.gen(function* () {
+      const run = yield* bootRun();
+      yield* run.createProject();
+      yield* run.createIssue("issue-a");
+      yield* run.enableAutonomous();
+      yield* run.reactor.drain;
+      const threadId = harness.started[0]?.command.threadId;
+      if (!threadId) throw new Error("expected the issue to have started");
+      yield* run.createWorkerThread(threadId, "/tmp/acme-worktrees/issue-a", "issue/issue-a");
+      const seen = yield* run.receiptsWhile(2, run.endTurn(threadId, "idle"));
+
+      expect(seen).toContain("autonomous.pull-request.opened");
+      expect(seen).toContain("autonomous.run.completed");
+      const issue = yield* run.findIssue("issue-a");
+      expect(issue?.status).toBe("done");
+      expect(issue?.pullRequestUrl).toBe("https://example.test/pr/9");
+      expect(harness.stackedActions).toEqual([]);
+      expect(harness.reviews).toEqual([]);
+    }).pipe(Effect.scoped, Effect.provide(harness.layer));
+  });
+
+  it.effect("hands off a worker that finished while autonomous mode was paused", () => {
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      const run = yield* bootRun();
+      yield* run.createProject();
+      yield* run.createIssue("issue-a");
+      const threadId = ThreadId.make("paused-worker");
+      yield* run.startIssueDirectly("issue-a", threadId);
+      yield* run.createWorkerThread(threadId, "/tmp/acme-worktrees/issue-a", "issue/issue-a");
+
+      // No live run owns this terminal event, so it is intentionally ignored.
+      yield* run.endTurn(threadId, "idle");
+      expect(harness.stackedActions).toEqual([]);
+
+      const seen = yield* run.receiptsWhile(2, run.enableAutonomous());
+
+      expect(seen).toContain("autonomous.pull-request.opened");
+      expect(seen).toContain("autonomous.review.started");
+      expect(harness.stackedActions).toEqual([
+        { cwd: "/tmp/acme-worktrees/issue-a", action: "commit_push_pr" },
+      ]);
+      expect(harness.reviews).toHaveLength(1);
     }).pipe(Effect.scoped, Effect.provide(harness.layer));
   });
 
@@ -807,7 +917,7 @@ describe("AutonomousRunReactor", () => {
 
       harness.allowPullRequests();
       const seen = yield* run.receiptsWhile(
-        1,
+        2,
         run.dispatch({
           type: "issue.attention.clear",
           commandId: run.nextCommandId("retry-pr"),
@@ -815,9 +925,10 @@ describe("AutonomousRunReactor", () => {
         }),
       );
 
-      expect(seen).toEqual(["autonomous.pull-request.opened"]);
+      expect(seen).toEqual(["autonomous.pull-request.opened", "autonomous.review.started"]);
       expect(harness.started).toHaveLength(1);
       expect(harness.stackedActions).toHaveLength(2);
+      expect(harness.reviews).toHaveLength(1);
       const issue = yield* run.findIssue("issue-a");
       expect(issue?.pullRequestUrl).toBe("https://example.test/pr/1");
       expect(issue?.status).toBe("in_review");
@@ -929,41 +1040,57 @@ describe("AutonomousRunReactor", () => {
     }).pipe(Effect.scoped, Effect.provide(harness.layer));
   });
 
-  it.effect("finishes an issue when its active pull request was merged outside Atlas", () => {
-    const harness = makeHarness();
-    return Effect.gen(function* () {
-      const run = yield* bootRun();
-      yield* run.createProject();
-      yield* run.createIssue("issue-a");
-      yield* run.enableAutonomous();
-      yield* run.reactor.drain;
+  it.effect(
+    "replaces provisional review attention when the pull request was merged outside Atlas",
+    () => {
+      const harness = makeHarness();
+      return Effect.gen(function* () {
+        const run = yield* bootRun();
+        yield* run.createProject();
+        yield* run.createIssue("issue-a");
+        yield* run.enableAutonomous();
+        yield* run.reactor.drain;
 
-      const threadId = harness.started[0]?.command.threadId;
-      if (!threadId) throw new Error("expected the issue to have started");
-      yield* run.createWorkerThread(threadId, "/tmp/acme-worktrees/issue-a", "issue/issue-a");
-      yield* run.receiptsWhile(2, run.endTurn(threadId, "idle"));
+        const threadId = harness.started[0]?.command.threadId;
+        if (!threadId) throw new Error("expected the issue to have started");
+        yield* run.createWorkerThread(threadId, "/tmp/acme-worktrees/issue-a", "issue/issue-a");
+        yield* run.receiptsWhile(2, run.endTurn(threadId, "idle"));
 
-      expect((yield* run.findIssue("issue-a"))?.status).toBe("in_review");
-      harness.markPullRequestMerged();
+        expect((yield* run.findIssue("issue-a"))?.status).toBe("in_review");
+        const reviewerThreadId = harness.reviews[0]?.threadId;
+        if (!reviewerThreadId) throw new Error("expected a reviewer thread");
+        yield* run.dispatch({
+          type: "issue.review.record",
+          commandId: run.nextCommandId("provisional-review"),
+          issueId: IssueId.make("issue-a"),
+          reviewerThreadId,
+          verdict: "needs_attention",
+          notes: "The interim turn did not include a t3-review block.",
+        });
+        expect((yield* run.findIssue("issue-a"))?.reviewVerdict).toBe("needs_attention");
 
-      // Any subsequent project evaluation reconciles the external state; the
-      // background minute tick uses this same path in production.
-      yield* run.enableAutonomous();
-      yield* run.reactor.drain;
+        harness.markPullRequestMerged();
 
-      const issue = yield* run.findIssue("issue-a");
-      expect(issue?.status).toBe("done");
-      expect(issue?.reviewVerdict).toBe("merged");
-      expect(harness.resolvedPullRequests).toContainEqual({
-        cwd: "/tmp/acme-worktrees/issue-a",
-        reference: "https://example.test/pr/1",
-      });
+        // Any subsequent project evaluation reconciles the external state; the
+        // background minute tick uses this same path in production.
+        yield* run.enableAutonomous();
+        yield* run.reactor.drain;
 
-      const project = yield* run.snapshotQuery.getProjectShellById(PROJECT_ID);
-      expect(Option.getOrThrow(project).autonomousStartedAt).toBeNull();
-      expect(Option.getOrThrow(project).autonomousFinishedReason).toBe("completed");
-    }).pipe(Effect.scoped, Effect.provide(harness.layer));
-  });
+        const issue = yield* run.findIssue("issue-a");
+        expect(issue?.status).toBe("done");
+        expect(issue?.reviewVerdict).toBe("merged");
+        expect(issue?.needsAttentionAt).toBeNull();
+        expect(harness.resolvedPullRequests).toContainEqual({
+          cwd: "/tmp/acme-worktrees/issue-a",
+          reference: "https://example.test/pr/1",
+        });
+
+        const project = yield* run.snapshotQuery.getProjectShellById(PROJECT_ID);
+        expect(Option.getOrThrow(project).autonomousStartedAt).toBeNull();
+        expect(Option.getOrThrow(project).autonomousFinishedReason).toBe("completed");
+      }).pipe(Effect.scoped, Effect.provide(harness.layer));
+    },
+  );
 
   it.effect("carries a delegated issue through review with no run on its project", () => {
     const harness = makeHarness();
