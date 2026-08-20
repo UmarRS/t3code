@@ -7,6 +7,7 @@ import {
   isProviderInstancePickerReady,
   isProviderInstancePickerVisible,
   resolveDefaultProviderModelSelection,
+  resolvePlanningModelSelection,
   resolveSelectableProviderInstance,
   resolveProviderDriverKindForInstanceSelection,
 } from "./providerInstances";
@@ -458,5 +459,58 @@ describe("resolveDefaultProviderModelSelection", () => {
         null,
       ),
     ).toBeNull();
+  });
+});
+
+describe("resolvePlanningModelSelection", () => {
+  it("selects Fable instead of inheriting another configured model", () => {
+    const providers = [
+      provider({
+        provider: ProviderDriverKind.make("claudeAgent"),
+        instanceId: "claudeAgent",
+        models: [model("claude-opus-5", false, true), model("claude-fable-5")],
+      }),
+    ];
+
+    expect(resolvePlanningModelSelection(providers)).toEqual({
+      instanceId: "claudeAgent",
+      model: "claude-fable-5",
+    });
+  });
+
+  it("prefers a ready Fable instance but keeps an errored requested provider usable", () => {
+    const providers = [
+      provider({
+        provider: ProviderDriverKind.make("claudeAgent"),
+        instanceId: "claude_slow",
+        status: "error",
+        models: [model("claude-fable-5")],
+      }),
+      provider({
+        provider: ProviderDriverKind.make("claudeAgent"),
+        instanceId: "claude_ready",
+        models: [model("claude-fable-5")],
+      }),
+    ];
+
+    expect(resolvePlanningModelSelection(providers)?.instanceId).toBe("claude_ready");
+    expect(resolvePlanningModelSelection([providers[0]!])?.model).toBe("claude-fable-5");
+  });
+
+  it("does not fall back to a non-Fable planning model", () => {
+    const providers = [
+      provider({
+        provider: ProviderDriverKind.make("claudeAgent"),
+        instanceId: "claudeAgent",
+        models: [model("claude-opus-5")],
+      }),
+      provider({
+        provider: ProviderDriverKind.make("codex"),
+        instanceId: "codex",
+        models: [model("gpt-5.6")],
+      }),
+    ];
+
+    expect(resolvePlanningModelSelection(providers)).toBeNull();
   });
 });

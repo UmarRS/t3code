@@ -40,7 +40,10 @@ import { useOpenPrLink } from "~/lib/openPullRequestLink";
 import { cn, newMessageId, newThreadId } from "~/lib/utils";
 import { useComposerDraftStore } from "~/composerDraftStore";
 import { useLastBoardStore } from "~/lastBoardStore";
-import { resolveDefaultProviderModelSelection } from "~/providerInstances";
+import {
+  resolveDefaultProviderModelSelection,
+  resolvePlanningModelSelection,
+} from "~/providerInstances";
 import { useProject, useProjects, useThreadShells } from "~/state/entities";
 import { issueEnvironment, useEnvironmentIssues, useProjectIssues } from "~/state/issues";
 import { useEnvironmentQuery } from "~/state/query";
@@ -377,10 +380,22 @@ export function IssuesBoardPage({
   // can revise the plan in chat without creating stale issues first.
   const handleGenerateStories = useCallback(async () => {
     if (project === null) return;
+    const planningModelSelection = resolvePlanningModelSelection(providers);
+    if (planningModelSelection === null) {
+      toastManager.add(
+        stackedThreadToast({
+          type: "error",
+          title: "Fable is unavailable",
+          description: "Enable a Claude provider with Claude Fable 5 to generate stories.",
+        }),
+      );
+      return;
+    }
     await handleNewThread(projectRef);
     const store = useComposerDraftStore.getState();
     const session = store.getDraftSessionByProjectRef(projectRef);
     if (session === null) return;
+    store.setModelSelection(session.draftId, planningModelSelection, { replaceOptions: true });
     store.setPrompt(
       session.draftId,
       buildIssueDecompositionPrompt({
