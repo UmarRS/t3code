@@ -1,4 +1,5 @@
 import { scopeProjectRef, scopeThreadRef } from "@t3tools/client-runtime/environment";
+import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/models";
 import type { ThreadId } from "@t3tools/contracts";
 import * as Schema from "effect/Schema";
 import {
@@ -10,7 +11,7 @@ import {
   SettingsIcon,
   StarIcon,
 } from "lucide-react";
-import { memo, useCallback, useMemo } from "react";
+import { memo, useCallback, useMemo, useState, type ReactNode } from "react";
 import { useRouter } from "@tanstack/react-router";
 
 import { useLocalStorage } from "../../hooks/useLocalStorage";
@@ -30,6 +31,9 @@ import {
 // Matches the settled/snoozed shelves' storage convention so all three
 // section-collapse preferences live under one namespace.
 const PROJECTS_SECTION_EXPANDED_KEY = "t3code:sidebar-v2:projects-expanded";
+const SETTLED_THREAD_INITIAL_COUNT = 10;
+const SETTLED_THREAD_PAGE_COUNT = 25;
+const NO_SETTLED_THREADS: ReadonlyArray<EnvironmentThreadShell> = [];
 
 /**
  * The Projects section: every project the user has, as a row that opens its
@@ -44,6 +48,8 @@ const PROJECTS_SECTION_EXPANDED_KEY = "t3code:sidebar-v2:projects-expanded";
  */
 export const SidebarProjectsSection = memo(function SidebarProjectsSection(props: {
   readonly projectGroups: ReadonlyArray<SidebarProjectSnapshot>;
+  readonly settledThreadsByProjectKey: ReadonlyMap<string, ReadonlyArray<EnvironmentThreadShell>>;
+  readonly renderSettledThread: (thread: EnvironmentThreadShell) => ReactNode;
 }) {
   const [sectionExpanded, setSectionExpanded] = useLocalStorage(
     PROJECTS_SECTION_EXPANDED_KEY,
@@ -91,15 +97,24 @@ export const SidebarProjectsSection = memo(function SidebarProjectsSection(props
       </button>
       {sectionExpanded ? (
         <ul role="list" className="flex flex-col gap-px" data-testid="sidebar-projects-list">
-          {orderedProjectGroups.map((group) => (
-            <SidebarProjectRow
-              key={group.projectKey}
-              group={group}
-              isFavorite={favoriteKeySet.has(
-                sidebarProjectPrefKey({ environmentId: group.environmentId, projectId: group.id }),
-              )}
-            />
-          ))}
+          {orderedProjectGroups.map((group) => {
+            const settledThreads =
+              props.settledThreadsByProjectKey.get(group.projectKey) ?? NO_SETTLED_THREADS;
+            return (
+              <SidebarProjectRow
+                key={group.projectKey}
+                group={group}
+                settledThreads={settledThreads}
+                renderSettledThread={settledThreads.length > 0 ? props.renderSettledThread : null}
+                isFavorite={favoriteKeySet.has(
+                  sidebarProjectPrefKey({
+                    environmentId: group.environmentId,
+                    projectId: group.id,
+                  }),
+                )}
+              />
+            );
+          })}
         </ul>
       ) : null}
     </div>
@@ -109,6 +124,8 @@ export const SidebarProjectsSection = memo(function SidebarProjectsSection(props
 const SidebarProjectRow = memo(function SidebarProjectRow(props: {
   readonly group: SidebarProjectSnapshot;
   readonly isFavorite: boolean;
+  readonly settledThreads: ReadonlyArray<EnvironmentThreadShell>;
+  readonly renderSettledThread: ((thread: EnvironmentThreadShell) => ReactNode) | null;
 }) {
   const { group, isFavorite } = props;
   const router = useRouter();
@@ -232,9 +249,51 @@ const SidebarProjectRow = memo(function SidebarProjectRow(props: {
         </span>
       </div>
       {expanded ? (
-        <SidebarProjectIssueList group={group} onOpenBoard={openBoard} onOpenThread={openThread} />
+        <>
+          <SidebarProjectIssueList
+            group={group}
+            onOpenBoard={openBoard}
+            onOpenThread={openThread}
+          />
+          <SidebarProjectSettledThreadList
+            threads={props.settledThreads}
+            renderThread={props.renderSettledThread}
+          />
+        </>
       ) : null}
     </li>
+  );
+});
+
+const SidebarProjectSettledThreadList = memo(function SidebarProjectSettledThreadList(props: {
+  readonly threads: ReadonlyArray<EnvironmentThreadShell>;
+  readonly renderThread: ((thread: EnvironmentThreadShell) => ReactNode) | null;
+}) {
+  const [visibleCount, setVisibleCount] = useState(SETTLED_THREAD_INITIAL_COUNT);
+  if (props.threads.length === 0 || props.renderThread === null) return null;
+
+  const visibleThreads = props.threads.slice(0, visibleCount);
+  const hiddenCount = props.threads.length - visibleThreads.length;
+  return (
+    <div className="mt-1" data-testid="sidebar-project-settled-threads">
+      <p className="px-9 pb-0.5 text-[11px] font-medium text-sidebar-muted-foreground/45">
+        Settled work
+      </p>
+      <ul role="list" className="ml-6 flex flex-col gap-px">
+        {visibleThreads.map(props.renderThread)}
+        {hiddenCount > 0 ? (
+          <li className="list-none">
+            <button
+              type="button"
+              onClick={() => setVisibleCount((count) => count + SETTLED_THREAD_PAGE_COUNT)}
+              className="flex h-8 w-full cursor-pointer items-center rounded-md px-2.5 text-left text-xs text-sidebar-muted-foreground/55 outline-none hover:bg-sidebar-row-hover hover:text-sidebar-foreground focus-visible:bg-sidebar-row-hover"
+            >
+              Show {Math.min(hiddenCount, SETTLED_THREAD_PAGE_COUNT)} more
+            </button>
+          </li>
+        ) : null}
+      </ul>
+    </div>
   );
 });
 
