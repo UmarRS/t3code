@@ -211,6 +211,7 @@ import {
   applyProviderInstanceSettings,
   deriveProviderInstanceEntries,
   NO_PROVIDER_MODEL_SELECTION,
+  resolvePlanningModelSelection,
   resolveProviderDriverKindForInstanceSelection,
   resolveSelectableProviderInstanceEntry,
   sortProviderInstanceEntries,
@@ -720,6 +721,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
   const nonPersistedComposerImageIds = composerDraft.nonPersistedImageIds;
 
   const setComposerDraftPrompt = useComposerDraftStore((store) => store.setPrompt);
+  const setComposerDraftModelSelection = useComposerDraftStore((store) => store.setModelSelection);
   const addComposerDraftImage = useComposerDraftStore((store) => store.addImage);
   const addComposerDraftImages = useComposerDraftStore((store) => store.addImages);
   const removeComposerDraftImage = useComposerDraftStore((store) => store.removeImage);
@@ -1280,6 +1282,18 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
 
   const prepareGenerateStoriesPrompt = useCallback(() => {
     if (!generateStoriesProject) return;
+    const planningModelSelection = resolvePlanningModelSelection(providerStatuses);
+    if (planningModelSelection === null) {
+      toastManager.add({
+        type: "error",
+        title: "Fable is unavailable",
+        description: "Enable a Claude provider with Claude Fable 5 to generate stories.",
+      });
+      return;
+    }
+    setComposerDraftModelSelection(composerDraftTarget, planningModelSelection, {
+      replaceOptions: true,
+    });
     setPromptFromTraits(
       prepareIssueDecompositionPrompt({
         promptText: promptRef.current,
@@ -1287,7 +1301,15 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
         availableModels: generateStoriesAvailableModels,
       }),
     );
-  }, [generateStoriesAvailableModels, generateStoriesProject, promptRef, setPromptFromTraits]);
+  }, [
+    composerDraftTarget,
+    generateStoriesAvailableModels,
+    generateStoriesProject,
+    promptRef,
+    providerStatuses,
+    setComposerDraftModelSelection,
+    setPromptFromTraits,
+  ]);
 
   const providerTraitsMenuContent = renderProviderTraitsMenuContent({
     provider: selectedProvider,

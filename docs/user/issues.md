@@ -69,7 +69,8 @@ a time.
 
 ## Have an agent write the stories
 
-Select **Generate stories** to open a new thread with a planning prompt already in the composer.
+Select **Generate stories** to open a new Claude Fable 5 planning thread with a planning prompt
+already in the composer.
 Replace the placeholder line with the feature you want broken down, then send it.
 
 The same action is available in any project chat composer. It inserts the editable planning prompt

@@ -343,6 +343,23 @@ export function resolveDefaultProviderModelSelection(
   return model ? { instanceId, model } : null;
 }
 
+const PLANNING_MODEL = "claude-fable-5";
+
+/** Planning turns always use Fable, independent of the thread the user came from. */
+export function resolvePlanningModelSelection(
+  providers: ReadonlyArray<ServerProvider>,
+): ModelSelection | null {
+  const entries = deriveProviderInstanceEntries(providers).filter(
+    (entry) =>
+      entry.driverKind === "claudeAgent" &&
+      entry.enabled &&
+      entry.isAvailable &&
+      entry.models.some((model) => model.slug === PLANNING_MODEL),
+  );
+  const entry = entries.find(isProviderInstancePickerReady) ?? entries[0];
+  return entry ? { instanceId: entry.instanceId, model: PLANNING_MODEL } : null;
+}
+
 /**
  * Resolve an open model-selection routing key back to a driver kind.
  * Custom instance ids such as `claude_openrouter` are not themselves
