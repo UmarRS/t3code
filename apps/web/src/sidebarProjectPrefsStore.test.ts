@@ -13,6 +13,7 @@ describe("sidebarProjectPrefsStore", () => {
     useSidebarProjectPrefsStore.setState({
       favoriteProjectKeys: [],
       expandedByProjectKey: {},
+      accentByProjectKey: {},
     }),
   );
 
@@ -35,9 +36,18 @@ describe("sidebarProjectPrefsStore", () => {
     expect(useSidebarProjectPrefsStore.getState().expandedByProjectKey[KEY]).toBe(false);
   });
 
+  it("sets and resets a project accent", () => {
+    useSidebarProjectPrefsStore.getState().setAccent(KEY, "purple");
+    expect(useSidebarProjectPrefsStore.getState().accentByProjectKey[KEY]).toBe("purple");
+
+    useSidebarProjectPrefsStore.getState().setAccent(KEY, null);
+    expect(useSidebarProjectPrefsStore.getState().accentByProjectKey[KEY]).toBeUndefined();
+  });
+
   it("persists both preferences", async () => {
     useSidebarProjectPrefsStore.getState().toggleFavorite(KEY);
     useSidebarProjectPrefsStore.getState().setExpanded(KEY, true);
+    useSidebarProjectPrefsStore.getState().setAccent(KEY, "green");
 
     const { name, storage } = useSidebarProjectPrefsStore.persist.getOptions();
     if (!name) throw new Error("Expected sidebar project prefs to have a storage name");
@@ -45,6 +55,7 @@ describe("sidebarProjectPrefsStore", () => {
     expect(persisted?.state).toMatchObject({
       favoriteProjectKeys: [KEY],
       expandedByProjectKey: { [KEY]: true },
+      accentByProjectKey: { [KEY]: "green" },
     });
   });
 });

@@ -4,6 +4,10 @@ import { createJSONStorage, persist } from "zustand/middleware";
 
 import { resolveStorage } from "./lib/storage";
 
+export const PROJECT_ACCENTS = ["blue", "teal", "purple", "orange", "pink", "green"] as const;
+
+export type ProjectAccent = (typeof PROJECT_ACCENTS)[number];
+
 /**
  * Both preferences are keyed by the physical project the sidebar row points
  * at — `"<environmentId>:<projectId>"` — rather than by the logical
@@ -29,8 +33,11 @@ interface SidebarProjectPrefsState {
    * later un-favorite silently collapse a project the user opened by hand).
    */
   expandedByProjectKey: Readonly<Record<string, boolean>>;
+  /** Explicit overview-card colors. Missing keys retain their generated color. */
+  accentByProjectKey: Readonly<Partial<Record<string, ProjectAccent>>>;
   toggleFavorite: (projectKey: string) => void;
   setExpanded: (projectKey: string, expanded: boolean) => void;
+  setAccent: (projectKey: string, accent: ProjectAccent | null) => void;
 }
 
 export const useSidebarProjectPrefsStore = create<SidebarProjectPrefsState>()(
@@ -38,6 +45,7 @@ export const useSidebarProjectPrefsStore = create<SidebarProjectPrefsState>()(
     (set) => ({
       favoriteProjectKeys: [],
       expandedByProjectKey: {},
+      accentByProjectKey: {},
       toggleFavorite: (projectKey) =>
         set((state) => ({
           favoriteProjectKeys: state.favoriteProjectKeys.includes(projectKey)
@@ -48,6 +56,13 @@ export const useSidebarProjectPrefsStore = create<SidebarProjectPrefsState>()(
         set((state) => ({
           expandedByProjectKey: { ...state.expandedByProjectKey, [projectKey]: expanded },
         })),
+      setAccent: (projectKey, accent) =>
+        set((state) => {
+          const accentByProjectKey = { ...state.accentByProjectKey };
+          if (accent === null) delete accentByProjectKey[projectKey];
+          else accentByProjectKey[projectKey] = accent;
+          return { accentByProjectKey };
+        }),
     }),
     {
       name: "t3code:sidebar-project-prefs:v1",
@@ -58,6 +73,7 @@ export const useSidebarProjectPrefsStore = create<SidebarProjectPrefsState>()(
       partialize: (state) => ({
         favoriteProjectKeys: state.favoriteProjectKeys,
         expandedByProjectKey: state.expandedByProjectKey,
+        accentByProjectKey: state.accentByProjectKey,
       }),
     },
   ),

@@ -4,6 +4,7 @@ import {
   BotIcon,
   ChevronRightIcon,
   ListChecksIcon,
+  PaletteIcon,
   SearchIcon,
   StarIcon,
   TriangleAlertIcon,
@@ -20,6 +21,7 @@ import { COLLAPSED_SIDEBAR_TITLEBAR_INSET_CLASS } from "~/workspaceTitlebar";
 import { ProjectFavicon } from "../ProjectFavicon";
 import { Button } from "../ui/button";
 import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from "../ui/empty";
+import { Menu, MenuPopup, MenuRadioGroup, MenuRadioItem, MenuTrigger } from "../ui/menu";
 import { ScrollArea } from "../ui/scroll-area";
 import { SidebarInset } from "../ui/sidebar";
 import { AutonomousRunControl } from "./AutonomousRunControl";
@@ -69,6 +71,15 @@ const PROJECT_ACCENT_CLASSES: Record<
   },
 };
 
+const PROJECT_ACCENT_LABELS: Record<ProjectAccent, string> = {
+  blue: "Blue",
+  teal: "Teal",
+  purple: "Purple",
+  orange: "Orange",
+  pink: "Pink",
+  green: "Green",
+};
+
 const STATUS_CLASSES: Record<IssueStatus, string> = {
   backlog: "bg-muted/65 text-muted-foreground",
   in_progress: "bg-info/10 text-info-foreground",
@@ -94,7 +105,9 @@ export function IssuesOverviewPage() {
   const navigate = useNavigate();
   const [query, setQuery] = useState("");
   const favoriteProjectKeys = useSidebarProjectPrefsStore((state) => state.favoriteProjectKeys);
+  const accentByProjectKey = useSidebarProjectPrefsStore((state) => state.accentByProjectKey);
   const toggleFavorite = useSidebarProjectPrefsStore((state) => state.toggleFavorite);
+  const setAccent = useSidebarProjectPrefsStore((state) => state.setAccent);
   const favoriteKeySet = useMemo(() => new Set(favoriteProjectKeys), [favoriteProjectKeys]);
   const environmentLabelById = useMemo(
     () =>
@@ -232,7 +245,9 @@ export function IssuesOverviewPage() {
                   projectId: project.id,
                 });
                 const isFavorite = favoriteKeySet.has(key);
-                const accent = PROJECT_ACCENT_CLASSES[projectAccent(key)];
+                const generatedAccent = projectAccent(key);
+                const selectedAccent = accentByProjectKey[key];
+                const accent = PROJECT_ACCENT_CLASSES[selectedAccent ?? generatedAccent];
                 const issues = issuesForProject(allIssues, project);
                 const runState = resolveAutonomousRunState(project);
                 const activeIssues = issues.filter((issue) => issue.status !== "archived");
@@ -281,6 +296,62 @@ export function IssuesOverviewPage() {
                           {project.workspaceRoot}
                         </p>
                       </button>
+                      <Menu>
+                        <MenuTrigger
+                          render={
+                            <button
+                              type="button"
+                              aria-label={`Choose color for ${project.title}`}
+                              title="Choose project color"
+                              className={cn(
+                                "inline-flex size-8 shrink-0 cursor-pointer items-center justify-center rounded-md outline-none transition-colors hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring",
+                                accent.icon,
+                              )}
+                            />
+                          }
+                        >
+                          <PaletteIcon aria-hidden className="size-4" />
+                        </MenuTrigger>
+                        <MenuPopup align="end" className="w-44">
+                          <div className="px-2 py-1.5 font-medium text-muted-foreground text-xs">
+                            Project color
+                          </div>
+                          <MenuRadioGroup
+                            value={selectedAccent ?? "automatic"}
+                            onValueChange={(value) =>
+                              setAccent(
+                                key,
+                                value === "automatic" ? null : (value as ProjectAccent),
+                              )
+                            }
+                          >
+                            <MenuRadioItem value="automatic" closeOnClick>
+                              <span
+                                aria-hidden
+                                className={cn(
+                                  "size-3 rounded-full",
+                                  PROJECT_ACCENT_CLASSES[generatedAccent].bar,
+                                )}
+                              />
+                              Automatic
+                            </MenuRadioItem>
+                            {(Object.keys(PROJECT_ACCENT_LABELS) as ProjectAccent[]).map(
+                              (value) => (
+                                <MenuRadioItem key={value} value={value} closeOnClick>
+                                  <span
+                                    aria-hidden
+                                    className={cn(
+                                      "size-3 rounded-full",
+                                      PROJECT_ACCENT_CLASSES[value].bar,
+                                    )}
+                                  />
+                                  {PROJECT_ACCENT_LABELS[value]}
+                                </MenuRadioItem>
+                              ),
+                            )}
+                          </MenuRadioGroup>
+                        </MenuPopup>
+                      </Menu>
                       <button
                         type="button"
                         aria-label={

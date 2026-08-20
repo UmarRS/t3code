@@ -1,13 +1,12 @@
 import type { EnvironmentProject } from "@t3tools/client-runtime/state/shell";
 import type { OrchestrationIssue } from "@t3tools/contracts";
+import { PROJECT_ACCENTS, type ProjectAccent } from "../../sidebarProjectPrefsStore";
+
+export type { ProjectAccent } from "../../sidebarProjectPrefsStore";
 
 export interface ScopedIssue extends OrchestrationIssue {
   readonly environmentId: EnvironmentProject["environmentId"];
 }
-
-export const PROJECT_ACCENTS = ["blue", "teal", "purple", "orange", "pink", "green"] as const;
-
-export type ProjectAccent = (typeof PROJECT_ACCENTS)[number];
 
 /** Stable visual identity for a physical project across reloads and devices. */
 export function projectAccent(projectKey: string): ProjectAccent {
