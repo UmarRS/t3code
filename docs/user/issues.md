@@ -6,10 +6,12 @@ own worktree with the first turn already written from the issue text, so plannin
 one step apart instead of one copy-paste apart.
 
 Open **Issues** in the sidebar for an overview of every project board. Each project card summarizes
-its columns and lets you start or stop autonomous mode independently. Open a card for the full
-board; the project name there is also a project switcher. The command palette can open either the
-overview or the current project's board. A full board has five columns: Backlog, In Progress, In
-Review, Done, and Canceled. Done and Canceled are dimmed — finished work is history, not a queue.
+its color-coded columns and lets you start or stop autonomous mode independently. Star a project to
+keep it at the top of this overview and the sidebar, or search by its name, environment, or workspace
+path. Open a card for the full board; the project name there is also a project switcher. The command
+palette can open either the overview or the current project's board. A full board has five columns:
+Backlog, In Progress, In Review, Done, and Canceled. Done and Canceled are dimmed — finished work is
+history, not a queue.
 
 ## Create an issue
 
