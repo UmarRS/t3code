@@ -91,10 +91,12 @@ const make = Effect.gen(function* () {
           message: `Project '${issue.value.projectId}' does not exist.`,
         });
       }
-      const projectIssues = yield* projectionSnapshotQuery
-        .listIssuesByProjectId(issue.value.projectId)
-        .pipe(Effect.mapError(toDispatchError("Failed to read the project backlog.")));
-      const titleByIssueId = new Map(projectIssues.map((entry) => [entry.id, entry.title]));
+      // Every board, not just this one: a story may wait on work another
+      // project tracked, and naming it is the whole point of the context line.
+      const allIssues = yield* projectionSnapshotQuery
+        .listIssues()
+        .pipe(Effect.mapError(toDispatchError("Failed to read the backlog.")));
+      const titleByIssueId = new Map(allIssues.map((entry) => [entry.id, entry.title]));
 
       const prompt = buildIssueStartPrompt({
         title: issue.value.title,

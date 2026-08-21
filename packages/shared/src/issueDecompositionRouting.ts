@@ -8,8 +8,9 @@ import { normalizeProjectPathForComparison } from "./path.ts";
  * A plan for a feature rarely stops at one repository, and a story about the
  * backend has no business sitting on the frontend's board. Each entry may name
  * a linked project by workspace root; this module turns those names into the
- * project each story is actually created on, and rejects the one shape the
- * boards cannot represent — a dependency that crosses between them.
+ * project each story is actually created on. Dependencies between the groups
+ * are fine — an issue may wait on one from another board — so grouping is all
+ * this has to do.
  *
  * Pure and path-based, so the same derivation serves the parser (which has
  * only the block) and the import card (which also has the projects).
@@ -35,47 +36,6 @@ export function decompositionEntryProjectKey(
   if (entry.project === undefined) return null;
   const normalized = normalizeProjectPathForComparison(entry.project);
   return normalized === normalizeProjectPathForComparison(currentWorkspaceRoot) ? null : normalized;
-}
-
-/**
- * The first dependency that crosses a project boundary, or `null` when every
- * dependency stays on its own board.
- *
- * Cross-board dependencies are refused rather than dropped. An issue's
- * `dependsOn` is validated against its own project's backlog when it is
- * created, so a dependency naming a story on another board is rejected outright
- * — and because stories are created one at a time, letting the block through
- * would half-import the plan. The agent has to express the ordering some other
- * way: the delegating story's description, or a linked-project handoff at run
- * time.
- *
- * Compared by raw `project` value: this runs on the block alone, before any
- * workspace root is known, so two entries agree when they name the same
- * project and disagree otherwise.
- */
-export function findCrossProjectDependency(
-  entries: ReadonlyArray<Pick<IssueDecompositionEntry, "key" | "project" | "dependsOn">>,
-): { readonly key: string; readonly dependencyKey: string } | null {
-  const projectByKey = new Map(
-    entries.map(
-      (entry) =>
-        [
-          entry.key,
-          entry.project === undefined ? null : normalizeProjectPathForComparison(entry.project),
-        ] as const,
-    ),
-  );
-  for (const entry of entries) {
-    const project = projectByKey.get(entry.key) ?? null;
-    for (const dependencyKey of entry.dependsOn ?? []) {
-      // An unknown key is the caller's error to report, not ours to guess at.
-      if (!projectByKey.has(dependencyKey)) continue;
-      if ((projectByKey.get(dependencyKey) ?? null) !== project) {
-        return { key: entry.key, dependencyKey };
-      }
-    }
-  }
-  return null;
 }
 
 /** One board's share of a decomposition block. */

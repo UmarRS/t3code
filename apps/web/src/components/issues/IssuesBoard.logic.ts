@@ -18,6 +18,7 @@ import {
 
 export interface BoardIssue {
   readonly id: IssueId;
+  readonly projectId: ProjectId;
   readonly title: string;
   readonly status: IssueStatus;
   readonly priority: IssuePriority | null;
@@ -170,11 +171,30 @@ export function resolveIssueBlockers<TIssue extends BoardIssue>(
   });
 }
 
-export function describeIssueBlockers(blockers: ReadonlyArray<BoardIssue>): string {
+/**
+ * The blockers as a phrase. A blocker tracked on another board is named with
+ * that board — "Expose session endpoints (Acme API)" — because "blocked by
+ * Expose session endpoints" is a confusing thing to read on a board that has
+ * no such issue on it.
+ */
+export function describeIssueBlockers(
+  blockers: ReadonlyArray<BoardIssue>,
+  options?: {
+    /** The board being looked at. Blockers from anywhere else get named. */
+    readonly projectId?: ProjectId;
+    readonly boardTitleById?: ReadonlyMap<ProjectId, string>;
+  },
+): string {
   if (blockers.length === 0) {
     return "";
   }
-  const titles = blockers.map((blocker) => blocker.title);
+  const titles = blockers.map((blocker) => {
+    if (options?.projectId === undefined || blocker.projectId === options.projectId) {
+      return blocker.title;
+    }
+    const board = options.boardTitleById?.get(blocker.projectId);
+    return board === undefined ? blocker.title : `${blocker.title} (${board})`;
+  });
   const listed = titles.slice(0, 3).join(", ");
   const remaining = titles.length - 3;
   return remaining > 0 ? `${listed} and ${remaining} more` : listed;
@@ -199,16 +219,24 @@ export function resolveIssueStartDisabledReason(input: {
 }
 
 /**
- * The issues a dependency picker may still offer: everything in the project
- * except the issue itself and anything that would close a cycle once added to
- * the current selection.
+ * The issues a dependency picker may still offer: everything in the pool except
+ * the issue itself and anything that would close a cycle once added to the
+ * current selection.
+ *
+ * `graph` is what the cycle check reads, and defaults to the pool. They differ
+ * once dependencies may cross boards: the pool is what this project is allowed
+ * to point at (its own board and the linked ones), while a cycle can run
+ * through an issue on a board the picker never offers, and missing that would
+ * offer a choice the server then rejects.
  */
 export function filterIssueDependencyCandidates<TIssue extends BoardIssue>(input: {
   readonly issues: ReadonlyArray<TIssue>;
   readonly issueId: IssueId;
   readonly selected: ReadonlyArray<IssueId>;
+  readonly graph?: ReadonlyArray<BoardIssue>;
 }): ReadonlyArray<TIssue> {
   const selected = new Set(input.selected);
+  const graph = input.graph ?? input.issues;
   return input.issues.filter((candidate) => {
     if (candidate.id === input.issueId) {
       return false;
@@ -217,7 +245,7 @@ export function filterIssueDependencyCandidates<TIssue extends BoardIssue>(input
       return true;
     }
     return (
-      findIssueDependencyCycle(input.issues, {
+      findIssueDependencyCycle(graph, {
         issueId: input.issueId,
         dependsOn: [...input.selected, candidate.id],
       }) === null

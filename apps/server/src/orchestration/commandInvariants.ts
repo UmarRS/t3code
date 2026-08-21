@@ -205,6 +205,17 @@ export function listActiveIssuesByProjectId(
   );
 }
 
+/**
+ * Every live issue in the environment, across boards. What dependency handling
+ * reads: a dependency may name an issue on another project's board, so the
+ * graph these invariants validate is the environment's, not one board's.
+ */
+export function listActiveIssues(
+  readModel: OrchestrationReadModel,
+): ReadonlyArray<OrchestrationIssue> {
+  return readModel.issues.filter((issue) => issue.deletedAt === null);
+}
+
 /** The live issue a thread is doing the work for, if any. */
 export function findActiveIssueByThreadId(
   readModel: OrchestrationReadModel,
@@ -258,20 +269,26 @@ export function requireIssueAbsent(input: {
 
 /**
  * Validate a proposed dependency list for one issue: every id must name a live
- * issue in the same project, an issue may not depend on itself, and the edge
- * set must leave the project graph acyclic. The proposed list replaces whatever
- * the issue depends on today, so an update that removes a back edge is allowed
- * even when the stored graph is (somehow) already cyclic.
+ * issue, an issue may not depend on itself, and the edge set must leave the
+ * graph acyclic. The proposed list replaces whatever the issue depends on
+ * today, so an update that removes a back edge is allowed even when the stored
+ * graph is (somehow) already cyclic.
+ *
+ * A dependency may sit on another project's board — a plan that spans
+ * repositories orders itself that way — so both the lookup and the cycle check
+ * run over the whole environment. Which boards a *client* offers as candidates
+ * is a separate, narrower question (the linked ones); nothing here needs to
+ * re-decide it, and refusing an id from an unlinked board would only strand
+ * dependencies when a link is later removed.
  */
 export function requireValidIssueDependencies(input: {
   readonly readModel: OrchestrationReadModel;
   readonly command: OrchestrationCommand;
   readonly issueId: IssueId;
-  readonly projectId: ProjectId;
   readonly dependsOn: ReadonlyArray<IssueId>;
 }): Effect.Effect<void, OrchestrationCommandInvariantError> {
-  const projectIssues = listActiveIssuesByProjectId(input.readModel, input.projectId);
-  const byId = new Map(projectIssues.map((issue) => [issue.id, issue] as const));
+  const activeIssues = listActiveIssues(input.readModel);
+  const byId = new Map(activeIssues.map((issue) => [issue.id, issue] as const));
   const seen = new Set<string>();
   for (const dependencyId of input.dependsOn) {
     if (dependencyId === input.issueId) {
@@ -290,14 +307,11 @@ export function requireValidIssueDependencies(input: {
     seen.add(dependencyId);
     if (!byId.has(dependencyId)) {
       return Effect.fail(
-        invariantError(
-          input.command.type,
-          `Dependency '${dependencyId}' is not an issue in project '${input.projectId}'.`,
-        ),
+        invariantError(input.command.type, `Dependency '${dependencyId}' is not a live issue.`),
       );
     }
   }
-  const cycle = findIssueDependencyCycle(projectIssues, {
+  const cycle = findIssueDependencyCycle(activeIssues, {
     issueId: input.issueId,
     dependsOn: input.dependsOn,
   });
@@ -318,15 +332,18 @@ export function requireValidIssueDependencies(input: {
  * an agent loose on a story whose groundwork is missing wastes a worktree and a
  * turn. Only finished work counts — `done`, or the `archived` it becomes after
  * a day — while a canceled dependency is an unresolved decision, so the user
- * must edit the graph rather than have the gate guess.
+ * must edit the graph rather than have the gate guess. A dependency on another
+ * board gates exactly like one at home: what matters is that the work is
+ * finished, not where it was tracked.
  */
 export function requireIssueDependenciesSatisfied(input: {
   readonly readModel: OrchestrationReadModel;
   readonly command: OrchestrationCommand;
   readonly issue: OrchestrationIssue;
 }): Effect.Effect<void, OrchestrationCommandInvariantError> {
-  const projectIssues = listActiveIssuesByProjectId(input.readModel, input.issue.projectId);
-  const byId = new Map(projectIssues.map((issue) => [issue.id, issue] as const));
+  const byId = new Map(
+    listActiveIssues(input.readModel).map((issue) => [issue.id, issue] as const),
+  );
   const blocking = input.issue.dependsOn.filter((dependencyId) => {
     const dependency = byId.get(dependencyId);
     // A dependency that no longer exists cannot block: deleting the blocker is

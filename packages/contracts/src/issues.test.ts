@@ -1,11 +1,11 @@
 import { describe, expect, it } from "vite-plus/test";
 
-import { IssueId } from "./baseSchemas.ts";
+import { IssueId, ProjectId } from "./baseSchemas.ts";
 import {
   activeAutonomousIssues,
   encodeIssueDecompositionBlock,
+  evaluateAutonomousRun,
   findIssueDependencyCycle,
-  isAutonomousRunComplete,
   isIssueDependencySatisfied,
   isIssueDueForArchive,
   ISSUE_ARCHIVE_AFTER_MS,
@@ -105,6 +105,7 @@ describe("autonomous derivations exclude archived issues", () => {
     } = {},
   ) => ({
     id: id(key),
+    projectId: ProjectId.make("project"),
     status: overrides.status ?? "backlog",
     dependsOn: (overrides.dependsOn ?? []).map(id),
     threadId: overrides.threadId ?? null,
@@ -133,10 +134,11 @@ describe("autonomous derivations exclude archived issues", () => {
   // and nothing still moving, so it reads exactly like an empty one: complete.
   it("reads a backlog of only-archived issues as a complete run", () => {
     expect(
-      isAutonomousRunComplete([
-        view("first", { status: "archived" }),
-        view("second", { status: "archived" }),
-      ]),
+      evaluateAutonomousRun({
+        projectId: ProjectId.make("project"),
+        issues: [view("first", { status: "archived" }), view("second", { status: "archived" })],
+        isProjectAdvancing: () => true,
+      }).complete,
     ).toBe(true);
   });
 });

@@ -1,9 +1,11 @@
 import {
   activeAutonomousIssues,
+  blockedAutonomousIssues,
   isProviderAvailable,
   issueNeedsAttention,
   startableAutonomousIssues,
   type AutonomousIssueView,
+  type AutonomousScope,
   type IssueId,
   type IssueReviewVerdict,
   type IssueStatus,
@@ -71,6 +73,12 @@ export function autonomousRunActionLabel(state: AutonomousRunState): string {
 export interface AutonomousProgress {
   /** Backlog issues the run can pick up right now. */
   readonly queued: number;
+  /**
+   * Backlog issues waiting on unfinished work. Worth its own number now that a
+   * dependency may sit on another board: a run with nothing queued and nothing
+   * in flight is not idle, it is waiting, and this is what says so.
+   */
+  readonly blocked: number;
   readonly inProgress: number;
   readonly inReview: number;
   /**
@@ -92,18 +100,30 @@ interface ProgressIssueView extends AutonomousIssueView {
   readonly status: IssueStatus;
 }
 
+/**
+ * One board's progress. `issues` may span boards — pass the environment's when
+ * a dependency can cross between them — with `scope` naming the board being
+ * summarised: dependencies resolve over everything given, counts cover the
+ * board alone.
+ */
 export function summarizeAutonomousProgress(
   issues: ReadonlyArray<ProgressIssueView>,
+  scope?: AutonomousScope,
 ): AutonomousProgress {
-  const active = activeAutonomousIssues(issues);
+  const board =
+    scope?.projectId === undefined
+      ? issues
+      : issues.filter((issue) => issue.projectId === scope.projectId);
+  const active = activeAutonomousIssues(issues, scope);
   // needsAttention is counted over every issue, archived included, before the
   // in-scope filter below — flagged work must never be hidden by its siblings
   // archiving out from under it. In practice this never matters: a flagged
   // issue is rarely `done`, so it is rarely eligible to archive at all.
-  const needsAttention = issues.filter((issue) => issueNeedsAttention(issue)).length;
-  const inScope = issues.filter((issue) => issue.status !== "archived");
+  const needsAttention = board.filter((issue) => issueNeedsAttention(issue)).length;
+  const inScope = board.filter((issue) => issue.status !== "archived");
   return {
-    queued: startableAutonomousIssues(issues).length,
+    queued: startableAutonomousIssues(issues, scope).length,
+    blocked: blockedAutonomousIssues(issues, scope).length,
     inProgress: active.filter((issue) => issue.status === "in_progress").length,
     inReview: active.filter((issue) => issue.status === "in_review").length,
     done: inScope.filter((issue) => issue.status === "done").length,
@@ -121,6 +141,7 @@ export function formatAutonomousProgressLabel(progress: AutonomousProgress): str
   if (progress.inProgress > 0) segments.push(`${progress.inProgress} in progress`);
   if (progress.inReview > 0) segments.push(`${progress.inReview} in review`);
   if (progress.queued > 0) segments.push(`${progress.queued} queued`);
+  if (progress.blocked > 0) segments.push(`${progress.blocked} blocked`);
   if (progress.needsAttention > 0) segments.push(`${progress.needsAttention} needs you`);
   segments.push(`${progress.done} done / ${progress.total}`);
   return segments.join(" · ");

@@ -3,7 +3,6 @@ import type { IssueDecompositionEntry, ProjectId } from "@t3tools/contracts";
 
 import {
   decompositionEntryProjectKey,
-  findCrossProjectDependency,
   groupDecompositionEntriesByProject,
   type DecompositionRoutingProject,
 } from "./issueDecompositionRouting.ts";
@@ -49,40 +48,6 @@ describe("decompositionEntryProjectKey", () => {
         backend.workspaceRoot,
       ),
     ).toBe("/repos/smartcanvass-fe");
-  });
-});
-
-describe("findCrossProjectDependency", () => {
-  it("accepts dependencies within one project", () => {
-    expect(
-      findCrossProjectDependency([
-        entry("schema"),
-        entry("api", { dependsOn: ["schema"] }),
-        entry("ui", { project: "/repos/smartcanvass-fe" }),
-      ]),
-    ).toBeNull();
-  });
-
-  it("accepts dependencies between two stories on the same linked project", () => {
-    expect(
-      findCrossProjectDependency([
-        entry("ui", { project: "/repos/smartcanvass-fe" }),
-        entry("ui-tests", { project: "/repos/smartcanvass-fe/", dependsOn: ["ui"] }),
-      ]),
-    ).toBeNull();
-  });
-
-  it("rejects a story that depends on one from another project", () => {
-    expect(
-      findCrossProjectDependency([
-        entry("api"),
-        entry("ui", { project: "/repos/smartcanvass-fe", dependsOn: ["api"] }),
-      ]),
-    ).toEqual({ key: "ui", dependencyKey: "api" });
-  });
-
-  it("leaves an unknown dependency key to the caller", () => {
-    expect(findCrossProjectDependency([entry("api", { dependsOn: ["gone"] })])).toBeNull();
   });
 });
 

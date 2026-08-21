@@ -6,7 +6,6 @@ import {
   type IssueDecompositionEntry,
   type MessageId,
 } from "@t3tools/contracts";
-import { findCrossProjectDependency } from "@t3tools/shared/issueDecompositionRouting";
 import * as Schema from "effect/Schema";
 
 const decodeIssueDecompositionBlock = Schema.decodeUnknownSync(IssueDecompositionBlock);
@@ -48,10 +47,6 @@ function topologicallyOrder(
       if (dependency === entry.key || !byKey.has(dependency)) return null;
     }
   }
-  // A dependency across boards cannot be created at all, so the block is
-  // unusable rather than partly usable.
-  if (findCrossProjectDependency(entries) !== null) return null;
-
   const remaining = new Map(byKey);
   const placed = new Set<string>();
   const ordered: IssueDecompositionEntry[] = [];

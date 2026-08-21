@@ -1,14 +1,13 @@
 import {
   activeAutonomousIssues,
   CommandId,
-  isAutonomousRunComplete,
+  evaluateAutonomousRun,
   isSessionParkedForResume,
   IssueId,
   MessageId,
   type OrchestrationEvent,
   type OrchestrationIssue,
   type ProjectId,
-  startableAutonomousIssues,
   ThreadId,
 } from "@t3tools/contracts";
 import { makeDrainableWorker } from "@t3tools/shared/DrainableWorker";
@@ -266,30 +265,74 @@ const make = Effect.gen(function* () {
     return true;
   });
 
+  /**
+   * The boards a dependency chain out of `issues` can reach, this one included.
+   * Only these need a liveness read: whether a board nobody is running holds a
+   * blocker is what separates a run that is waiting from one that is stuck.
+   */
+  const reachableProjectIds = (
+    issues: ReadonlyArray<OrchestrationIssue>,
+    byId: ReadonlyMap<IssueId, OrchestrationIssue>,
+    projectId: ProjectId,
+  ) => {
+    const projectIds = new Set<ProjectId>([projectId]);
+    const visited = new Set<IssueId>();
+    const walk = (issue: OrchestrationIssue) => {
+      for (const dependencyId of issue.dependsOn) {
+        const dependency = byId.get(dependencyId);
+        if (dependency === undefined || visited.has(dependency.id)) continue;
+        visited.add(dependency.id);
+        projectIds.add(dependency.projectId);
+        walk(dependency);
+      }
+    };
+    for (const issue of issues) walk(issue);
+    return projectIds;
+  };
+
+  /** Why a blocked issue is never going to start, in the words a human reads on the card. */
+  const describeStall = Effect.fn("describeStall")(function* (
+    issue: OrchestrationIssue,
+    blocker: OrchestrationIssue,
+  ) {
+    if (blocker.projectId === issue.projectId) {
+      return `Blocked by '${blocker.title}', which is not going to finish on its own.`;
+    }
+    const project = yield* projectionSnapshotQuery
+      .getProjectShellById(blocker.projectId)
+      .pipe(Effect.orElseSucceed(() => Option.none()));
+    const board = Option.isSome(project) ? project.value.title : "another project";
+    return `Blocked by '${blocker.title}' on the ${board} board, which nothing is working. Start a run there, or drop the dependency.`;
+  });
+
   const evaluateProject = Effect.fn("evaluateProject")(function* (projectId: ProjectId) {
     const runIsLive = yield* projectRunIsLive(projectId);
 
-    let issues = yield* projectionSnapshotQuery.listIssuesByProjectId(projectId);
+    // The whole environment, not one board: a dependency may name an issue
+    // another project tracks, and a run that cannot see it would start work
+    // whose groundwork is missing.
+    let issues = yield* projectionSnapshotQuery.listIssues();
+    const boardIssues = () => issues.filter((issue) => issue.projectId === projectId);
     // Without a live run, the only issues this loop may touch are the ones
     // another project delegated in. Nothing here starts them — the linked
     // project coordinator did that synchronously — and nothing here may
     // "complete" a run that does not exist; what is left is carrying them
     // through review. A project with neither is not this loop's business.
-    const owned = runIsLive ? issues : issues.filter(isDelegatedIssue);
+    const owned = runIsLive ? boardIssues() : boardIssues().filter(isDelegatedIssue);
     if (!runIsLive && owned.length === 0) return;
 
     const reconciledMerge = yield* Effect.forEach(owned, reconcileExternallyMergedIssue, {
       concurrency: 1,
     }).pipe(Effect.map((results) => results.some(Boolean)));
     if (reconciledMerge) {
-      issues = yield* projectionSnapshotQuery.listIssuesByProjectId(projectId);
+      issues = yield* projectionSnapshotQuery.listIssues();
     }
 
     if (runIsLive) {
       // A worker can finish while the run is paused. Its session event is
       // deliberately ignored then, so resuming must derive the missed handoff
       // from durable thread state just like startup derives the backlog.
-      for (const issue of issues) {
+      for (const issue of boardIssues()) {
         if (
           issue.status !== "in_progress" ||
           issue.threadId === null ||
@@ -300,15 +343,32 @@ const make = Effect.gen(function* () {
         }
         yield* retryFinishedWorker(issue);
       }
-      issues = yield* projectionSnapshotQuery.listIssuesByProjectId(projectId);
+      issues = yield* projectionSnapshotQuery.listIssues();
 
-      const startable = startableAutonomousIssues(issues);
-      const active = activeAutonomousIssues(issues);
+      const byId = new Map(issues.map((issue) => [issue.id, issue] as const));
+      const advancing = new Set<ProjectId>();
+      for (const candidate of reachableProjectIds(boardIssues(), byId, projectId)) {
+        if (yield* projectRunIsLive(candidate)) advancing.add(candidate);
+      }
+      const evaluation = evaluateAutonomousRun({
+        projectId,
+        issues,
+        isProjectAdvancing: (candidate) => advancing.has(candidate),
+      });
 
-      // Nothing to start and nothing moving: whatever is left is done,
-      // canceled, or flagged, none of which the run can advance. Turn itself
-      // off so the UI can show a finished run.
-      if (isAutonomousRunComplete(issues)) {
+      // Nothing to start, nothing moving, and nothing this board is waiting on
+      // another board to finish: whatever is left is done, canceled, or
+      // flagged, none of which the run can advance. Turn itself off so the UI
+      // can show a finished run — but first flag the work that is stuck behind
+      // a blocker nobody is working, so a board that stops short of its plan
+      // says why instead of going quiet.
+      if (evaluation.complete) {
+        for (const stalled of evaluation.stalled) {
+          yield* flagNeedsAttention(
+            stalled.issue.id,
+            yield* describeStall(stalled.issue, stalled.blocker),
+          );
+        }
         yield* orchestrationEngine
           .dispatch({
             type: "project.autonomous.disable",
@@ -324,6 +384,11 @@ const make = Effect.gen(function* () {
         });
         return;
       }
+
+      // A board with nothing of its own to do, waiting on a story another board
+      // is still working, stays live and does nothing this tick. The blocker
+      // landing re-evaluates it.
+      const { startable, active } = evaluation;
 
       // Every issue about to run, plus everything already running, is context
       // for every worker: each one needs to know which neighbours it must not
@@ -345,7 +410,7 @@ const make = Effect.gen(function* () {
 
     // Issues whose worker is done and whose pull request is open, but that no
     // reviewer has claimed. Derived from state, so a restart re-queues them.
-    for (const issue of runIsLive ? issues : issues.filter(isDelegatedIssue)) {
+    for (const issue of runIsLive ? boardIssues() : boardIssues().filter(isDelegatedIssue)) {
       const readyForReview =
         issue.status === "in_review" &&
         issue.needsAttentionAt == null &&
@@ -529,7 +594,7 @@ const make = Effect.gen(function* () {
   /**
    * Finish an issue whose worker left nothing behind to ship. There is no
    * branch to review and no pull request to merge, so `done` is the honest
-   * end state — `isAutonomousRunComplete` counts it, and the review step is
+   * end state — the run's completion check counts it, and the review step is
    * skipped for the good reason that there is nothing to review.
    */
   const completeIssueWithoutChanges = Effect.fn("completeIssueWithoutChanges")(function* (
@@ -815,13 +880,21 @@ const make = Effect.gen(function* () {
     ),
   );
 
-  /** The project an event should re-evaluate, if any. */
-  const projectForEvent = Effect.fn("projectForEvent")(function* (event: OrchestrationEvent) {
+  /**
+   * The boards an event should re-evaluate.
+   *
+   * Usually one: the board the issue is on. An issue that moved is also worth
+   * re-evaluating everywhere something *waits* on it, which since dependencies
+   * may cross boards means other projects' runs — a story finishing here is
+   * exactly what releases the story waiting for it over there, and nothing
+   * else would wake that run before its next sweep.
+   */
+  const projectsForEvent = Effect.fn("projectsForEvent")(function* (event: OrchestrationEvent) {
     switch (event.type) {
       case "project.autonomous-enabled":
-        return Option.some(event.payload.projectId);
+        return [event.payload.projectId];
       case "issue.created":
-        return Option.some(event.payload.projectId);
+        return [event.payload.projectId];
       case "issue.updated":
       case "issue.status-set":
       case "issue.deleted":
@@ -831,13 +904,20 @@ const make = Effect.gen(function* () {
       case "issue.attention-cleared":
       case "issue.review-recorded":
       case "issue.pull-request-linked": {
-        const issue = yield* projectionSnapshotQuery
-          .getIssueSummaryById(event.payload.issueId)
-          .pipe(Effect.orElseSucceed(() => Option.none<OrchestrationIssue>()));
-        return Option.map(issue, (value) => value.projectId);
+        const issueId = event.payload.issueId;
+        const issues = yield* projectionSnapshotQuery
+          .listIssues()
+          .pipe(Effect.orElseSucceed(() => [] as ReadonlyArray<OrchestrationIssue>));
+        const projectIds = new Set<ProjectId>();
+        for (const issue of issues) {
+          if (issue.id === issueId || issue.dependsOn.includes(issueId)) {
+            projectIds.add(issue.projectId);
+          }
+        }
+        return [...projectIds];
       }
       default:
-        return Option.none<ProjectId>();
+        return [] as ReadonlyArray<ProjectId>;
     }
   });
 
@@ -866,9 +946,9 @@ const make = Effect.gen(function* () {
     if (event.type === "issue.attention-cleared") {
       yield* retryPullRequestAfterAttentionClear(event.payload.issueId);
     }
-    const projectId = yield* projectForEvent(event);
-    if (Option.isNone(projectId)) return;
-    yield* evaluateQueue.enqueue({ projectId: projectId.value });
+    for (const projectId of yield* projectsForEvent(event)) {
+      yield* evaluateQueue.enqueue({ projectId });
+    }
   });
 
   const processEventSafely = (event: OrchestrationEvent) =>
