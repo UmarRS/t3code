@@ -1,6 +1,6 @@
 import { scopeProjectRef, scopeThreadRef } from "@t3tools/client-runtime/environment";
 import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/models";
-import type { ThreadId } from "@t3tools/contracts";
+import type { ScopedProjectRef, ThreadId } from "@t3tools/contracts";
 import * as Schema from "effect/Schema";
 import {
   ChevronDownIcon,
@@ -8,6 +8,7 @@ import {
   CircleAlertIcon,
   CircleCheckIcon,
   LoaderCircleIcon,
+  MessageSquarePlusIcon,
   SettingsIcon,
   StarIcon,
 } from "lucide-react";
@@ -50,6 +51,8 @@ export const SidebarProjectsSection = memo(function SidebarProjectsSection(props
   readonly projectGroups: ReadonlyArray<SidebarProjectSnapshot>;
   readonly settledThreadsByProjectKey: ReadonlyMap<string, ReadonlyArray<EnvironmentThreadShell>>;
   readonly renderSettledThread: (thread: EnvironmentThreadShell) => ReactNode;
+  /** Starts a thread in the row's project, skipping the project picker. */
+  readonly onNewThread: (projectRef: ScopedProjectRef) => void;
 }) {
   const [sectionExpanded, setSectionExpanded] = useLocalStorage(
     PROJECTS_SECTION_EXPANDED_KEY,
@@ -105,6 +108,7 @@ export const SidebarProjectsSection = memo(function SidebarProjectsSection(props
                 key={group.projectKey}
                 group={group}
                 settledThreads={settledThreads}
+                onNewThread={props.onNewThread}
                 renderSettledThread={settledThreads.length > 0 ? props.renderSettledThread : null}
                 isFavorite={favoriteKeySet.has(
                   sidebarProjectPrefKey({
@@ -126,8 +130,9 @@ const SidebarProjectRow = memo(function SidebarProjectRow(props: {
   readonly isFavorite: boolean;
   readonly settledThreads: ReadonlyArray<EnvironmentThreadShell>;
   readonly renderSettledThread: ((thread: EnvironmentThreadShell) => ReactNode) | null;
+  readonly onNewThread: (projectRef: ScopedProjectRef) => void;
 }) {
-  const { group, isFavorite } = props;
+  const { group, isFavorite, onNewThread } = props;
   const router = useRouter();
   const { isMobile, setOpenMobile } = useSidebar();
   const prefKey = sidebarProjectPrefKey({
@@ -163,6 +168,11 @@ const SidebarProjectRow = memo(function SidebarProjectRow(props: {
     },
     [closeMobileSidebar, group.environmentId, router],
   );
+
+  const startThread = useCallback(() => {
+    closeMobileSidebar();
+    onNewThread(scopeProjectRef(group.environmentId, group.id));
+  }, [closeMobileSidebar, group.environmentId, group.id, onNewThread]);
 
   const openSettings = useCallback(() => {
     closeMobileSidebar();
@@ -214,6 +224,18 @@ const SidebarProjectRow = memo(function SidebarProjectRow(props: {
           use: a favorited star stays visible so the state is readable at
           rest, everything else appears on hover or keyboard focus. */}
         <span className="flex shrink-0 items-center gap-0.5">
+          <button
+            type="button"
+            aria-label={`New chat in ${group.displayName}`}
+            title={`New chat in ${group.displayName}`}
+            className="inline-flex size-5 cursor-pointer items-center justify-center rounded-sm text-sidebar-muted-foreground opacity-0 outline-none transition-opacity hover:text-sidebar-foreground focus-visible:opacity-100 group-hover/sidebar-row:opacity-100"
+            onClick={(event) => {
+              event.stopPropagation();
+              startThread();
+            }}
+          >
+            <MessageSquarePlusIcon aria-hidden className="size-3.5" />
+          </button>
           <button
             type="button"
             aria-label={

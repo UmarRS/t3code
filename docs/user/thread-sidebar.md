@@ -12,6 +12,12 @@ If reordering is unavailable for one environment, update the Atlas server runnin
 environment. Older servers can still pin and unpin threads, but do not understand synced ordering;
 their pinned threads keep the default newest-first order below the ones you have arranged.
 
+## Start a chat in a project
+
+Every project row in the sidebar carries a new-chat button next to its star. It opens a thread in
+that project directly, skipping the project picker the sidebar's own new-thread button opens when
+you have more than one project.
+
 ## Environment artwork
 
 Dev and Nightly environments can identify themselves with artwork at the top of the sidebar and in
