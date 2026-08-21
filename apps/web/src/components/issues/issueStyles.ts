@@ -1,6 +1,7 @@
 import type { OrchestrationIssue } from "@t3tools/contracts";
 
 import type { ProjectAccent } from "../../sidebarProjectPrefsStore";
+import type { AutonomousStatusPresentation } from "./autonomousRun.logic";
 import type { IssueColumnAccent } from "./IssuesBoard.logic";
 
 /**
@@ -71,4 +72,18 @@ export const PRIORITY_DOT_CLASS: Record<NonNullable<OrchestrationIssue["priority
   high: "bg-amber-500",
   medium: "bg-sky-500",
   low: "bg-muted-foreground/50",
+};
+
+/**
+ * The run readout as a pill: a tinted surface for the label and a dot that
+ * carries the tone on its own, for rows too narrow to read the words.
+ */
+export const RUN_TONE_CLASS: Record<
+  AutonomousStatusPresentation["tone"],
+  { readonly pill: string; readonly dot: string }
+> = {
+  active: { pill: "bg-info/10 text-info-foreground", dot: "bg-info" },
+  complete: { pill: "bg-success/10 text-success", dot: "bg-success" },
+  stopped: { pill: "bg-warning-surface text-warning", dot: "bg-warning" },
+  idle: { pill: "bg-muted text-muted-foreground", dot: "bg-muted-foreground/40" },
 };

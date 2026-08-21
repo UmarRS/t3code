@@ -5,6 +5,7 @@ import { useNavigate } from "@tanstack/react-router";
 import { ListChecksIcon, SearchIcon, TriangleAlertIcon } from "lucide-react";
 import { memo, useMemo, useState } from "react";
 
+import { useNowMinute } from "~/hooks/useNowMinute";
 import { cn } from "~/lib/utils";
 import {
   sidebarProjectPrefKey,
@@ -14,15 +15,15 @@ import {
 import { useProjects, useThreadShells } from "~/state/entities";
 import { useAllEnvironmentIssues, type EnvironmentIssue } from "~/state/issues";
 import { buildThreadRouteParams } from "~/threadRoutes";
+import { formatElapsedDurationLabel } from "~/timestampFormat";
 import type { Project } from "~/types";
-import { ProjectFavicon } from "../ProjectFavicon";
 import { resolveThreadStatusPill } from "../Sidebar.logic";
-import { Badge } from "../ui/badge";
 import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from "../ui/empty";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import {
   allWorkColumnsAreEmpty,
   allWorkIssueMatchesQuery,
+  allWorkIssueReference,
   buildAllWorkColumns,
   ALL_WORK_COLUMN_INITIAL_COUNT,
   ALL_WORK_COLUMN_PAGE_COUNT,
@@ -58,6 +59,10 @@ export function AllWorkBoard({ query }: { readonly query: string }) {
   const projects = useProjects();
   const threads = useThreadShells();
   const accentByProjectKey = useSidebarProjectPrefsStore((state) => state.accentByProjectKey);
+  // Cards age in place on a board nobody is touching, so the elapsed labels
+  // come off the shared minute clock rather than whatever the last render saw.
+  const nowMinute = useNowMinute();
+  const nowMs = useMemo(() => Date.now(), [nowMinute]);
 
   const projectByKey = useMemo(
     () =>
@@ -124,9 +129,9 @@ export function AllWorkBoard({ query }: { readonly query: string }) {
   }
 
   return (
-    <div className="flex min-h-0 items-start gap-3 p-4 sm:p-5">
+    <div className="grid grid-cols-[repeat(5,minmax(250px,1fr))] items-start gap-3.5 px-5 py-5 pb-10 sm:px-8">
       {columns.map((column) => (
-        <AllWorkColumn key={column.status} column={column} />
+        <AllWorkColumn key={column.status} column={column} nowMs={nowMs} />
       ))}
     </div>
   );
@@ -134,6 +139,7 @@ export function AllWorkBoard({ query }: { readonly query: string }) {
 
 const AllWorkColumn = memo(function AllWorkColumn(props: {
   readonly column: IssueBoardColumn<AllWorkEntry>;
+  readonly nowMs: number;
 }) {
   const { column } = props;
   // Every column here pools several boards, so any of them can run long. The
@@ -145,69 +151,72 @@ const AllWorkColumn = memo(function AllWorkColumn(props: {
   return (
     <section
       aria-label={column.label}
-      className={cn(
-        "flex w-72 shrink-0 flex-col gap-2 overflow-hidden rounded-xl border border-border/55 bg-card/20 p-2",
-        column.muted && "opacity-72",
-      )}
+      className={cn("flex min-w-0 flex-col gap-2.5", column.muted && "opacity-80")}
     >
-      <div
-        aria-hidden="true"
-        className={cn("-mx-2 -mt-2 h-0.5", ISSUE_COLUMN_ACCENT_CLASS[column.accent])}
-      />
-      <header className="flex items-center justify-between gap-2 px-1 py-0.5">
-        <span className="text-xs font-medium text-foreground">{column.label}</span>
-        <span className="flex items-center gap-1.5">
-          {column.attentionCount > 0 ? (
-            <Tooltip>
-              <TooltipTrigger
-                render={
-                  <span className="flex items-center gap-1 rounded-full bg-warning-surface px-1.5 py-0.5 font-medium text-[0.6875rem] text-warning tabular-nums">
-                    <TriangleAlertIcon aria-hidden="true" className="size-3" />
-                    {column.attentionCount}
-                  </span>
-                }
-              />
-              <TooltipPopup>
-                {column.attentionCount === 1
-                  ? "1 issue needs you"
-                  : `${column.attentionCount} issues need you`}
-              </TooltipPopup>
-            </Tooltip>
-          ) : null}
-          <span className="text-muted-foreground text-xs tabular-nums">{column.issues.length}</span>
+      <header className="flex items-center gap-2 px-0.5">
+        <span
+          aria-hidden
+          className={cn("size-1.5 rounded-full", ISSUE_COLUMN_ACCENT_CLASS[column.accent])}
+        />
+        <span className="text-[12.5px] font-medium text-foreground">{column.label}</span>
+        <span className="font-mono text-[11.5px] text-muted-foreground/70 tabular-nums">
+          {column.issues.length}
         </span>
+        {column.attentionCount > 0 ? (
+          <Tooltip>
+            <TooltipTrigger
+              render={
+                <span className="ml-auto flex items-center gap-1 rounded-full bg-warning-surface px-1.5 py-0.5 text-[10.5px] font-medium text-warning tabular-nums">
+                  <TriangleAlertIcon aria-hidden="true" className="size-3" />
+                  {column.attentionCount}
+                </span>
+              }
+            />
+            <TooltipPopup>
+              {column.attentionCount === 1
+                ? "1 issue needs you"
+                : `${column.attentionCount} issues need you`}
+            </TooltipPopup>
+          </Tooltip>
+        ) : null}
       </header>
-      {column.issues.length === 0 ? (
-        <p className="px-1 pb-1 text-muted-foreground/70 text-xs">Nothing here</p>
-      ) : (
-        <ul className="flex flex-col gap-2">
-          {visibleIssues.map((entry) => (
-            <li key={`${entry.environmentId}:${entry.id}`}>
-              <AllWorkCard entry={entry} />
-            </li>
-          ))}
-          {hiddenCount > 0 ? (
-            <li>
+      <div className="flex min-h-24 flex-col gap-2 rounded-2xl border border-border/60 bg-muted/25 p-2">
+        {column.issues.length === 0 ? (
+          <p className="px-1 py-2 text-xs text-muted-foreground/60">Nothing here</p>
+        ) : (
+          <>
+            <ul className="flex flex-col gap-2">
+              {visibleIssues.map((entry) => (
+                <li key={`${entry.environmentId}:${entry.id}`}>
+                  <AllWorkCard entry={entry} nowMs={props.nowMs} />
+                </li>
+              ))}
+            </ul>
+            {hiddenCount > 0 ? (
               <button
                 type="button"
                 onClick={() => setVisibleCount((count) => count + ALL_WORK_COLUMN_PAGE_COUNT)}
-                className="w-full cursor-pointer rounded-lg border border-dashed border-border/70 px-2 py-1.5 text-muted-foreground text-xs outline-none hover:bg-accent hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
+                className="flex h-8 cursor-pointer items-center justify-center rounded-[9px] border border-dashed border-border text-xs text-muted-foreground/70 outline-none hover:border-muted-foreground/40 hover:text-muted-foreground focus-visible:ring-2 focus-visible:ring-ring"
               >
                 Show {Math.min(hiddenCount, ALL_WORK_COLUMN_PAGE_COUNT)} more
               </button>
-            </li>
-          ) : null}
-        </ul>
-      )}
+            ) : null}
+          </>
+        )}
+      </div>
     </section>
   );
 });
 
-function AllWorkCard({ entry }: { readonly entry: AllWorkEntry }) {
+function AllWorkCard({ entry, nowMs }: { readonly entry: AllWorkEntry; readonly nowMs: number }) {
   const navigate = useNavigate();
   const { project, thread } = entry;
   const needsAttention = issueNeedsAttention(entry);
   const statusPill = thread === null ? null : resolveThreadStatusPill({ thread });
+  const reference = allWorkIssueReference({
+    branch: thread?.branch,
+    pullRequestUrl: entry.pullRequestUrl,
+  });
 
   const openBoard = () =>
     void navigate({
@@ -227,8 +236,8 @@ function AllWorkCard({ entry }: { readonly entry: AllWorkEntry }) {
   return (
     <div
       className={cn(
-        "rounded-lg border bg-background p-2.5 shadow-xs/5 transition-colors",
-        needsAttention ? "border-warning/40" : "border-border/70 hover:border-border",
+        "flex flex-col gap-2 rounded-xl border bg-card p-3 transition-colors",
+        needsAttention ? "border-warning/40" : "border-border hover:border-muted-foreground/25",
       )}
     >
       <button
@@ -238,13 +247,19 @@ function AllWorkCard({ entry }: { readonly entry: AllWorkEntry }) {
             ? `Open the ${project?.title ?? "issue's"} board`
             : "Open the thread doing this work"
         }
-        className="w-full cursor-pointer text-left text-sm text-foreground outline-none focus-visible:underline"
+        className="cursor-pointer text-left text-[13px] leading-[1.35] tracking-[-0.008em] text-pretty text-foreground outline-none focus-visible:underline"
         onClick={openIssue}
       >
         <span className="line-clamp-3">{entry.title}</span>
       </button>
 
-      <div className="mt-2 flex flex-wrap items-center gap-1.5">
+      {reference === null ? null : (
+        <span className="truncate font-mono text-[11px] text-muted-foreground/60" title={reference}>
+          {reference}
+        </span>
+      )}
+
+      <div className="flex flex-wrap items-center gap-1.5">
         <button
           type="button"
           title={
@@ -255,24 +270,28 @@ function AllWorkCard({ entry }: { readonly entry: AllWorkEntry }) {
           disabled={project === null}
           onClick={openBoard}
           className={cn(
-            "inline-flex max-w-full items-center gap-1 rounded-full px-1.5 py-0.5 text-[11px] outline-none focus-visible:ring-2 focus-visible:ring-ring",
-            PROJECT_ACCENT_CLASSES[entry.accent].badge,
-            project === null ? "opacity-70" : "cursor-pointer hover:brightness-95",
+            "inline-flex h-5 max-w-full items-center gap-1.5 rounded-md bg-muted px-1.5 text-[10.5px] text-muted-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring",
+            project === null ? "opacity-70" : "cursor-pointer hover:text-foreground",
           )}
         >
-          {project === null ? null : (
-            <ProjectFavicon
-              environmentId={project.environmentId}
-              cwd={project.workspaceRoot}
-              faviconPath={project.faviconPath}
-              className="size-3 shrink-0 text-current"
-            />
-          )}
+          {/* The project's chosen colour, not its favicon: at chip size the dot
+              is what tells two projects apart down a column of cards. */}
+          <span
+            aria-hidden
+            className={cn(
+              "size-1.5 shrink-0 rounded-full",
+              project === null
+                ? "bg-muted-foreground/40"
+                : PROJECT_ACCENT_CLASSES[entry.accent].bar,
+            )}
+          />
           <span className="truncate">{project?.title ?? "Unknown project"}</span>
         </button>
 
         {statusPill === null ? null : (
-          <span className={cn("inline-flex items-center gap-1 text-xs", statusPill.colorClass)}>
+          <span
+            className={cn("inline-flex items-center gap-1 text-[10.5px]", statusPill.colorClass)}
+          >
             <span
               aria-hidden
               className={cn(
@@ -289,10 +308,10 @@ function AllWorkCard({ entry }: { readonly entry: AllWorkEntry }) {
           <Tooltip>
             <TooltipTrigger
               render={
-                <Badge variant="warning" size="sm" className="gap-1">
-                  <TriangleAlertIcon className="size-3" />
+                <span className="inline-flex items-center gap-1 rounded-md bg-warning-surface px-1.5 py-0.5 text-[10.5px] font-medium text-warning">
+                  <TriangleAlertIcon aria-hidden className="size-3" />
                   Needs you
-                </Badge>
+                </span>
               }
             />
             <TooltipPopup side="bottom">
@@ -302,11 +321,18 @@ function AllWorkCard({ entry }: { readonly entry: AllWorkEntry }) {
         ) : null}
 
         {entry.priority === null ? null : (
-          <span className="inline-flex items-center gap-1 text-muted-foreground text-xs">
-            <span className={cn("size-2 rounded-full", PRIORITY_DOT_CLASS[entry.priority])} />
+          <span className="inline-flex items-center gap-1 text-[10.5px] text-muted-foreground">
+            <span
+              aria-hidden
+              className={cn("size-1.5 rounded-full", PRIORITY_DOT_CLASS[entry.priority])}
+            />
             {ISSUE_PRIORITY_LABEL[entry.priority]}
           </span>
         )}
+
+        <span className="ml-auto shrink-0 text-[10.5px] text-muted-foreground/70">
+          {formatElapsedDurationLabel(entry.updatedAt, nowMs)}
+        </span>
       </div>
     </div>
   );

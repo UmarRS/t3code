@@ -10,6 +10,7 @@ import { describe, expect, it } from "vite-plus/test";
 
 import {
   autonomousRunActionLabel,
+  autonomousRunCompactActionLabel,
   buildReviewSections,
   describeAutonomousRunStatus,
   formatAutonomousProgressLabel,
@@ -31,6 +32,15 @@ describe("autonomousRunActionLabel", () => {
   it("only calls a user-stopped run resumable", () => {
     expect(autonomousRunActionLabel({ kind: "finished", finishedAt: null })).toBe("Start");
     expect(autonomousRunActionLabel({ kind: "stopped", finishedAt: null })).toBe("Resume");
+  });
+});
+
+describe("autonomousRunCompactActionLabel", () => {
+  it("says what the press does, including for a run that never started", () => {
+    expect(autonomousRunCompactActionLabel({ kind: "idle" })).toBe("Start");
+    expect(autonomousRunCompactActionLabel({ kind: "finished", finishedAt: null })).toBe("Start");
+    expect(autonomousRunCompactActionLabel({ kind: "stopped", finishedAt: null })).toBe("Resume");
+    expect(autonomousRunCompactActionLabel({ kind: "running", startedAt: null })).toBe("Stop");
   });
 });
 

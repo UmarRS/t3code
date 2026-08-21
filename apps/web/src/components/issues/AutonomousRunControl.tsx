@@ -26,6 +26,7 @@ import { stackedThreadToast, toastManager } from "../ui/toast";
 import { onAutonomousRunPrompt } from "./issuesDashboardBus";
 import {
   autonomousRunActionLabel,
+  autonomousRunCompactActionLabel,
   describeAutonomousRunStatus,
   hasAutonomousReviewerProvider,
   summarizeAutonomousProgress,
@@ -51,6 +52,7 @@ export function AutonomousRunControl({
   runState,
   onOpenReview,
   listenForExternalPrompt = true,
+  compact = false,
 }: {
   readonly environmentId: EnvironmentId;
   readonly projectId: ProjectId;
@@ -63,6 +65,12 @@ export function AutonomousRunControl({
   readonly onOpenReview: () => void;
   /** Only the detailed board owns the command-palette prompt event. */
   readonly listenForExternalPrompt?: boolean;
+  /**
+   * Renders the switch alone. For callers that already show the run's status
+   * and its review entry themselves — the overview's table gives each of them
+   * a column — so the row does not say the same thing twice.
+   */
+  readonly compact?: boolean;
 }) {
   const providers =
     useAtomValue(serverEnvironment.providersValueAtom(environmentId)) ?? EMPTY_SERVER_PROVIDERS;
@@ -123,7 +131,7 @@ export function AutonomousRunControl({
   return (
     <>
       <div className="flex items-center gap-2">
-        {runState.kind !== "idle" ? (
+        {!compact && runState.kind !== "idle" ? (
           <span
             className={cn(
               "inline-flex items-center gap-1.5 rounded-md border px-2 py-1 text-xs",
@@ -150,7 +158,7 @@ export function AutonomousRunControl({
           and needs-attention history for the Review tab to show. The tab's own
           empty state covers the case where there is truly nothing to see.
         */}
-        {runState.kind === "finished" ? (
+        {!compact && runState.kind === "finished" ? (
           <Button size="sm" variant="ghost" onClick={onOpenReview}>
             Review results
           </Button>
@@ -158,7 +166,7 @@ export function AutonomousRunControl({
 
         <Button
           size="sm"
-          variant="outline"
+          variant={compact ? "default" : "outline"}
           disabled={pending}
           onClick={() => setConfirming(running ? "stop" : "enable")}
         >
@@ -169,7 +177,7 @@ export function AutonomousRunControl({
           ) : (
             <BotIcon className="size-4" />
           )}
-          {autonomousRunActionLabel(runState)}
+          {compact ? autonomousRunCompactActionLabel(runState) : autonomousRunActionLabel(runState)}
         </Button>
       </div>
 
