@@ -26,9 +26,9 @@ is one decides what agents can do with it:
 - A folder that is **not** is marked **context only** — readable, but nothing can be delegated to
   it, because there is no project to open a thread in.
 
-Note that paths are matched exactly. On macOS `/Users/you/dev/api` and `/Users/you/Dev/api` are the
-same folder but not the same string, so a link typed with the wrong casing lands as **context
-only**. Re-add it using the casing the project itself uses.
+On macOS, Atlas recognizes a registered project even if the typed path uses different letter
+casing, such as `/Users/you/dev/api` instead of `/Users/you/Dev/api`. Case-sensitive environments
+still require the path's exact casing.
 
 ## Delegate work to a linked project
 

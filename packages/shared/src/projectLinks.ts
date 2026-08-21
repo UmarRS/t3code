@@ -41,20 +41,41 @@ export interface ProjectLinkView {
   readonly mirrored: boolean;
 }
 
+export interface ProjectLinkPathMatchOptions {
+  /** macOS paths are normally case-insensitive even though POSIX paths are not in general. */
+  readonly caseInsensitive?: boolean;
+}
+
+function normalizeProjectLinkPath(path: string, options?: ProjectLinkPathMatchOptions): string {
+  const normalized = normalizeProjectPathForComparison(path);
+  return options?.caseInsensitive === true ? normalized.toLowerCase() : normalized;
+}
+
+/** The registered project rooted at `path`, if there is one. */
+export function findProjectLinkTarget(
+  path: string,
+  projects: ReadonlyArray<ProjectLinkProject>,
+  options?: ProjectLinkPathMatchOptions,
+): ProjectLinkProject | null {
+  const normalized = normalizeProjectLinkPath(path, options);
+  return (
+    projects.find(
+      (project) => normalizeProjectLinkPath(project.workspaceRoot, options) === normalized,
+    ) ?? null
+  );
+}
+
 /**
- * The registered project rooted exactly at `path`, if there is one. Deleted
- * projects are the caller's to filter out; pass only the projects that count.
+ * The registered project rooted at `path`, if there is one. Matching is exact
+ * unless the caller identifies a case-insensitive filesystem. Deleted projects
+ * are the caller's to filter out; pass only the projects that count.
  */
 export function resolveProjectLinkTarget(
   path: string,
   projects: ReadonlyArray<ProjectLinkProject>,
+  options?: ProjectLinkPathMatchOptions,
 ): ProjectId | null {
-  const normalized = normalizeProjectPathForComparison(path);
-  return (
-    projects.find(
-      (project) => normalizeProjectPathForComparison(project.workspaceRoot) === normalized,
-    )?.id ?? null
-  );
+  return findProjectLinkTarget(path, projects, options)?.id ?? null;
 }
 
 /**

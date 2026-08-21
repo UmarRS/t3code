@@ -3,6 +3,7 @@ import type { ProjectId, ProjectLink } from "@t3tools/contracts";
 
 import {
   deriveProjectLinkViews,
+  findProjectLinkTarget,
   projectsAreLinked,
   resolveProjectLinkTarget,
   type ProjectLinkProject,
@@ -37,6 +38,15 @@ describe("resolveProjectLinkTarget", () => {
 
   it("returns null for a folder no project is rooted at", () => {
     expect(resolveProjectLinkTarget("/repos/design-tokens", [frontend, backend])).toBeNull();
+  });
+
+  it("can match macOS path casing without weakening POSIX matching by default", () => {
+    const project = { ...backend, workspaceRoot: "/Users/test/Dev/backend" };
+
+    expect(findProjectLinkTarget("/Users/test/dev/backend", [project])).toBeNull();
+    expect(
+      findProjectLinkTarget("/Users/test/dev/backend", [project], { caseInsensitive: true }),
+    ).toBe(project);
   });
 });
 

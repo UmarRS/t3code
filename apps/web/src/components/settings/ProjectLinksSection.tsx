@@ -7,7 +7,7 @@ import {
 import { filterFilesystemBrowseEntries } from "@t3tools/client-runtime/state/filesystem";
 import {
   deriveProjectLinkViews,
-  resolveProjectLinkTarget,
+  findProjectLinkTarget,
   type ProjectLinkView,
 } from "@t3tools/shared/projectLinks";
 import { FolderIcon, PlusIcon, Trash2Icon } from "lucide-react";
@@ -16,6 +16,7 @@ import { useCallback, useMemo, useState } from "react";
 import { getBrowseLeafPathSegment, normalizeProjectPathForDispatch } from "../../lib/projectPaths";
 import { randomUUID } from "../../lib/utils";
 import { useProjects } from "../../state/entities";
+import { useEnvironment } from "../../state/environments";
 import { filesystemEnvironment } from "../../state/filesystem";
 import { projectEnvironment } from "../../state/projects";
 import { useAtomCommand } from "../../state/use-atom-command";
@@ -32,6 +33,7 @@ const NOT_A_PROJECT_NOTE = "Context only — not a t3code project.";
 const AGENT_NOTE = "Agents in this project can delegate work to an agent here.";
 const CONTEXT_ONLY_NOTE =
   "Readable context only. Register this folder as a project to let agents delegate work to it.";
+const CASE_INSENSITIVE_PATH_MATCH = { caseInsensitive: true } as const;
 
 /** A link as one checkout of this group sees it, plus the checkout itself. */
 interface ProjectLinkRow extends ProjectLinkView {
@@ -82,6 +84,15 @@ export function ProjectLinksSection({
     group.memberProjects.find(
       (member) => member.environmentId === group.environmentId && member.id === group.id,
     ) ?? group.memberProjects[0]!;
+  const environment = useEnvironment(target.environmentId);
+  const targetEnvironmentProjects = useMemo(
+    () => projects.filter((candidate) => candidate.environmentId === target.environmentId),
+    [projects, target.environmentId],
+  );
+  const pathMatchOptions =
+    environment?.serverConfig?.environment.platform.os === "darwin"
+      ? CASE_INSENSITIVE_PATH_MATCH
+      : undefined;
 
   const [path, setPath] = useState("");
   const [description, setDescription] = useState("");
@@ -97,10 +108,7 @@ export function ProjectLinksSection({
     normalizedPath.startsWith("/") || /^[a-zA-Z]:/.test(normalizedPath);
   const isRegisteredProject =
     canResolveTargetLocally &&
-    resolveProjectLinkTarget(
-      normalizedPath,
-      projects.filter((candidate) => candidate.environmentId === target.environmentId),
-    ) !== null;
+    findProjectLinkTarget(normalizedPath, targetEnvironmentProjects, pathMatchOptions) !== null;
 
   const submit = useCallback(async () => {
     if (isSaving) return;
@@ -138,13 +146,23 @@ export function ProjectLinksSection({
         return;
       }
 
+      // A macOS volume normally treats `Dev` and `dev` as the same directory.
+      // Store the registered project's spelling so pure server-side link
+      // derivation remains exact and case-sensitive remote filesystems are
+      // unaffected.
+      const submittedTarget = findProjectLinkTarget(
+        exactEntry.fullPath,
+        targetEnvironmentProjects,
+        pathMatchOptions,
+      );
+
       const result = mapAtomCommandResult(
         await addLink({
           environmentId: target.environmentId,
           input: {
             projectId: target.id,
             linkId: randomUUID(),
-            path: exactEntry.fullPath,
+            path: submittedTarget?.workspaceRoot ?? exactEntry.fullPath,
             description: nextDescription,
           },
         }),
@@ -161,7 +179,17 @@ export function ProjectLinksSection({
     } finally {
       setIsSaving(false);
     }
-  }, [addLink, browsePath, description, isSaving, path, target.environmentId, target.id]);
+  }, [
+    addLink,
+    browsePath,
+    description,
+    isSaving,
+    path,
+    pathMatchOptions,
+    target.environmentId,
+    target.id,
+    targetEnvironmentProjects,
+  ]);
 
   const remove = useCallback(
     async (row: ProjectLinkRow) => {
