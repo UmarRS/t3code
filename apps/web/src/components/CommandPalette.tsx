@@ -1514,7 +1514,7 @@ function OpenCommandPaletteDialog(props: {
     actionItems.push({
       kind: "action",
       value: "action:issues",
-      searchTerms: ["issues", "backlog", "boards", "stories", "kanban", "all projects"],
+      searchTerms: ["issues", "backlog", "boards", "stories", "kanban", "all projects", "all work"],
       title: "Open all project boards",
       icon: <ListChecksIcon className={ITEM_ICON_CLASS} />,
       run: async () => {

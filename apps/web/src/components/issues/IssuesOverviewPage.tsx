@@ -9,9 +9,11 @@ import {
   StarIcon,
   TriangleAlertIcon,
 } from "lucide-react";
+import * as Schema from "effect/Schema";
 import { useMemo, useState } from "react";
 
 import { isElectron } from "~/env";
+import { useLocalStorage } from "~/hooks/useLocalStorage";
 import { cn } from "~/lib/utils";
 import { sidebarProjectPrefKey, useSidebarProjectPrefsStore } from "~/sidebarProjectPrefsStore";
 import { useEnvironments } from "~/state/environments";
@@ -24,9 +26,11 @@ import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from "..
 import { Menu, MenuPopup, MenuRadioGroup, MenuRadioItem, MenuTrigger } from "../ui/menu";
 import { ScrollArea } from "../ui/scroll-area";
 import { SidebarInset } from "../ui/sidebar";
+import { AllWorkBoard } from "./AllWorkBoard";
 import { AutonomousRunControl } from "./AutonomousRunControl";
 import { resolveAutonomousRunState } from "./autonomousRun.logic";
 import { ISSUE_STATUS_COLUMNS } from "./IssuesBoard.logic";
+import { PROJECT_ACCENT_CLASSES, PROJECT_ACCENT_LABELS } from "./issueStyles";
 import {
   issuesForEnvironment,
   issuesForProject,
@@ -36,51 +40,6 @@ import {
   type ProjectAccent,
 } from "./IssuesOverviewPage.logic";
 
-const PROJECT_ACCENT_CLASSES: Record<
-  ProjectAccent,
-  { readonly bar: string; readonly icon: string; readonly badge: string }
-> = {
-  blue: {
-    bar: "bg-blue-500",
-    icon: "bg-blue-500/12 text-blue-700 dark:text-blue-300",
-    badge: "bg-blue-500/10 text-blue-700 dark:text-blue-300",
-  },
-  teal: {
-    bar: "bg-teal-500",
-    icon: "bg-teal-500/12 text-teal-700 dark:text-teal-300",
-    badge: "bg-teal-500/10 text-teal-700 dark:text-teal-300",
-  },
-  purple: {
-    bar: "bg-purple-500",
-    icon: "bg-purple-500/12 text-purple-700 dark:text-purple-300",
-    badge: "bg-purple-500/10 text-purple-700 dark:text-purple-300",
-  },
-  orange: {
-    bar: "bg-orange-500",
-    icon: "bg-orange-500/12 text-orange-700 dark:text-orange-300",
-    badge: "bg-orange-500/10 text-orange-700 dark:text-orange-300",
-  },
-  pink: {
-    bar: "bg-pink-500",
-    icon: "bg-pink-500/12 text-pink-700 dark:text-pink-300",
-    badge: "bg-pink-500/10 text-pink-700 dark:text-pink-300",
-  },
-  green: {
-    bar: "bg-green-500",
-    icon: "bg-green-500/12 text-green-700 dark:text-green-300",
-    badge: "bg-green-500/10 text-green-700 dark:text-green-300",
-  },
-};
-
-const PROJECT_ACCENT_LABELS: Record<ProjectAccent, string> = {
-  blue: "Blue",
-  teal: "Teal",
-  purple: "Purple",
-  orange: "Orange",
-  pink: "Pink",
-  green: "Green",
-};
-
 const STATUS_CLASSES: Record<IssueStatus, string> = {
   backlog: "bg-muted/65 text-muted-foreground",
   in_progress: "bg-info/10 text-info-foreground",
@@ -89,6 +48,15 @@ const STATUS_CLASSES: Record<IssueStatus, string> = {
   canceled: "bg-destructive/7 text-muted-foreground",
   archived: "bg-muted/45 text-muted-foreground/70",
 };
+
+/**
+ * Which view the page opens on. Remembered because it is a standing
+ * preference — a user who runs several projects at once lives on the overall
+ * board, and re-picking it after every visit would be the whole point lost.
+ */
+const OVERVIEW_VIEW_KEY = "t3code:issues-overview:view";
+const OverviewView = Schema.Literals(["projects", "work"]);
+type OverviewView = typeof OverviewView.Type;
 
 const OVERVIEW_STATUS_LABEL: Record<IssueStatus, string> = {
   backlog: "Backlog",
@@ -105,6 +73,11 @@ export function IssuesOverviewPage() {
   const { environments } = useEnvironments();
   const navigate = useNavigate();
   const [query, setQuery] = useState("");
+  const [view, setView] = useLocalStorage(
+    OVERVIEW_VIEW_KEY,
+    "projects" as OverviewView,
+    OverviewView,
+  );
   const favoriteProjectKeys = useSidebarProjectPrefsStore((state) => state.favoriteProjectKeys);
   const accentByProjectKey = useSidebarProjectPrefsStore((state) => state.accentByProjectKey);
   const toggleFavorite = useSidebarProjectPrefsStore((state) => state.toggleFavorite);
@@ -178,22 +151,58 @@ export function IssuesOverviewPage() {
           <div className="mx-auto flex w-full max-w-[1500px] flex-col gap-4">
             <div className="flex flex-col justify-between gap-3 lg:flex-row lg:items-end">
               <div>
-                <h2 className="text-lg font-semibold tracking-tight">Project work</h2>
+                <h2 className="text-lg font-semibold tracking-tight">
+                  {view === "projects" ? "Project work" : "All work"}
+                </h2>
                 <p className="mt-0.5 text-sm text-muted-foreground">
-                  Scan every board, start autonomous work, and keep important projects first.
+                  {view === "projects"
+                    ? "Scan every board, start autonomous work, and keep important projects first."
+                    : "Every project's issues in one pipeline, most urgent first, with live work marked."}
                 </p>
               </div>
-              <label className="flex h-9 w-full items-center gap-2 rounded-lg border border-border bg-background px-3 text-sm shadow-xs focus-within:border-ring focus-within:ring-2 focus-within:ring-ring/20 lg:w-72">
-                <SearchIcon aria-hidden className="size-4 shrink-0 text-muted-foreground" />
-                <span className="sr-only">Search projects</span>
-                <input
-                  type="search"
-                  value={query}
-                  onChange={(event) => setQuery(event.currentTarget.value)}
-                  placeholder="Search projects"
-                  className="min-w-0 flex-1 bg-transparent text-foreground outline-none placeholder:text-muted-foreground"
-                />
-              </label>
+              <div className="flex flex-wrap items-center gap-2">
+                <div className="flex overflow-hidden rounded-md border border-border">
+                  <button
+                    type="button"
+                    aria-pressed={view === "projects"}
+                    className={cn(
+                      "cursor-pointer px-3 py-1.5 text-xs",
+                      view === "projects"
+                        ? "bg-muted text-foreground"
+                        : "text-muted-foreground hover:text-foreground",
+                    )}
+                    onClick={() => setView("projects")}
+                  >
+                    Projects
+                  </button>
+                  <button
+                    type="button"
+                    aria-pressed={view === "work"}
+                    className={cn(
+                      "cursor-pointer px-3 py-1.5 text-xs",
+                      view === "work"
+                        ? "bg-muted text-foreground"
+                        : "text-muted-foreground hover:text-foreground",
+                    )}
+                    onClick={() => setView("work")}
+                  >
+                    All work
+                  </button>
+                </div>
+                <label className="flex h-9 w-full items-center gap-2 rounded-lg border border-border bg-background px-3 text-sm shadow-xs focus-within:border-ring focus-within:ring-2 focus-within:ring-ring/20 lg:w-64">
+                  <SearchIcon aria-hidden className="size-4 shrink-0 text-muted-foreground" />
+                  <span className="sr-only">
+                    {view === "projects" ? "Search projects" : "Search issues"}
+                  </span>
+                  <input
+                    type="search"
+                    value={query}
+                    onChange={(event) => setQuery(event.currentTarget.value)}
+                    placeholder={view === "projects" ? "Search projects" : "Search issues"}
+                    className="min-w-0 flex-1 bg-transparent text-foreground outline-none placeholder:text-muted-foreground"
+                  />
+                </label>
+              </div>
             </div>
             <div className="flex flex-wrap items-center gap-2 text-xs">
               <span className="rounded-full bg-muted px-2.5 py-1 font-medium text-foreground">
@@ -226,6 +235,8 @@ export function IssuesOverviewPage() {
                 <EmptyDescription>Create a project to start tracking issues.</EmptyDescription>
               </EmptyHeader>
             </Empty>
+          ) : view === "work" ? (
+            <AllWorkBoard query={query} />
           ) : visibleProjects.length === 0 ? (
             <Empty className="min-h-full">
               <EmptyHeader>

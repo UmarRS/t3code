@@ -5,14 +5,24 @@ description, a priority, and the other issues it waits on. Starting an issue ope
 own worktree with the first turn already written from the issue text, so planning and doing stay
 one step apart instead of one copy-paste apart.
 
-Open **Issues** in the sidebar for an overview of every project board. Each project card summarizes
-its color-coded columns and lets you start or stop autonomous mode independently. Choose a card's
-color to give related projects the same visual identity, star a project to keep it at the top of this
-overview and the sidebar, or search by its name, environment, or workspace path. Open a card for the
-full board; the project name there is also a project switcher. The command palette can open either
-the overview or the current project's board. A full board has five columns:
-Backlog, In Progress, In Review, Done, and Canceled. Done and Canceled are dimmed — finished work is
-history, not a queue.
+Open **Issues** in the sidebar for an overview of every project board. It has two views, and the one
+you pick is remembered.
+
+**Projects** gives each project a card summarizing its color-coded columns, with autonomous mode
+startable and stoppable per project. Choose a card's color to give related projects the same visual
+identity, star a project to keep it at the top of this overview and the sidebar, or search by its
+name, environment, or workspace path. Open a card for the full board; the project name there is also
+a project switcher.
+
+**All work** pools every project's issues into one board, so you can see what is moving without
+opening each project in turn. Cards carry the project they belong to and, once an issue has started,
+what its thread is doing right now — working, awaiting input, rate limited. Select a card to jump
+into that thread, or its project chip to open the board that owns it. Search filters by issue title
+and project name. Archived work is left out; this view is about what is going on now.
+
+The command palette can open either the overview or the current project's board. A full board has
+five columns: Backlog, In Progress, In Review, Done, and Canceled. Done and Canceled are dimmed —
+finished work is history, not a queue.
 
 ## Create an issue
 
