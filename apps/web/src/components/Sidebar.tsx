@@ -30,7 +30,7 @@ import {
   scopeThreadRef,
   scopedThreadKey,
 } from "@t3tools/client-runtime/environment";
-import type { ScopedThreadRef, ThreadId } from "@t3tools/contracts";
+import type { ScopedProjectRef, ScopedThreadRef, ThreadId } from "@t3tools/contracts";
 import type { TimestampFormat } from "@t3tools/contracts/settings";
 import {
   AlarmClockIcon,
@@ -3218,6 +3218,14 @@ export default function Sidebar() {
     setShowJumpHints(shouldShowJumpHintsNow);
   }, [shouldShowJumpHintsNow]);
 
+  // The project rows' own new-chat button: the project is already named by
+  // the row, so this skips the picker the header button opens. Read through
+  // the ref so every row keeps a stable callback prop as the projects list
+  // churns.
+  const startProjectThread = useCallback((projectRef: ScopedProjectRef) => {
+    void handleNewThreadRef.current(projectRef);
+  }, []);
+
   const attachListAutoAnimateRef = useCallback((node: HTMLUListElement | null) => {
     if (!node) return;
     autoAnimate(node, { duration: 150, easing: "ease-out" });
@@ -3596,6 +3604,7 @@ export default function Sidebar() {
               <SidebarProjectsSection
                 projectGroups={projectGroups}
                 settledThreadsByProjectKey={settledThreadsByProjectKey}
+                onNewThread={startProjectThread}
                 renderSettledThread={(thread) => renderThreadRow(thread, "settled")}
               />
             </TooltipProvider>
