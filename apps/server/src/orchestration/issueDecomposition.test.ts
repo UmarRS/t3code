@@ -185,17 +185,20 @@ describe("parseIssueDecomposition routing", () => {
     }),
   );
 
-  it.effect("rejects a dependency that crosses projects", () =>
+  // A plan that spans repositories orders itself across them: the frontend
+  // story waits on the backend story, and the two live on different boards.
+  it.effect("keeps a dependency that crosses projects, in dependency order", () =>
     Effect.gen(function* () {
       const result = yield* parseIssueDecomposition(
         fence(`[
-  { "key": "api", "title": "Expose session endpoints", "description": "CRUD." },
-  { "key": "ui", "title": "Build the login screen", "description": "Calls the endpoints.", "project": "/repos/smartcanvass-fe", "dependsOn": ["api"] }
+  { "key": "ui", "title": "Build the login screen", "description": "Calls the endpoints.", "project": "/repos/smartcanvass-fe", "dependsOn": ["api"] },
+  { "key": "api", "title": "Expose session endpoints", "description": "CRUD." }
 ]`),
       );
-      expect(result.kind).toBe("invalid");
-      if (result.kind !== "invalid") return;
-      expect(result.detail).toContain("another project's board");
+      expect(result.kind).toBe("parsed");
+      if (result.kind !== "parsed") return;
+      expect(result.entries.map((entry) => entry.key)).toEqual(["api", "ui"]);
+      expect(result.entries[1]?.dependsOnKeys).toEqual(["api"]);
     }),
   );
 

@@ -32,14 +32,16 @@ and deletes it.
 
 ## Say what work waits on other work
 
-An issue can depend on other issues in the same project. In the issue editor, use **Depends on** to
-pick them. The picker only offers issues that keep the graph acyclic, so you cannot build a set of
-issues that all wait on each other.
+An issue can depend on other issues — on its own board, and on the boards of the projects it is
+linked to. In the issue editor, use **Depends on** to pick them; anything from another board is
+listed with that board's name. The picker only offers issues that keep the graph acyclic, so you
+cannot build a set of issues that all wait on each other.
 
 An issue with an unfinished dependency shows a **Blocked** badge; hover it to see what it is waiting
-on. Only **Done** clears a dependency — canceling a blocker does not unblock the work that needed
-it. If a blocker turns out to be unnecessary, either mark it done or delete it; deleting removes the
-dependency from everything that pointed at it.
+on, and which board that work is tracked on. Only **Done** clears a dependency — canceling a blocker
+does not unblock the work that needed it. If a blocker turns out to be unnecessary, either mark it
+done or delete it; deleting removes the dependency from everything that pointed at it, on every
+board.
 
 ## Start work
 
@@ -74,16 +76,24 @@ Select **Generate stories** to open a new Claude Fable 5 planning thread with a 
 already in the composer.
 Replace the placeholder line with the feature you want broken down, then send it.
 
-The same action is available in any project chat composer. It inserts the editable planning prompt
-into that chat; if you already typed a feature description, Atlas keeps it and adds the story
-instructions underneath.
+The same action is available in any project chat composer. It keeps that chat's current model and
+inserts the editable planning prompt; if you already typed a feature description, Atlas keeps it
+and adds the story instructions underneath. Every linked project is available to that planning
+turn, so you can ask for a feature spanning the frontend and backend without first opening either
+board.
 
 The agent thinks through the work and ends its answer with a list of stories, each with a title, a
-description, a priority, a worker model, and the stories it depends on. A valid plan has an **Add to
-board** button beneath it. Ask for changes in the same chat until the plan is right, then select that
-button to create the issues. The action is safe to retry and will not duplicate stories from the
-same response. Nothing is created until you select it, and malformed output does not offer the
-button.
+description, a priority, a worker model, and the stories it depends on. When the feature spans
+repositories, a story can name a linked project and is created on that project's board — and it can
+depend on a story from another board, so a frontend story that genuinely needs the backend change
+first waits for it. A valid plan has an **Add to board** button beneath it. Ask for changes in the
+same chat until the plan is right, then select that button to create the issues. The action is safe
+to retry and will not duplicate stories from the same response. Nothing is created until you select
+it, and malformed output does not offer the button.
+
+Once the stories are on their boards, **Autonomous mode** appears next to the button and starts a
+run on every board the plan touched, after one confirmation. Each board runs its own backlog; the
+dependencies you can now draw between them are what keeps the boards in step.
 
 Review what arrives before starting anything. The agent proposes the plan; you own it.
 
@@ -120,6 +130,9 @@ marked **Auto**, so it is always clear what you are looking at.
 - **It reviews and merges one issue at a time.** A reviewer reads the change, fixes what it finds,
   rebases onto the latest main, and merges. Because merges are serial, each review sees the work
   that landed before it.
+- **It waits on the other boards in the plan.** A story whose dependency is tracked on another
+  board stays queued until that story is merged, and the run stays on while it waits rather than
+  reporting itself finished. When the blocker lands, the story starts on its own.
 - **It parks anything it cannot finish** and keeps going with the rest.
 - **It turns itself off** when nothing is left to start and nothing is still moving.
 
@@ -131,7 +144,10 @@ of merged, and the confirmation says so before you start.
 ### Issues that need you
 
 When a worker fails, a pull request cannot be opened, or a review finishes without a confirmed
-merge, the issue is flagged and set aside. Flagged issues keep whatever status they had reached —
+merge, the issue is flagged and set aside. So is a story waiting on work nothing is going to
+finish — a blocker that is itself flagged, or one sitting on a board with no run — and the reason
+names the story and the board it is stuck behind. That is the run's dead end: it flags what it
+cannot reach and finishes, rather than staying on forever. Flagged issues keep whatever status they had reached —
 they are not moved backwards, so you can see how far the work got — and they carry a **Needs you**
 badge on the board with the reason. If a later reviewer turn reports a valid merged verdict, Atlas
 replaces that provisional flag and completes the issue.

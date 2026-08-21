@@ -284,6 +284,20 @@ export interface ProjectionSnapshotQueryShape {
   ) => Effect.Effect<Option.Option<OrchestrationIssue>, ProjectionRepositoryError>;
 
   /**
+   * Read every live issue in the environment as summaries, in creation order.
+   *
+   * The board-spanning read. An issue may depend on one tracked on another
+   * project's board, so anything reasoning about the dependency graph — the
+   * autonomous run loop deciding what it may start, and what it is still
+   * waiting for — has to see past one board. Bodies are excluded, as in every
+   * summary read, so this stays a narrow scan of a planning-layer table.
+   */
+  readonly listIssues: () => Effect.Effect<
+    ReadonlyArray<OrchestrationIssue>,
+    ProjectionRepositoryError
+  >;
+
+  /**
    * Read a project's live backlog as summaries, in creation order.
    */
   readonly listIssuesByProjectId: (

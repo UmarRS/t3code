@@ -69,12 +69,16 @@ is always manual.
 
 #### Dependency
 
-An edge from one issue to another in the same project. Dependencies are
-validated in [commandInvariants.ts][9]: the target must exist in the same
-project, an issue may not depend on itself, and the edge set must leave the
-project graph acyclic (`findIssueDependencyCycle` in the contracts). They are
-also the **start gate**: `issue.start` is rejected while any dependency is not
-`done`, so an agent never gets a worktree for work whose groundwork is missing.
+An edge from one issue to another, on its own board or on another project's:
+a plan that spans repositories orders itself across boards. Dependencies are
+validated in [commandInvariants.ts][9] over the whole environment: the target
+must be a live issue, an issue may not depend on itself, and the edge set must
+leave the graph acyclic (`findIssueDependencyCycle` in the contracts). Which
+boards a _client_ offers as candidates is narrower — the project's own and the
+ones it is linked to — and deliberately not re-decided server-side, so removing
+a link never strands an existing edge. They are also the **start gate**:
+`issue.start` is rejected while any dependency is not `done`, so an agent never
+gets a worktree for work whose groundwork is missing.
 
 #### Starting an issue
 
@@ -134,21 +138,37 @@ cannot disagree.
 #### Startable
 
 An issue autonomous mode may pick up right now: status `backlog`, not flagged
-needs-attention, no thread yet, and every dependency `done`. Defined by
-`startableAutonomousIssues` in `packages/contracts/src/issues.ts` so the server
-and any UI progress indicator agree. Everything the loop decides is derived from
+needs-attention, no thread yet, and every dependency `done` — including
+dependencies on issues another project's board tracks, which is why the loop
+reads `listIssues` (the environment) rather than one board. Defined by
+`startableAutonomousIssues` in `packages/contracts/src/issues.ts`, scoped to the
+board being evaluated, so the server and any UI progress indicator agree. Everything the loop decides is derived from
 projected state rather than memory, which is what makes it restart-safe: an
 issue that already has a thread is not startable, so a replayed event cannot
 double-start it.
 
 #### Run complete
 
-Nothing startable and nothing in `in_progress` or `in_review`
-(`isAutonomousRunComplete`). The server then auto-disables the run with reason
-`completed`, as opposed to `disabled` for a user stop, so a client can tell a
-finished run from a stopped one. Because flagged issues count as neither
-startable nor active, a backlog of nothing but parked work terminates instead of
-spinning.
+Nothing startable, nothing in `in_progress` or `in_review`, and nothing
+_waiting_ — the three answers `evaluateAutonomousRun` returns. The server then
+auto-disables the run with reason `completed`, as opposed to `disabled` for a
+user stop, so a client can tell a finished run from a stopped one. Because
+flagged issues count as none of the three, a backlog of nothing but parked work
+terminates instead of spinning.
+
+**Waiting** is what cross-board dependencies added: a board whose remaining work
+is blocked by a story another board is still working has nothing to do this tick
+but is not finished, and turning its run off would strand that work the moment
+the blocker landed. It stays live, and the event fan-out in
+`AutonomousRunReactor` re-evaluates it when an issue it depends on moves —
+`projectsForEvent` returns the moved issue's board plus every board holding a
+dependent.
+
+**Stalled** is the opposite: the blocker is flagged, canceled, or sitting in a
+backlog no run is working, so waiting cannot release it. When a run would
+otherwise complete, each stalled issue is flagged needs-attention with the
+blocker and its board named, and then the run finishes. A board never waits
+forever on work nothing is advancing.
 
 #### Merge queue
 

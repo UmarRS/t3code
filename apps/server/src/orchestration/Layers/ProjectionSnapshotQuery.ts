@@ -3236,6 +3236,17 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
       ),
     );
 
+  const listIssues: ProjectionSnapshotQueryShape["listIssues"] = () =>
+    listIssueSummaryRows(undefined).pipe(
+      Effect.map((rows) => rows.map(mapIssueSummaryRow)),
+      Effect.mapError(
+        toPersistenceSqlOrDecodeError(
+          "ProjectionSnapshotQuery.listIssues:query",
+          "ProjectionSnapshotQuery.listIssues:decodeRows",
+        ),
+      ),
+    );
+
   const listIssuesByProjectId: ProjectionSnapshotQueryShape["listIssuesByProjectId"] = (
     projectId,
   ) =>
@@ -3284,6 +3295,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
     getIssueSummaryById,
     getIssueDetailById,
     getIssueByReviewerThreadId,
+    listIssues,
     listIssuesByProjectId,
     listIssuesDueForArchive,
   } satisfies ProjectionSnapshotQueryShape;

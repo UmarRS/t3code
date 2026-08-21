@@ -9,7 +9,8 @@ import { ProjectLinkPath } from "./projectLink.ts";
  * Issues are the planning layer above threads. A project holds a backlog of
  * issues; starting one opens a thread in an isolated worktree and seeds its
  * first turn from the issue text. An issue may depend on other issues in the
- * same project, and work on it is gated until every dependency is `done`.
+ * environment — its own board's and, for a plan that spans repositories, other
+ * boards' — and work on it is gated until every dependency is `done`.
  *
  * Everything here is schema plus small pure derivations — the dependency-graph
  * check and the story-decomposition block format — so the server, the client,
@@ -283,7 +284,7 @@ End your final message with a single fenced code block tagged \`${ISSUE_DECOMPOS
 - \`priority\` (optional): one of "low", "medium", "high", "urgent".
 - \`modelSelection\` (optional only when no configured worker list was supplied): the worker to use, as \`{ "instanceId": "...", "model": "..." }\`. When configured workers were included earlier in the prompt, choose one for every story. Otherwise omit it to inherit the project's default.
 - \`project\` (optional, and only ever one of the linked projects listed earlier in this prompt): the workspace root of the repository the story's work belongs in, copied exactly as it was listed. Omit it for work in the project you were asked about — that is the default and the common case. Set it only when the story's changes genuinely land in the other repository, so each story is created on the board of the project that owns the code.
-- \`dependsOn\` (optional): keys of other stories in this same block that must be finished first. Order does not matter — you may reference a key defined later in the array. Never create a dependency cycle, and never depend on yourself. Dependencies may only name stories with the same \`project\` as the story declaring them: every board tracks its own work, so a story cannot wait on one from another repository. When one repository's work genuinely has to land first, say so in the dependent story's description instead — it will be worked by an agent that can hand work to the linked project and wait for it.
+- \`dependsOn\` (optional): keys of other stories in this same block that must be finished first. Order does not matter — you may reference a key defined later in the array. Never create a dependency cycle, and never depend on yourself. A dependency may name a story on another \`project\`: when the frontend story genuinely cannot be built until the backend story has landed, say so with \`dependsOn\` rather than in prose, and the boards hold that story until its blocker is merged. Use it only for ordering that is real — a story blocked across repositories waits for a whole other pull request to land, so parallel work with an agreed interface is usually the better plan, and the description is the place to state that interface.
 
 Emit at most ${ISSUE_DECOMPOSITION_MAX_ENTRIES} stories, emit the block only once, and put nothing but JSON inside it. Example:
 
@@ -291,7 +292,7 @@ Emit at most ${ISSUE_DECOMPOSITION_MAX_ENTRIES} stories, emit the block only onc
 [
   { "key": "schema", "title": "Add the session table", "description": "Create the migration and the row schema.", "priority": "high", "modelSelection": { "instanceId": "codex", "model": "gpt-5.6" } },
   { "key": "api", "title": "Expose session endpoints", "description": "CRUD over the new table.", "dependsOn": ["schema"] },
-  { "key": "login-ui", "title": "Build the login screen", "description": "Calls the session endpoints. The API story is planned in parallel; assume the documented request shape.", "project": "/Users/me/src/web-client" }
+  { "key": "login-ui", "title": "Build the login screen", "description": "Calls the session endpoints. Assume the request shape documented in the API story.", "project": "/Users/me/src/web-client", "dependsOn": ["api"] }
 ]
 \`\`\`
 `;
@@ -354,6 +355,10 @@ export function encodeIssueReviewBlock(block: IssueReviewBlock): string {
  * they live here so the server's reactor and any UI progress indicator agree
  * without the client re-implementing the rules.
  *
+ * They read one flat array of issues that may span boards, because a
+ * dependency may name an issue on another project's board and a run that
+ * cannot see it would start work whose groundwork is missing.
+ *
  * Archived work is out of scope for a run: `startableAutonomousIssues` only
  * ever looks at `backlog`, and `activeAutonomousIssues` only at `in_progress`
  * / `in_review`, so an issue the server has already filed away can be neither
@@ -365,56 +370,202 @@ export function encodeIssueReviewBlock(block: IssueReviewBlock): string {
 /** The shape the autonomous derivations need. Any issue summary satisfies it. */
 export interface AutonomousIssueView {
   readonly id: IssueId;
+  readonly projectId: ProjectId;
   readonly status: IssueStatus;
   readonly dependsOn: ReadonlyArray<IssueId>;
   readonly threadId?: string | null | undefined;
   readonly needsAttentionAt?: string | null | undefined;
+  /**
+   * Set when cross-project delegation filed the issue. The run loop carries
+   * such an issue whether or not its board has a run, which is why waiting on
+   * one is never a stall.
+   */
+  readonly delegatedFromThreadId?: string | null | undefined;
+}
+
+/**
+ * Which board the caller is asking about. The issue array these derivations
+ * read may span boards, because a dependency may name an issue on another
+ * project's board: every issue in the array resolves dependencies, and only
+ * the ones on `projectId` come back as results. Omitting it asks about
+ * everything passed in, which is what a single board's array already is.
+ */
+export interface AutonomousScope {
+  readonly projectId?: ProjectId | undefined;
+}
+
+function inScope(issue: AutonomousIssueView, scope: AutonomousScope | undefined): boolean {
+  return scope?.projectId === undefined || issue.projectId === scope.projectId;
+}
+
+/** Dependencies of `issue` that are neither finished nor gone, resolved across every board given. */
+function unfinishedDependencies<Issue extends AutonomousIssueView>(
+  issue: AutonomousIssueView,
+  byId: ReadonlyMap<IssueId, Issue>,
+): ReadonlyArray<Issue> {
+  return issue.dependsOn.flatMap((dependencyId) => {
+    const dependency = byId.get(dependencyId);
+    // A dependency that no longer exists does not block: deleting the blocker
+    // is how a user clears it, and this matches the manual start gate.
+    if (dependency === undefined || isIssueDependencySatisfied(dependency.status)) return [];
+    return [dependency];
+  });
 }
 
 /**
  * Issues autonomous mode may start right now: still in the backlog, not
  * flagged for a human, not already attached to a thread, and with every
- * dependency `done`. A dependency that no longer exists does not block, which
- * matches the manual start gate.
+ * dependency `done` — including dependencies on another project's board.
  *
  * Excluding flagged issues is what makes the run terminate: a failure parks its
  * issue instead of feeding it back into the startable set forever.
  */
 export function startableAutonomousIssues<Issue extends AutonomousIssueView>(
   issues: ReadonlyArray<Issue>,
+  scope?: AutonomousScope,
 ): ReadonlyArray<Issue> {
   const byId = new Map(issues.map((issue) => [issue.id, issue] as const));
   return issues.filter((issue) => {
+    if (!inScope(issue, scope)) return false;
     if (issue.status !== "backlog") return false;
     if (issueNeedsAttention(issue)) return false;
     if (issue.threadId != null) return false;
-    return issue.dependsOn.every((dependencyId) => {
-      const dependency = byId.get(dependencyId);
-      return dependency === undefined || isIssueDependencySatisfied(dependency.status);
-    });
+    return unfinishedDependencies(issue, byId).length === 0;
   });
 }
 
 /** Issues with work in flight — a worker running, or a review pending. */
 export function activeAutonomousIssues<Issue extends AutonomousIssueView>(
   issues: ReadonlyArray<Issue>,
+  scope?: AutonomousScope,
 ): ReadonlyArray<Issue> {
   return issues.filter(
     (issue) =>
+      inScope(issue, scope) &&
       !issueNeedsAttention(issue) &&
       (issue.status === "in_progress" || issue.status === "in_review"),
   );
 }
 
+/** A backlog issue held up by unfinished work, with the dependencies holding it. */
+export interface AutonomousBlockedIssue<Issue extends AutonomousIssueView> {
+  readonly issue: Issue;
+  readonly blockers: ReadonlyArray<Issue>;
+}
+
 /**
- * A run is over when there is nothing left to start and nothing still moving.
- * Whatever remains is either finished, canceled, or flagged for a human — none
- * of which autonomous mode can advance on its own.
+ * Issues a run would start if their dependencies were finished: startable in
+ * every respect except that something they wait on is not done yet. The
+ * blockers may sit on any board in the array.
  */
-export function isAutonomousRunComplete(issues: ReadonlyArray<AutonomousIssueView>): boolean {
-  return (
-    startableAutonomousIssues(issues).length === 0 && activeAutonomousIssues(issues).length === 0
-  );
+export function blockedAutonomousIssues<Issue extends AutonomousIssueView>(
+  issues: ReadonlyArray<Issue>,
+  scope?: AutonomousScope,
+): ReadonlyArray<AutonomousBlockedIssue<Issue>> {
+  const byId = new Map(issues.map((issue) => [issue.id, issue] as const));
+  return issues.flatMap((issue) => {
+    if (!inScope(issue, scope)) return [];
+    if (issue.status !== "backlog") return [];
+    if (issueNeedsAttention(issue)) return [];
+    if (issue.threadId != null) return [];
+    const blockers = unfinishedDependencies(issue, byId);
+    return blockers.length === 0 ? [] : [{ issue, blockers }];
+  });
+}
+
+/** A blocked issue whose blocker will never finish without a human. */
+export interface AutonomousStalledIssue<Issue extends AutonomousIssueView> {
+  readonly issue: Issue;
+  /** The first dependency found that nothing is going to advance. */
+  readonly blocker: Issue;
+}
+
+/**
+ * What a run should do with one board this tick.
+ *
+ * `waiting` is the state cross-board dependencies made necessary. A board whose
+ * every remaining issue waits on a story another board is still working has
+ * nothing to start and nothing in flight, but it is not finished — turning the
+ * run off there would strand that work the moment its blocker landed. So the
+ * run stays live and re-evaluates when the other board moves.
+ *
+ * `stalled` is the opposite case: the blocker is flagged for a human, canceled,
+ * or sitting in a backlog nothing is working, so no amount of waiting will
+ * release it. Those issues are the run's dead end and get flagged when the run
+ * gives up, rather than leaving a board that quietly never finishes.
+ */
+export interface AutonomousRunEvaluation<Issue extends AutonomousIssueView> {
+  readonly startable: ReadonlyArray<Issue>;
+  readonly active: ReadonlyArray<Issue>;
+  readonly waiting: ReadonlyArray<AutonomousBlockedIssue<Issue>>;
+  readonly stalled: ReadonlyArray<AutonomousStalledIssue<Issue>>;
+  /** Nothing to start, nothing moving, and nothing worth waiting for. */
+  readonly complete: boolean;
+}
+
+/**
+ * Evaluate one board, given every issue it might depend on.
+ *
+ * `isProjectAdvancing` answers whether a board is working its backlog at all —
+ * a live run, in practice. It decides the difference between waiting and
+ * stalling: a backlog blocker on a board nobody is running is a blocker that
+ * will not move on its own, however patiently this board waits for it.
+ */
+export function evaluateAutonomousRun<Issue extends AutonomousIssueView>(input: {
+  readonly projectId: ProjectId;
+  readonly issues: ReadonlyArray<Issue>;
+  readonly isProjectAdvancing: (projectId: ProjectId) => boolean;
+}): AutonomousRunEvaluation<Issue> {
+  const scope: AutonomousScope = { projectId: input.projectId };
+  const byId = new Map(input.issues.map((issue) => [issue.id, issue] as const));
+  const startable = startableAutonomousIssues(input.issues, scope);
+  const active = activeAutonomousIssues(input.issues, scope);
+
+  // Memoised depth-first walk: an issue advances when something will finish it
+  // without a human, which for a backlog issue means its own blockers advance
+  // too. `false` while a walk is in progress makes a cycle stall rather than
+  // hang; the dependency graph is kept acyclic, so that is belt and braces.
+  const advancing = new Map<IssueId, boolean>();
+  const canAdvance = (issue: Issue): boolean => {
+    const memo = advancing.get(issue.id);
+    if (memo !== undefined) return memo;
+    advancing.set(issue.id, false);
+    const result = (() => {
+      if (issueNeedsAttention(issue)) return false;
+      if (isIssueDependencySatisfied(issue.status)) return true;
+      if (issue.status === "canceled") return false;
+      // In progress or in review: a worker or a reviewer already has it.
+      if (issue.status !== "backlog") return true;
+      // A backlog issue already carrying a thread is being worked by hand.
+      if (issue.threadId != null) return true;
+      // Delegated work is carried by the run loop wherever it landed, so the
+      // target board's own switch does not decide whether it moves.
+      if (issue.delegatedFromThreadId != null) return true;
+      if (!input.isProjectAdvancing(issue.projectId)) return false;
+      return unfinishedDependencies(issue, byId).every(canAdvance);
+    })();
+    advancing.set(issue.id, result);
+    return result;
+  };
+
+  const waiting: AutonomousBlockedIssue<Issue>[] = [];
+  const stalled: AutonomousStalledIssue<Issue>[] = [];
+  for (const blocked of blockedAutonomousIssues(input.issues, scope)) {
+    const stuck = blocked.blockers.find((blocker) => !canAdvance(blocker));
+    if (stuck === undefined) {
+      waiting.push(blocked);
+    } else {
+      stalled.push({ issue: blocked.issue, blocker: stuck });
+    }
+  }
+
+  return {
+    startable,
+    active,
+    waiting,
+    stalled,
+    complete: startable.length === 0 && active.length === 0 && waiting.length === 0,
+  };
 }
 
 /**

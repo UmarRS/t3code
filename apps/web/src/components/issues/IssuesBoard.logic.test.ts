@@ -30,10 +30,15 @@ import {
   type CrossProjectIssueView,
 } from "./IssuesBoard.logic";
 
+/** The board under test, and the linked board a dependency may reach onto. */
+const BOARD = ProjectId.make("board");
+const OTHER_BOARD = ProjectId.make("other-board");
+
 function issue(
   id: string,
   overrides: {
     title?: string;
+    projectId?: ProjectId;
     status?: IssueStatus;
     priority?: IssuePriority | null;
     dependsOn?: ReadonlyArray<string>;
@@ -43,6 +48,7 @@ function issue(
 ): BoardIssue {
   return {
     id: IssueId.make(id),
+    projectId: overrides.projectId ?? BOARD,
     title: overrides.title ?? id,
     status: overrides.status ?? "backlog",
     priority: overrides.priority ?? null,
@@ -195,6 +201,26 @@ describe("resolveIssueBlockers", () => {
       ]),
     ).toBe("One, Two, Three and 1 more");
   });
+
+  // "Blocked by Expose session endpoints" reads as nonsense on a board that has
+  // no such card, so a blocker from another board is named with its board.
+  it("names the board a blocker is tracked on when it is not this one", () => {
+    expect(
+      describeIssueBlockers(
+        [issue("a", { title: "One" }), issue("b", { title: "Two", projectId: OTHER_BOARD })],
+        { projectId: BOARD, boardTitleById: new Map([[OTHER_BOARD, "Acme Web"]]) },
+      ),
+    ).toBe("One, Two (Acme Web)");
+  });
+
+  it("falls back to the bare title for a board it cannot name", () => {
+    expect(
+      describeIssueBlockers([issue("b", { title: "Two", projectId: OTHER_BOARD })], {
+        projectId: BOARD,
+        boardTitleById: new Map(),
+      }),
+    ).toBe("Two");
+  });
 });
 
 describe("resolveIssueStartDisabledReason", () => {
@@ -227,6 +253,25 @@ describe("resolveIssueStartDisabledReason", () => {
 });
 
 describe("filterIssueDependencyCandidates", () => {
+  // The pool is what this board may point at; the graph is everything, because
+  // a cycle can run through a board the picker never offers.
+  it("rejects a candidate that would close a cycle through a board it cannot offer", () => {
+    const offered = issue("a", { projectId: OTHER_BOARD, dependsOn: ["hidden"] });
+    const hidden = issue("hidden", {
+      projectId: ProjectId.make("third-board"),
+      dependsOn: ["ui"],
+    });
+    const ui = issue("ui");
+    expect(
+      filterIssueDependencyCandidates({
+        issues: [offered],
+        graph: [offered, hidden, ui],
+        issueId: IssueId.make("ui"),
+        selected: [],
+      }),
+    ).toEqual([]);
+  });
+
   it("excludes the issue itself", () => {
     const issues = [issue("a"), issue("b")];
     expect(

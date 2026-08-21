@@ -19,6 +19,7 @@ import { OrchestrationCommandInvariantError } from "./Errors.ts";
 import {
   findActiveIssueByThreadId,
   findProjectLinkOwner,
+  listActiveIssues,
   listActiveIssuesByProjectId,
   listActiveProjects,
   listThreadsByProjectId,
@@ -1629,7 +1630,6 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         readModel,
         command,
         issueId: command.issueId,
-        projectId: command.projectId,
         dependsOn,
       });
       return {
@@ -1667,7 +1667,6 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           readModel,
           command,
           issueId: issue.id,
-          projectId: issue.projectId,
           dependsOn: command.dependsOn,
         });
       }
@@ -1752,8 +1751,9 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         },
       };
       // Dangling dependencies would leave other issues gated on something the
-      // dashboard can no longer show, so the edge is removed with the issue.
-      const dependents = listActiveIssuesByProjectId(readModel, issue.projectId).filter(
+      // dashboard can no longer show, so the edge is removed with the issue —
+      // on every board, since a dependent may be tracked on another one.
+      const dependents = listActiveIssues(readModel).filter(
         (candidate) => candidate.id !== issue.id && candidate.dependsOn.includes(issue.id),
       );
       if (dependents.length === 0) {

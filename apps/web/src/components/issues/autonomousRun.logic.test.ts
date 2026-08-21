@@ -1,5 +1,6 @@
 import {
   IssueId,
+  ProjectId,
   ThreadId,
   type IssueReviewVerdict,
   type IssueStatus,
@@ -22,6 +23,10 @@ import {
   type ReviewIssueView,
 } from "./autonomousRun.logic";
 
+/** The board under test, and the linked board a plan may reach into. */
+const BOARD = ProjectId.make("board");
+const OTHER_BOARD = ProjectId.make("other-board");
+
 describe("autonomousRunActionLabel", () => {
   it("only calls a user-stopped run resumable", () => {
     expect(autonomousRunActionLabel({ kind: "finished", finishedAt: null })).toBe("Start");
@@ -33,6 +38,7 @@ function issue(
   id: string,
   overrides: {
     status?: IssueStatus;
+    projectId?: ProjectId;
     dependsOn?: ReadonlyArray<string>;
     threadId?: string | null;
     needsAttentionAt?: string | null;
@@ -41,9 +47,13 @@ function issue(
     reviewedAt?: string | null;
     updatedAt?: string;
   } = {},
-): ReviewIssueView & { readonly dependsOn: ReadonlyArray<IssueId> } {
+): ReviewIssueView & {
+  readonly projectId: ProjectId;
+  readonly dependsOn: ReadonlyArray<IssueId>;
+} {
   return {
     id: IssueId.make(id),
+    projectId: overrides.projectId ?? BOARD,
     title: id,
     status: overrides.status ?? "backlog",
     dependsOn: (overrides.dependsOn ?? []).map((value) => IssueId.make(value)),
@@ -120,6 +130,7 @@ describe("summarizeAutonomousProgress", () => {
   it("counts each lane from the shared run rules", () => {
     expect(summarizeAutonomousProgress(issues)).toEqual({
       queued: 1,
+      blocked: 1,
       inProgress: 1,
       inReview: 1,
       done: 1,
@@ -148,6 +159,7 @@ describe("summarizeAutonomousProgress", () => {
     ]);
     expect(progress).toEqual({
       queued: 0,
+      blocked: 0,
       inProgress: 0,
       inReview: 0,
       done: 0,
@@ -179,9 +191,38 @@ describe("summarizeAutonomousProgress", () => {
     expect(progress.needsAttention).toBe(1);
   });
 
+  // The board's own counts, with dependencies resolved across the environment:
+  // a story waiting on another board's work is blocked, not queued, and the
+  // other board's issues are not this board's totals.
+  it("scopes counts to one board while reading dependencies from every board", () => {
+    const progress = summarizeAutonomousProgress(
+      [
+        issue("api", { projectId: OTHER_BOARD, status: "in_progress", threadId: "thread-1" }),
+        issue("ui", { dependsOn: ["api"] }),
+      ],
+      { projectId: BOARD },
+    );
+    expect(progress.queued).toBe(0);
+    expect(progress.blocked).toBe(1);
+    expect(progress.inProgress).toBe(0);
+    expect(progress.total).toBe(1);
+  });
+
+  it("queues a story once its cross-board blocker is done", () => {
+    const progress = summarizeAutonomousProgress(
+      [
+        issue("api", { projectId: OTHER_BOARD, status: "done" }),
+        issue("ui", { dependsOn: ["api"] }),
+      ],
+      { projectId: BOARD },
+    );
+    expect(progress.queued).toBe(1);
+    expect(progress.blocked).toBe(0);
+  });
+
   it("formats a compact label and drops empty lanes", () => {
     expect(formatAutonomousProgressLabel(summarizeAutonomousProgress(issues))).toBe(
-      "1 in progress · 1 in review · 1 queued · 1 needs you · 1 done / 6",
+      "1 in progress · 1 in review · 1 queued · 1 blocked · 1 needs you · 1 done / 6",
     );
     expect(
       formatAutonomousProgressLabel(
@@ -268,6 +309,7 @@ describe("describeAutonomousRunStatus", () => {
       state: { kind: "finished", finishedAt: null },
       progress: {
         queued: 0,
+        blocked: 0,
         inProgress: 0,
         inReview: 0,
         done: 0,

@@ -193,7 +193,6 @@ export function IssuesBoardPage({
   );
 
   const columns = useMemo(() => buildIssueBoardColumns(issues), [issues]);
-  const issuesById = useMemo(() => indexIssuesById(issues), [issues]);
 
   // Delegation reaches across boards, so the far side is resolved from the
   // whole environment rather than this project's slice.
@@ -220,6 +219,9 @@ export function IssuesBoardPage({
     () => indexDelegationTargetsByOriginThread({ environmentIssues, projectTitleById }),
     [environmentIssues, projectTitleById],
   );
+  // Indexed over the environment, because a card on this board may be waiting
+  // on an issue tracked on another one.
+  const issuesById = useMemo(() => indexIssuesById(environmentIssues), [environmentIssues]);
 
   const reportFailure = useCallback((title: string, failure: unknown) => {
     const error = squashAtomCommandFailure(
@@ -603,7 +605,7 @@ export function IssuesBoardPage({
               <AutonomousRunControl
                 environmentId={environmentId}
                 projectId={projectId}
-                issues={issues}
+                issues={environmentIssues}
                 runState={runState}
                 onOpenReview={() => void openTab("review")}
               />
@@ -754,7 +756,12 @@ export function IssuesBoardPage({
                                 void openDelegationTargets(delegationLinks.targets)
                               }
                               blockedBy={
-                                blockers.length === 0 ? null : describeIssueBlockers(blockers)
+                                blockers.length === 0
+                                  ? null
+                                  : describeIssueBlockers(blockers, {
+                                      projectId,
+                                      boardTitleById: projectTitleById,
+                                    })
                               }
                               startDisabledReason={startDisabledReason}
                               starting={startingIssueId === issue.id}
@@ -788,7 +795,6 @@ export function IssuesBoardPage({
         target={dialogTarget}
         environmentId={environmentId}
         projectId={projectId}
-        issues={issues}
         onOpenChange={(open) => {
           if (!open) setDialogTarget(null);
         }}

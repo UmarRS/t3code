@@ -51,6 +51,8 @@ import { AutonomousRunReactorLive } from "./AutonomousRunReactor.ts";
 
 const NOW = "2026-01-01T00:00:00.000Z";
 const PROJECT_ID = ProjectId.make("project-1");
+/** The linked board a plan that spans repositories files its other half on. */
+const OTHER_PROJECT_ID = ProjectId.make("project-2");
 const MODEL: ModelSelection = {
   instanceId: ProviderInstanceId.make("claude"),
   model: "claude-opus-5",
@@ -283,16 +285,39 @@ const bootRun = Effect.fn("bootRun")(function* () {
       createdAt: NOW,
     });
 
-  const createIssue = (id: string, dependsOn: ReadonlyArray<string> = []) =>
+  const createIssueIn = (projectId: ProjectId, id: string, dependsOn: ReadonlyArray<string> = []) =>
     dispatch({
       type: "issue.create",
       commandId: nextCommandId(`issue-${id}`),
       issueId: IssueId.make(id),
-      projectId: PROJECT_ID,
+      projectId,
       title: `Issue ${id}`,
       description: `Body of ${id}`,
       dependsOn: dependsOn.map((entry) => IssueId.make(entry)),
       createdAt: NOW,
+    });
+
+  const createIssue = (id: string, dependsOn: ReadonlyArray<string> = []) =>
+    createIssueIn(PROJECT_ID, id, dependsOn);
+
+  /** A second board, for the plans whose stories do not all live in one repository. */
+  const createOtherProject = () =>
+    dispatch({
+      type: "project.create",
+      commandId: nextCommandId("other-project"),
+      projectId: OTHER_PROJECT_ID,
+      title: "Acme Web",
+      workspaceRoot: "/tmp/acme-web",
+      defaultModelSelection: MODEL,
+      createdAt: NOW,
+    });
+
+  const setIssueStatus = (id: string, status: "backlog" | "done") =>
+    dispatch({
+      type: "issue.status.set",
+      commandId: nextCommandId(`status-${id}`),
+      issueId: IssueId.make(id),
+      status,
     });
 
   /**
@@ -330,13 +355,15 @@ const bootRun = Effect.fn("bootRun")(function* () {
       createdAt: NOW,
     });
 
-  const enableAutonomous = () =>
+  const enableAutonomousFor = (projectId: ProjectId) =>
     dispatch({
       type: "project.autonomous.enable",
       commandId: nextCommandId("enable"),
-      projectId: PROJECT_ID,
+      projectId,
       createdAt: NOW,
     });
+
+  const enableAutonomous = () => enableAutonomousFor(PROJECT_ID);
 
   const createWorkerThread = (threadId: ThreadId, worktreePath: string, branch: string | null) =>
     dispatch({
@@ -405,10 +432,14 @@ const bootRun = Effect.fn("bootRun")(function* () {
     dispatch,
     nextCommandId,
     createProject,
+    createOtherProject,
     createIssue,
+    createIssueIn,
+    setIssueStatus,
     createDelegatedIssue,
     startIssueDirectly,
     enableAutonomous,
+    enableAutonomousFor,
     createWorkerThread,
     endTurn,
     receiptsWhile,
@@ -439,6 +470,90 @@ describe("AutonomousRunReactor", () => {
       // Autonomous work is forced into a mode that cannot stop to ask a human.
       expect(a?.command.runtimeMode).toBe("full-access");
       expect(a?.command.interactionMode).toBe("default");
+    }).pipe(Effect.scoped, Effect.provide(harness.layer));
+  });
+
+  // A plan that spans two repositories: the frontend story waits on the
+  // backend story, and the two are tracked on different boards.
+  it.effect("holds a story whose blocker is on another board, without finishing", () => {
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      const run = yield* bootRun();
+      yield* run.createProject();
+      yield* run.createOtherProject();
+      yield* run.createIssueIn(OTHER_PROJECT_ID, "issue-api");
+      yield* run.createIssue("issue-ui", ["issue-api"]);
+      yield* run.enableAutonomousFor(OTHER_PROJECT_ID);
+      yield* run.enableAutonomous();
+      yield* run.reactor.drain;
+
+      // Only the blocker runs; the story waiting on it is left alone.
+      expect(harness.started.map((entry) => entry.command.issueId)).toEqual([
+        IssueId.make("issue-api"),
+      ]);
+      // And the waiting board stays switched on: turning it off here would
+      // strand the story the moment its blocker landed.
+      const project = yield* run.snapshotQuery.getProjectShellById(PROJECT_ID);
+      expect(Option.getOrThrow(project).autonomousStartedAt).not.toBeNull();
+      const waiting = yield* run.findIssue("issue-ui");
+      expect(waiting?.status).toBe("backlog");
+      expect(waiting?.needsAttentionAt ?? null).toBeNull();
+    }).pipe(Effect.scoped, Effect.provide(harness.layer));
+  });
+
+  it.effect("starts the waiting story once the other board's blocker is done", () => {
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      const run = yield* bootRun();
+      yield* run.createProject();
+      yield* run.createOtherProject();
+      yield* run.createIssueIn(OTHER_PROJECT_ID, "issue-api");
+      yield* run.createIssue("issue-ui", ["issue-api"]);
+      yield* run.enableAutonomousFor(OTHER_PROJECT_ID);
+      yield* run.enableAutonomous();
+      yield* run.reactor.drain;
+
+      // The blocker lands. Nothing on this board changed, so only the fan-out
+      // to the boards that depend on it can wake this run. Two receipts follow:
+      // the blocker's own board finishes, and this one starts the story that
+      // was waiting. Waiting on them rather than draining is what makes the
+      // hand-off observable instead of timing-dependent.
+      const seen = yield* run.collectReceiptsWhile(2, run.setIssueStatus("issue-api", "done"));
+      yield* run.reactor.drain;
+
+      expect(
+        seen.some(
+          (receipt) =>
+            receipt.type === "autonomous.issue.started" &&
+            receipt.issueId === IssueId.make("issue-ui"),
+        ),
+      ).toBe(true);
+      expect(harness.started.map((entry) => entry.command.issueId)).toContain(
+        IssueId.make("issue-ui"),
+      );
+    }).pipe(Effect.scoped, Effect.provide(harness.layer));
+  });
+
+  // The dead end: nothing is running the board that owns the blocker, so no
+  // amount of waiting releases the work. Say so and finish.
+  it.effect("flags a story stuck behind a board nobody is running, then finishes", () => {
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      const run = yield* bootRun();
+      yield* run.createProject();
+      yield* run.createOtherProject();
+      yield* run.createIssueIn(OTHER_PROJECT_ID, "issue-api");
+      yield* run.createIssue("issue-ui", ["issue-api"]);
+      yield* run.enableAutonomous();
+      yield* run.reactor.drain;
+
+      expect(harness.started).toEqual([]);
+      const stuck = yield* run.findIssue("issue-ui");
+      expect(stuck?.needsAttentionAt).not.toBeNull();
+      expect(stuck?.needsAttentionReason).toContain("Acme Web");
+      const project = yield* run.snapshotQuery.getProjectShellById(PROJECT_ID);
+      expect(Option.getOrThrow(project).autonomousStartedAt).toBeNull();
+      expect(Option.getOrThrow(project).autonomousFinishedReason).toBe("completed");
     }).pipe(Effect.scoped, Effect.provide(harness.layer));
   });
 

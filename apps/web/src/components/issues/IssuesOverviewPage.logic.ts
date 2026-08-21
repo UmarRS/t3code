@@ -42,6 +42,18 @@ export function projectMatchesOverviewQuery(
     .some((value) => value.toLocaleLowerCase().includes(normalized));
 }
 
+/**
+ * One environment's issues. What a board's run readout reads: a dependency may
+ * name an issue on another project's board, so the derivation needs the
+ * environment even when it is summarising a single project.
+ */
+export function issuesForEnvironment(
+  issues: ReadonlyArray<ScopedIssue>,
+  environmentId: EnvironmentProject["environmentId"],
+): ReadonlyArray<OrchestrationIssue> {
+  return issues.filter((issue) => issue.environmentId === environmentId);
+}
+
 /** Project ids are only unique within an environment. */
 export function issuesForProject(
   issues: ReadonlyArray<ScopedIssue>,

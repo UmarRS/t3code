@@ -218,6 +218,7 @@ describe("OrchestrationEngine", () => {
           getIssueSummaryById: () => Effect.succeed(Option.none()),
           getIssueDetailById: () => Effect.succeed(Option.none()),
           getIssueByReviewerThreadId: () => Effect.succeed(Option.none()),
+          listIssues: () => Effect.succeed([]),
           listIssuesByProjectId: () => Effect.succeed([]),
           listIssuesDueForArchive: () => Effect.succeed([]),
         }),

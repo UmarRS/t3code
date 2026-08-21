@@ -19,7 +19,8 @@ import { useEffect, useMemo, useState } from "react";
 
 import { cn, newIssueId } from "~/lib/utils";
 import { deriveProviderInstanceEntries, isProviderInstancePickerReady } from "~/providerInstances";
-import { issueEnvironment } from "~/state/issues";
+import { useProjects } from "~/state/entities";
+import { issueEnvironment, useEnvironmentIssues } from "~/state/issues";
 import { primaryServerProvidersAtom } from "~/state/server";
 import { useEnvironmentQuery } from "~/state/query";
 import { useAtomCommand } from "~/state/use-atom-command";
@@ -43,6 +44,7 @@ import {
   ISSUE_PRIORITY_LABEL,
   ISSUE_PRIORITY_ORDER,
 } from "./IssuesBoard.logic";
+import { useDecompositionRoutingTargets } from "./useDecompositionRoutingTargets";
 
 const NO_PRIORITY_VALUE = "none";
 const INHERIT_MODEL_VALUE = "inherit";
@@ -56,7 +58,6 @@ interface IssueDialogProps {
   readonly target: IssueDialogTarget | null;
   readonly environmentId: EnvironmentId;
   readonly projectId: ProjectId;
-  readonly issues: ReadonlyArray<OrchestrationIssue>;
   readonly onOpenChange: (open: boolean) => void;
 }
 
@@ -65,13 +66,7 @@ interface IssueDialogProps {
  * the shell snapshot, so editing fetches it once per open and seeds the form
  * from the point read.
  */
-export function IssueDialog({
-  target,
-  environmentId,
-  projectId,
-  issues,
-  onOpenChange,
-}: IssueDialogProps) {
+export function IssueDialog({ target, environmentId, projectId, onOpenChange }: IssueDialogProps) {
   const open = target !== null;
   const editingIssue = target?.issue ?? null;
   const [draftIssueId, setDraftIssueId] = useState<IssueId>(newIssueId);
@@ -139,14 +134,49 @@ export function IssueDialog({
   }, [open]);
 
   const issueId = editingIssue?.id ?? draftIssueId;
+  const environmentIssues = useEnvironmentIssues(environmentId);
+  const linkedProjects = useDecompositionRoutingTargets({ environmentId, projectId });
+  const projects = useProjects();
+  const boardTitleById = useMemo(
+    () =>
+      new Map(
+        projects
+          .filter((entry) => entry.environmentId === environmentId)
+          .map((entry) => [entry.id, entry.title] as const),
+      ),
+    [environmentId, projects],
+  );
+  /**
+   * What this issue may wait on: its own board and the linked ones, since a
+   * plan that spans repositories orders itself across their boards. Anything
+   * already selected stays offered wherever it lives — a link removed after the
+   * fact must not quietly drop a dependency the user set.
+   */
+  const dependencyPool = useMemo(() => {
+    const allowed = new Set<ProjectId>([projectId, ...linkedProjects.map((entry) => entry.id)]);
+    return environmentIssues.filter(
+      (issue) => allowed.has(issue.projectId) || dependsOn.includes(issue.id),
+    );
+  }, [dependsOn, environmentIssues, linkedProjects, projectId]);
   const dependencyCandidates = useMemo(
-    () => filterIssueDependencyCandidates({ issues, issueId, selected: dependsOn }),
-    [dependsOn, issueId, issues],
+    () =>
+      filterIssueDependencyCandidates({
+        issues: dependencyPool,
+        // The cycle check reads the whole environment: a cycle may run through
+        // a board this picker never offers.
+        graph: environmentIssues,
+        issueId,
+        selected: dependsOn,
+      }),
+    [dependencyPool, dependsOn, environmentIssues, issueId],
   );
   const selectedDependencies = useMemo(
-    () => issues.filter((issue) => dependsOn.includes(issue.id)),
-    [dependsOn, issues],
+    () => environmentIssues.filter((issue) => dependsOn.includes(issue.id)),
+    [dependsOn, environmentIssues],
   );
+  /** The board a dependency lives on, when it is not this one. */
+  const foreignBoardTitle = (candidate: OrchestrationIssue) =>
+    candidate.projectId === projectId ? null : (boardTitleById.get(candidate.projectId) ?? null);
 
   const trimmedTitle = title.trim();
   const canSubmit = trimmedTitle.length > 0 && !submitting;
@@ -324,6 +354,11 @@ export function IssueDialog({
                         }}
                       >
                         <span className="truncate">{candidate.title}</span>
+                        {foreignBoardTitle(candidate) === null ? null : (
+                          <span className="ml-auto shrink-0 pl-2 text-muted-foreground text-xs">
+                            {foreignBoardTitle(candidate)}
+                          </span>
+                        )}
                       </MenuCheckboxItem>
                     );
                   })}
@@ -386,7 +421,12 @@ export function IssueDialog({
                     }}
                   >
                     <CheckIcon className="size-3 shrink-0" />
-                    <span className="truncate">{dependency.title}</span>
+                    <span className="truncate">
+                      {dependency.title}
+                      {foreignBoardTitle(dependency) === null
+                        ? ""
+                        : ` (${foreignBoardTitle(dependency)})`}
+                    </span>
                   </button>
                 </li>
               ))}

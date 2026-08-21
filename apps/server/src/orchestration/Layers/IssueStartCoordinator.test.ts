@@ -145,6 +145,7 @@ function makeHarness(options?: HarnessOptions) {
       Effect.succeed(options?.issueMissing === true ? Option.none() : Option.some(ISSUE_DETAIL)),
     getProjectShellById: () => Effect.succeed(Option.some(PROJECT_SHELL)),
     getProjectLinksById: () => Effect.succeed([]),
+    listIssues: () => Effect.succeed([ISSUE_DETAIL]),
     listIssuesByProjectId: () => Effect.succeed([ISSUE_DETAIL]),
   } as never);
 

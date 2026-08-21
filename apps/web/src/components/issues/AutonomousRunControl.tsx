@@ -54,6 +54,10 @@ export function AutonomousRunControl({
 }: {
   readonly environmentId: EnvironmentId;
   readonly projectId: ProjectId;
+  /**
+   * The environment's issues, not just this board's: a dependency may name an
+   * issue another board tracks, and the readout scopes itself to `projectId`.
+   */
   readonly issues: ReadonlyArray<OrchestrationIssue>;
   readonly runState: AutonomousRunState;
   readonly onOpenReview: () => void;
@@ -71,7 +75,10 @@ export function AutonomousRunControl({
   const [confirming, setConfirming] = useState<"enable" | "stop" | null>(null);
   const [pending, setPending] = useState(false);
 
-  const progress = useMemo(() => summarizeAutonomousProgress(issues), [issues]);
+  const progress = useMemo(
+    () => summarizeAutonomousProgress(issues, { projectId }),
+    [issues, projectId],
+  );
   const status = useMemo(
     () => describeAutonomousRunStatus({ progress, state: runState }),
     [progress, runState],

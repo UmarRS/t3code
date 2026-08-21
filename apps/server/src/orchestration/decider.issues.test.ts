@@ -175,7 +175,29 @@ it.layer(NodeServices.layer)("issue decider", (it) => {
       }),
     );
 
-    it.effect("rejects a dependency from another project", () =>
+    // A plan that spans repositories files each story on the board that owns
+    // the code and orders them with dependencies that cross between boards.
+    it.effect("accepts a dependency on an issue from another project", () =>
+      Effect.gen(function* () {
+        const events = yield* decide(
+          {
+            type: "issue.create",
+            commandId: CommandId.make("cmd-create"),
+            issueId: IssueId.make("issue-2"),
+            projectId: PROJECT_ID,
+            title: "Ship the thing",
+            dependsOn: [IssueId.make("issue-foreign")],
+            createdAt: NOW,
+          },
+          makeReadModel([issue("issue-foreign", { projectId: OTHER_PROJECT_ID })]),
+        );
+        const created = events[0];
+        expect(created?.type).toBe("issue.created");
+        expect(created?.payload).toMatchObject({ dependsOn: [IssueId.make("issue-foreign")] });
+      }),
+    );
+
+    it.effect("rejects a dependency that names no live issue", () =>
       Effect.gen(function* () {
         const error = yield* Effect.flip(
           decide(
@@ -185,13 +207,13 @@ it.layer(NodeServices.layer)("issue decider", (it) => {
               issueId: IssueId.make("issue-2"),
               projectId: PROJECT_ID,
               title: "Ship the thing",
-              dependsOn: [IssueId.make("issue-foreign")],
+              dependsOn: [IssueId.make("issue-gone")],
               createdAt: NOW,
             },
-            makeReadModel([issue("issue-foreign", { projectId: OTHER_PROJECT_ID })]),
+            makeReadModel([]),
           ),
         );
-        expect(invariantDetail(error)).toContain("is not an issue in project");
+        expect(invariantDetail(error)).toContain("is not a live issue");
       }),
     );
 

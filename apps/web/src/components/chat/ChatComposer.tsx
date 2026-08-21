@@ -108,6 +108,7 @@ import { basenameOfPath } from "../../pierre-icons";
 import { cn, randomUUID } from "~/lib/utils";
 import { useProject } from "~/state/entities";
 import { prepareIssueDecompositionPrompt } from "../issues/IssuesBoard.logic";
+import { useDecompositionRoutingTargets } from "../issues/useDecompositionRoutingTargets";
 import { Separator } from "../ui/separator";
 
 type ComposerCommandMenuPosition = {
@@ -211,7 +212,6 @@ import {
   applyProviderInstanceSettings,
   deriveProviderInstanceEntries,
   NO_PROVIDER_MODEL_SELECTION,
-  resolvePlanningModelSelection,
   resolveProviderDriverKindForInstanceSelection,
   resolveSelectableProviderInstanceEntry,
   sortProviderInstanceEntries,
@@ -721,7 +721,6 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
   const nonPersistedComposerImageIds = composerDraft.nonPersistedImageIds;
 
   const setComposerDraftPrompt = useComposerDraftStore((store) => store.setPrompt);
-  const setComposerDraftModelSelection = useComposerDraftStore((store) => store.setModelSelection);
   const addComposerDraftImage = useComposerDraftStore((store) => store.addImage);
   const addComposerDraftImages = useComposerDraftStore((store) => store.addImages);
   const removeComposerDraftImage = useComposerDraftStore((store) => store.removeImage);
@@ -788,6 +787,10 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     environmentId,
   ]);
   const generateStoriesProject = useProject(generateStoriesProjectRef);
+  // A chat may plan work for any board linked to its project. Giving Fable the
+  // canonical roots and link descriptions lets it put backend stories on the
+  // backend board instead of defaulting every story to the chat's board.
+  const generateStoriesRoutingTargets = useDecompositionRoutingTargets(generateStoriesProjectRef);
   const generateStoriesAvailableModels = useMemo(
     () =>
       providerStatuses.flatMap((provider) =>
@@ -1282,32 +1285,19 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
 
   const prepareGenerateStoriesPrompt = useCallback(() => {
     if (!generateStoriesProject) return;
-    const planningModelSelection = resolvePlanningModelSelection(providerStatuses);
-    if (planningModelSelection === null) {
-      toastManager.add({
-        type: "error",
-        title: "Fable is unavailable",
-        description: "Enable a Claude provider with Claude Fable 5 to generate stories.",
-      });
-      return;
-    }
-    setComposerDraftModelSelection(composerDraftTarget, planningModelSelection, {
-      replaceOptions: true,
-    });
     setPromptFromTraits(
       prepareIssueDecompositionPrompt({
         promptText: promptRef.current,
         projectTitle: generateStoriesProject.title,
         availableModels: generateStoriesAvailableModels,
+        linkedProjects: generateStoriesRoutingTargets,
       }),
     );
   }, [
-    composerDraftTarget,
     generateStoriesAvailableModels,
     generateStoriesProject,
+    generateStoriesRoutingTargets,
     promptRef,
-    providerStatuses,
-    setComposerDraftModelSelection,
     setPromptFromTraits,
   ]);
 

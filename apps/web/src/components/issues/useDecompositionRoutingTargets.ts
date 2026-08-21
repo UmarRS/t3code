@@ -26,13 +26,17 @@ const EMPTY: ReadonlyArray<DecompositionRoutingTarget> = Object.freeze([]);
  * Paths come from the target project itself rather than the link, so the agent
  * is handed one canonical spelling of each root to copy into a story.
  */
-export function useDecompositionRoutingTargets(ref: {
-  readonly environmentId: EnvironmentId;
-  readonly projectId: ProjectId;
-}): ReadonlyArray<DecompositionRoutingTarget> {
+export function useDecompositionRoutingTargets(
+  ref: {
+    readonly environmentId: EnvironmentId;
+    readonly projectId: ProjectId;
+  } | null,
+): ReadonlyArray<DecompositionRoutingTarget> {
   const projects = useProjects();
-  const { environmentId, projectId } = ref;
+  const environmentId = ref?.environmentId ?? null;
+  const projectId = ref?.projectId ?? null;
   return useMemo(() => {
+    if (environmentId === null || projectId === null) return EMPTY;
     const scoped = projects.filter((candidate) => candidate.environmentId === environmentId);
     const project = scoped.find((candidate) => candidate.id === projectId);
     if (project === undefined) return EMPTY;

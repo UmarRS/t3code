@@ -28,6 +28,7 @@ import { AutonomousRunControl } from "./AutonomousRunControl";
 import { resolveAutonomousRunState } from "./autonomousRun.logic";
 import { ISSUE_STATUS_COLUMNS } from "./IssuesBoard.logic";
 import {
+  issuesForEnvironment,
   issuesForProject,
   projectAccent,
   projectMatchesOverviewQuery,
@@ -249,6 +250,9 @@ export function IssuesOverviewPage() {
                 const selectedAccent = accentByProjectKey[key];
                 const accent = PROJECT_ACCENT_CLASSES[selectedAccent ?? generatedAccent];
                 const issues = issuesForProject(allIssues, project);
+                // The run readout reaches past this board: a story here may be
+                // waiting on one another board is working.
+                const environmentIssues = issuesForEnvironment(allIssues, project.environmentId);
                 const runState = resolveAutonomousRunState(project);
                 const activeIssues = issues.filter((issue) => issue.status !== "archived");
                 const needsAttention = issues.filter(issueNeedsAttention).length;
@@ -433,7 +437,7 @@ export function IssuesOverviewPage() {
                         <AutonomousRunControl
                           environmentId={project.environmentId}
                           projectId={project.id}
-                          issues={issues}
+                          issues={environmentIssues}
                           runState={runState}
                           onOpenReview={() => void openReview()}
                           listenForExternalPrompt={false}

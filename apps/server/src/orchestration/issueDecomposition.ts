@@ -5,7 +5,6 @@ import {
   type IssuePriority,
   type ModelSelection,
 } from "@t3tools/contracts";
-import { findCrossProjectDependency } from "@t3tools/shared/issueDecompositionRouting";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 
@@ -96,17 +95,6 @@ export const parseIssueDecomposition = Effect.fn("parseIssueDecomposition")(func
         } as const;
       }
     }
-  }
-
-  // Every board validates dependencies against its own backlog, so a story can
-  // never wait on one filed elsewhere. Caught here rather than at creation
-  // time, where it would leave half the plan on the board.
-  const crossProject = findCrossProjectDependency(decoded.entries);
-  if (crossProject !== null) {
-    return {
-      kind: "invalid",
-      detail: `Story '${crossProject.key}' depends on '${crossProject.dependencyKey}', which is on another project's board. Dependencies must stay within one project.`,
-    } as const;
   }
 
   // Emitted in dependency order so the caller can create the issues one by one
