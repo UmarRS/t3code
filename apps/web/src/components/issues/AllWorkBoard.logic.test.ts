@@ -4,6 +4,7 @@ import { describe, expect, it } from "vite-plus/test";
 import {
   allWorkColumnsAreEmpty,
   allWorkIssueMatchesQuery,
+  allWorkIssueReference,
   buildAllWorkColumns,
   type AllWorkIssue,
 } from "./AllWorkBoard.logic";
@@ -80,5 +81,24 @@ describe("allWorkColumnsAreEmpty", () => {
   it("is true only when nothing survived the filter", () => {
     expect(allWorkColumnsAreEmpty(buildAllWorkColumns([]))).toBe(true);
     expect(allWorkColumnsAreEmpty(buildAllWorkColumns([issue("a", "done")]))).toBe(false);
+  });
+});
+
+describe("allWorkIssueReference", () => {
+  it("names the branch, with the pull request number once there is one", () => {
+    expect(allWorkIssueReference({ branch: "issue/abc", pullRequestUrl: null })).toBe("issue/abc");
+    expect(
+      allWorkIssueReference({
+        branch: "issue/abc",
+        pullRequestUrl: "https://github.com/UmarRS/t3code/pull/23",
+      }),
+    ).toBe("issue/abc #23");
+  });
+
+  it("has nothing to say about work that has not started", () => {
+    expect(allWorkIssueReference({ branch: null, pullRequestUrl: null })).toBe(null);
+    expect(allWorkIssueReference({ branch: undefined, pullRequestUrl: "https://x/pull/1" })).toBe(
+      null,
+    );
   });
 });

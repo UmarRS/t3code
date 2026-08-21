@@ -70,6 +70,23 @@ export function autonomousRunActionLabel(state: AutonomousRunState): string {
   }
 }
 
+/**
+ * The switch's label where the surrounding UI already names autonomous mode —
+ * the overview's Agent column says what the run is doing, so its button only
+ * has to say what pressing it does.
+ */
+export function autonomousRunCompactActionLabel(state: AutonomousRunState): string {
+  switch (state.kind) {
+    case "running":
+      return "Stop";
+    case "stopped":
+      return "Resume";
+    case "finished":
+    case "idle":
+      return "Start";
+  }
+}
+
 export interface AutonomousProgress {
   /** Backlog issues the run can pick up right now. */
   readonly queued: number;

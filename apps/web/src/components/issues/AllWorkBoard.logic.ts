@@ -55,3 +55,27 @@ export function allWorkColumnsAreEmpty(
 ): boolean {
   return columns.every((column) => column.issues.length === 0);
 }
+
+/**
+ * The "#23" a pull request URL ends with, for the card's reference line.
+ * Provider-agnostic: GitHub, GitLab and Azure all put the number last.
+ */
+export function pullRequestNumberLabel(url: string | null | undefined): string | null {
+  if (url == null) return null;
+  const match = /\/(\d+)(?:[/?#].*)?$/.exec(url.trim());
+  return match?.[1] === undefined ? null : `#${match[1]}`;
+}
+
+/**
+ * What a card shows under its title: the branch the work lives on, with the
+ * pull request number once one exists. Null for work that has not started —
+ * there is no branch to name yet, and inventing one would read as a lie.
+ */
+export function allWorkIssueReference(input: {
+  readonly branch: string | null | undefined;
+  readonly pullRequestUrl: string | null | undefined;
+}): string | null {
+  if (!input.branch) return null;
+  const pullRequest = pullRequestNumberLabel(input.pullRequestUrl);
+  return pullRequest === null ? input.branch : `${input.branch} ${pullRequest}`;
+}
