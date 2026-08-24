@@ -259,7 +259,7 @@ function makeHarness(options?: {
       }),
   });
 
-  const layer = AutonomousRunReactorLive.pipe(
+  const reactorLayer = AutonomousRunReactorLive.pipe(
     Layer.provide(classifierLayer),
     Layer.provideMerge(coordinatorLayer),
     Layer.provideMerge(orchestrationLayer),
@@ -271,10 +271,13 @@ function makeHarness(options?: {
     Layer.provideMerge(gitLayer),
     Layer.provideMerge(ServerConfig.layerTest(process.cwd(), process.cwd())),
     Layer.provideMerge(NodeServices.layer),
-    // Retry backoffs are minutes long. Scenarios that wait one out drive the
-    // clock instead, so the wait is named rather than slept through.
-    ...(options?.testClock === true ? [Layer.provideMerge(TestClock.layer())] : []),
   );
+  // Retry backoffs are minutes long. Scenarios that wait one out drive the
+  // clock instead, so the wait is named rather than slept through.
+  const layer =
+    options?.testClock === true
+      ? Layer.provideMerge(reactorLayer, TestClock.layer())
+      : reactorLayer;
 
   return {
     layer,

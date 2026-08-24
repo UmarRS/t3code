@@ -153,6 +153,16 @@ const make = Effect.gen(function* () {
    */
   const reviewRetriesPending = new Set<string>();
 
+  /**
+   * Put a review back in the merge queue. Bound to the queue's own `enqueue`
+   * once it exists, and declared here because the retry closes a cycle
+   * TypeScript cannot infer through: `processMergeItem` hands a provider
+   * failure to the retry, the retry re-queues, and the queue is built out of
+   * `processMergeItem`. This is the one link in it that is declared rather
+   * than inferred.
+   */
+  let enqueueMergeItem: (item: MergeItem) => Effect.Effect<void> = () => Effect.void;
+
   const flagNeedsAttention = Effect.fn("flagNeedsAttention")(function* (
     issueId: IssueId,
     reason: string,
@@ -1007,12 +1017,14 @@ const make = Effect.gen(function* () {
         }),
       ),
       Effect.andThen(
-        mergeQueue.enqueue({
-          issueId,
-          resumeReviewerThreadId: reviewerThreadId,
-          attempt: nextAttempt,
-          previousFailure: detail,
-        }),
+        Effect.suspend(() =>
+          enqueueMergeItem({
+            issueId,
+            resumeReviewerThreadId: reviewerThreadId,
+            attempt: nextAttempt,
+            previousFailure: detail,
+          }),
+        ),
       ),
       Effect.forkScoped,
     );
@@ -1083,6 +1095,7 @@ const make = Effect.gen(function* () {
       }),
     ),
   );
+  enqueueMergeItem = mergeQueue.enqueue;
 
   /**
    * The boards an event should re-evaluate.
