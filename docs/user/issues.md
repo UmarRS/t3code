@@ -94,14 +94,22 @@ and adds the story instructions underneath. Every linked project is available to
 turn, so you can ask for a feature spanning the frontend and backend without first opening either
 board.
 
+The planning turn is given the stories already on those boards, so a second pass plans around what
+is there rather than filing it again. It can say that a new story waits on one already tracked, it
+can rewrite a story you have not started yet, and it can retire the ones a new plan replaces. Work
+that has started, is in review, is finished, or is flagged for you is read-only: the plan may
+depend on it and nothing more, and a plan that tries to rewrite it offers no button at all.
+
 The agent thinks through the work and ends its answer with a list of stories, each with a title, a
 description, a priority, a worker model, and the stories it depends on. When the feature spans
 repositories, a story can name a linked project and is created on that project's board — and it can
 depend on a story from another board, so a frontend story that genuinely needs the backend change
-first waits for it. A valid plan has an **Add to board** button beneath it. Ask for changes in the
-same chat until the plan is right, then select that button to create the issues. The action is safe
-to retry and will not duplicate stories from the same response. Nothing is created until you select
-it, and malformed output does not offer the button.
+first waits for it. A valid plan has an **Add to board** button beneath it, above a breakdown of
+what applying it would do: what it creates, what it rewrites — naming the story being rewritten —
+and what it cancels. Ask for changes in the same chat until the plan is right, then select that
+button. The action is safe to retry, will not duplicate stories from the same response, and leaves
+the board where it is if you apply the same plan twice. Nothing changes until you select it, and
+malformed output does not offer the button.
 
 Once the stories are on their boards, **Autonomous mode** appears next to the button and starts a
 run on every board the plan touched, after one confirmation. Each board runs its own backlog; the

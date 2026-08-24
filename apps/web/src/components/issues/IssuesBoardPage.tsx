@@ -46,7 +46,12 @@ import {
 } from "~/providerInstances";
 import { useSidebarProjectPrefsStore } from "~/sidebarProjectPrefsStore";
 import { useProject, useProjects, useThreadShells } from "~/state/entities";
-import { issueEnvironment, useEnvironmentIssues, useProjectIssues } from "~/state/issues";
+import {
+  issueEnvironment,
+  readEnvironmentIssues,
+  useEnvironmentIssues,
+  useProjectIssues,
+} from "~/state/issues";
 import { useEnvironmentQuery } from "~/state/query";
 import { primaryServerProvidersAtom, primaryServerSettingsAtom } from "~/state/server";
 import { threadEnvironment } from "~/state/threads";
@@ -95,6 +100,7 @@ import { useDecompositionRoutingTargets } from "./useDecompositionRoutingTargets
 import { useIssueAttentionActions } from "./useIssueAttentionActions";
 import {
   buildIssueBoardColumns,
+  buildIssueDecompositionBoardContext,
   buildIssueDecompositionPrompt,
   countDelegationTargetProjects,
   describeDelegationTargetProjects,
@@ -425,10 +431,26 @@ export function IssuesBoardPage({
               }))
             : [],
         ),
-        linkedProjects: routingTargets.filter((target) => scopedProjectIds.has(target.id)),
+        // Read rather than subscribed: what the boards hold matters at the
+        // moment the prompt is written, and nothing here should re-render
+        // every time an issue moves.
+        ...buildIssueDecompositionBoardContext({
+          issues: readEnvironmentIssues(environmentId),
+          projectId,
+          linkedProjects: routingTargets.filter((target) => scopedProjectIds.has(target.id)),
+        }),
       }),
     );
-  }, [handleNewThread, project, projectRef, providers, routingTargets, scopedProjectIds]);
+  }, [
+    environmentId,
+    handleNewThread,
+    project,
+    projectId,
+    projectRef,
+    providers,
+    routingTargets,
+    scopedProjectIds,
+  ]);
 
   const openThreadById = useCallback(
     async (threadId: ThreadId) => {

@@ -9,14 +9,12 @@ import {
   type MessageId,
   type ProjectId,
 } from "@t3tools/contracts";
-import {
-  groupDecompositionEntriesByProject,
-  type DecompositionRoutingProject,
-} from "@t3tools/shared/issueDecompositionRouting";
+import { type DecompositionRoutingProject } from "@t3tools/shared/issueDecompositionRouting";
 import { useAtomValue } from "@effect/atom-react";
 import { BotIcon, CheckIcon, ListPlusIcon, TriangleAlertIcon } from "lucide-react";
 import { useMemo, useState } from "react";
 
+import { cn } from "~/lib/utils";
 import { useProjects } from "~/state/entities";
 import { issueEnvironment, useEnvironmentIssues } from "~/state/issues";
 import { projectEnvironment } from "~/state/projects";
@@ -35,16 +33,54 @@ import { Button } from "../ui/button";
 import { Spinner } from "../ui/spinner";
 import { stackedThreadToast, toastManager } from "../ui/toast";
 import { hasAutonomousReviewerProvider } from "./autonomousRun.logic";
-import { issueIdForDecompositionEntry } from "./issueDecompositionImport.logic";
+import {
+  isIssueDecompositionImportApplied,
+  planIssueDecompositionImport,
+  type IssueDecompositionImportGroup,
+} from "./issueDecompositionImport.logic";
 import { useDecompositionRoutingTargets } from "./useDecompositionRoutingTargets";
 
 /** "3 in Atlas and 2 in web-client", for a plan that spans boards. */
 function describeGroupCounts(
-  groups: ReadonlyArray<{ readonly title: string; readonly entries: ReadonlyArray<unknown> }>,
+  groups: ReadonlyArray<{ readonly title: string; readonly count: number }>,
 ): string {
-  const parts = groups.map((group) => `${group.entries.length} in ${group.title}`);
+  const parts = groups.map((group) => `${group.count} in ${group.title}`);
   if (parts.length <= 1) return parts[0] ?? "";
   return `${parts.slice(0, -1).join(", ")} and ${parts[parts.length - 1]}`;
+}
+
+/** How many stories one section lists before the rest become a count. */
+const SECTION_PREVIEW_LIMIT = 6;
+
+/**
+ * One of the three things applying can do, listed so the user reads the whole
+ * change — including the stories it retires — before pressing the button.
+ */
+function PlanSection({
+  label,
+  items,
+}: {
+  readonly label: string;
+  readonly items: ReadonlyArray<{ readonly id: string; readonly text: string }>;
+}) {
+  if (items.length === 0) return null;
+  const shown = items.slice(0, SECTION_PREVIEW_LIMIT);
+  const omitted = items.length - shown.length;
+  return (
+    <div className="min-w-0">
+      <p className="text-xs font-medium text-foreground">
+        {label} · {items.length}
+      </p>
+      <ul className="mt-0.5 space-y-0.5">
+        {shown.map((item) => (
+          <li key={item.id} className="truncate text-xs text-muted-foreground">
+            {item.text}
+          </li>
+        ))}
+        {omitted > 0 ? <li className="text-xs text-muted-foreground">and {omitted} more</li> : null}
+      </ul>
+    </div>
+  );
 }
 
 export function IssueDecompositionImportCard({
@@ -60,10 +96,13 @@ export function IssueDecompositionImportCard({
 }) {
   const projects = useProjects();
   // The whole environment, not this project: stories routed to a linked board
-  // are already-created there and must not be offered a second time.
+  // are already-created there and must not be offered a second time, and a
+  // revision names issues that may sit on any board the plan reaches.
   const issues = useEnvironmentIssues(environmentId);
   const linkedProjects = useDecompositionRoutingTargets({ environmentId, projectId });
   const createIssue = useAtomCommand(issueEnvironment.create, { reportFailure: false });
+  const updateIssue = useAtomCommand(issueEnvironment.update, { reportFailure: false });
+  const setIssueStatus = useAtomCommand(issueEnvironment.setStatus, { reportFailure: false });
   const enableAutonomous = useAtomCommand(projectEnvironment.enableAutonomous, {
     reportFailure: false,
   });
@@ -85,105 +124,28 @@ export function IssueDecompositionImportCard({
     };
   }, [environmentId, projectId, projects]);
 
-  const issueIdByKey = useMemo(
+  const plan = useMemo(
     () =>
-      new Map(
-        entries.map((entry) => [entry.key, issueIdForDecompositionEntry(messageId, entry.key)]),
-      ),
-    [entries, messageId],
+      planIssueDecompositionImport({
+        entries,
+        messageId,
+        currentProject,
+        linkedProjects,
+        issues,
+      }),
+    [currentProject, entries, issues, linkedProjects, messageId],
   );
-
-  const groups = useMemo(
-    () => groupDecompositionEntriesByProject({ entries, currentProject, linkedProjects }),
-    [currentProject, entries, linkedProjects],
-  );
-  // An empty requesting-project group is real when every story routed away, and
-  // should not be shown as a board receiving nothing.
-  const populatedGroups = useMemo(
-    () => groups.filter((group) => group.entries.length > 0),
-    [groups],
-  );
-  const unroutablePaths = groups[0]?.unroutablePaths ?? [];
 
   const existingIds = useMemo(() => new Set(issues.map((issue) => issue.id)), [issues]);
-  /**
-   * Every story still to create, in the order the parser put them: dependencies
-   * first. One pass across all the boards rather than a pass per board, because
-   * a story may wait on one filed on a different board and an issue cannot name
-   * a dependency that does not exist yet.
-   */
-  const projectIdByKey = useMemo(
+  // An empty group is real when every story routed away, and should not be
+  // shown as a board receiving nothing.
+  const populatedGroups = useMemo(
     () =>
-      new Map(
-        populatedGroups.flatMap((group) =>
-          group.entries.map((entry) => [entry.key, group.projectId] as const),
-        ),
+      (plan?.groups ?? []).filter(
+        (group) => group.creates.length + group.updates.length + group.cancels.length > 0,
       ),
-    [populatedGroups],
+    [plan],
   );
-  const remaining = entries.filter((entry) => {
-    const issueId = issueIdByKey.get(entry.key);
-    return issueId !== undefined && !existingIds.has(issueId) && !completedIds.has(issueId);
-  });
-  const imported = remaining.length === 0;
-
-  const handleImport = async () => {
-    if (submitting || imported) return;
-    setSubmitting(true);
-    const createdIds = new Set(completedIds);
-    for (const entry of remaining) {
-      const issueId = issueIdByKey.get(entry.key);
-      const entryProjectId = projectIdByKey.get(entry.key);
-      if (issueId === undefined || entryProjectId === undefined) continue;
-      const result = await createIssue({
-        environmentId,
-        input: {
-          issueId,
-          projectId: entryProjectId,
-          title: entry.title,
-          description: entry.description,
-          priority: entry.priority ?? null,
-          modelSelection: entry.modelSelection ?? null,
-          // A dependency may name a story on another board; the ordered pass
-          // above is what guarantees it already exists by the time this runs.
-          dependsOn: (entry.dependsOn ?? []).flatMap((key) => {
-            const dependencyId = issueIdByKey.get(key);
-            return dependencyId === undefined ? [] : [dependencyId];
-          }),
-        },
-      });
-      if (result._tag === "Failure") {
-        setSubmitting(false);
-        setCompletedIds(createdIds);
-        if (!isAtomCommandInterrupted(result)) {
-          const failure = squashAtomCommandFailure(result);
-          toastManager.add(
-            stackedThreadToast({
-              type: "error",
-              title: "Could not add all stories",
-              description:
-                failure instanceof Error
-                  ? failure.message
-                  : "The remaining stories can be retried.",
-            }),
-          );
-        }
-        return;
-      }
-      createdIds.add(issueId);
-      setCompletedIds(new Set(createdIds));
-    }
-    setSubmitting(false);
-    toastManager.add({
-      type: "success",
-      title:
-        populatedGroups.length > 1
-          ? `${entries.length} stories added across ${populatedGroups.length} boards`
-          : entries.length === 1
-            ? "Story added to board"
-            : `${entries.length} stories added to board`,
-    });
-  };
 
   /**
    * The boards this plan landed on that are not already working. Starting a run
@@ -245,57 +207,228 @@ export function IssueDecompositionImportCard({
     });
   };
 
-  const headline = imported
-    ? populatedGroups.length > 1
-      ? `${entries.length} stories added across ${populatedGroups.length} boards`
-      : entries.length === 1
-        ? "Story added to the issue board"
-        : `${entries.length} stories added to the issue board`
-    : populatedGroups.length > 1
-      ? `${entries.length} stories ready for ${populatedGroups.length} boards`
-      : entries.length === 1
-        ? "1 story ready for the issue board"
-        : `${entries.length} stories ready for the issue board`;
+  // A block naming a story that has started, is gone, or belongs to another
+  // board cannot be applied as a whole, so it stays ordinary chat.
+  if (plan === null) return null;
+
+  const applied = isIssueDecompositionImportApplied(plan, {
+    existingIssueIds: existingIds,
+    completedIds,
+  });
+  const boardOf = (group: IssueDecompositionImportGroup) =>
+    populatedGroups.length > 1 ? ` (${group.title})` : "";
+  const sectionItems = {
+    create: populatedGroups.flatMap((group) =>
+      group.creates.map((planned) => ({
+        id: planned.issueId,
+        text: `${planned.title}${boardOf(group)}`,
+      })),
+    ),
+    update: populatedGroups.flatMap((group) =>
+      group.updates.map((planned) => ({
+        id: planned.issueId,
+        text: `${planned.title} — rewrites “${planned.existing.title}”${boardOf(group)}`,
+      })),
+    ),
+    cancel: populatedGroups.flatMap((group) =>
+      group.cancels.map((planned) => ({
+        id: planned.issue.id,
+        text: `${planned.issue.title} — replaced by “${planned.replacedByTitle}”${boardOf(group)}`,
+      })),
+    ),
+  };
+
+  const handleImport = async () => {
+    if (submitting || applied) return;
+    setSubmitting(true);
+    const done = new Set(completedIds);
+    // Every step stops where it failed and leaves the rest to a retry: the
+    // plan is derived from the message, so pressing the button again picks up
+    // exactly where this one stopped.
+    const fail = (label: string, interrupted: boolean, failure: unknown) => {
+      setSubmitting(false);
+      setCompletedIds(new Set(done));
+      if (interrupted) return;
+      toastManager.add(
+        stackedThreadToast({
+          type: "error",
+          title: label,
+          description: failure instanceof Error ? failure.message : "The rest can be retried.",
+        }),
+      );
+    };
+
+    // Creations first, in dependency order, so every `dependsOn` already names
+    // an issue that exists; then the rewrites, which may point at them; then
+    // the cancellations, which retire what the plan replaced.
+    for (const planned of plan.creates) {
+      if (existingIds.has(planned.issueId) || done.has(planned.issueId)) continue;
+      const result = await createIssue({
+        environmentId,
+        input: {
+          issueId: planned.issueId,
+          projectId: planned.projectId,
+          title: planned.title,
+          description: planned.description,
+          priority: planned.priority,
+          modelSelection: planned.modelSelection,
+          dependsOn: planned.dependsOn,
+        },
+      });
+      if (result._tag === "Failure") {
+        return fail(
+          "Could not add all stories",
+          isAtomCommandInterrupted(result),
+          squashAtomCommandFailure(result),
+        );
+      }
+      done.add(planned.issueId);
+      setCompletedIds(new Set(done));
+    }
+
+    for (const planned of plan.updates) {
+      if (done.has(planned.issueId)) continue;
+      // A story still nobody has picked up is rewritten even when its visible
+      // fields already match: the description does not ride the board's rows,
+      // so a revision that only rewrites the body would otherwise be dropped.
+      // One that has since started is finished with, and left alone.
+      if (planned.applied && !planned.revisable) continue;
+      const result = await updateIssue({
+        environmentId,
+        input: {
+          issueId: planned.issueId,
+          title: planned.title,
+          description: planned.description,
+          priority: planned.priority,
+          modelSelection: planned.modelSelection,
+          dependsOn: planned.dependsOn,
+        },
+      });
+      if (result._tag === "Failure") {
+        return fail(
+          "Could not revise all stories",
+          isAtomCommandInterrupted(result),
+          squashAtomCommandFailure(result),
+        );
+      }
+      done.add(planned.issueId);
+      setCompletedIds(new Set(done));
+    }
+
+    for (const planned of plan.cancels) {
+      if (planned.applied || done.has(planned.issue.id)) continue;
+      const result = await setIssueStatus({
+        environmentId,
+        input: { issueId: planned.issue.id, status: "canceled" },
+      });
+      if (result._tag === "Failure") {
+        return fail(
+          "Could not cancel all stories",
+          isAtomCommandInterrupted(result),
+          squashAtomCommandFailure(result),
+        );
+      }
+      done.add(planned.issue.id);
+      setCompletedIds(new Set(done));
+    }
+
+    setSubmitting(false);
+    toastManager.add({
+      type: "success",
+      title:
+        populatedGroups.length > 1
+          ? `Board updated across ${populatedGroups.length} boards`
+          : plan.updates.length + plan.cancels.length === 0
+            ? plan.creates.length === 1
+              ? "Story added to board"
+              : `${plan.creates.length} stories added to board`
+            : "Board updated",
+    });
+  };
+
+  const populatedSections = Object.values(sectionItems).filter((items) => items.length > 0).length;
+  const totalActions = plan.creates.length + plan.updates.length + plan.cancels.length;
+  const revises = plan.updates.length + plan.cancels.length > 0;
+  const headline = applied
+    ? revises
+      ? "Board updated"
+      : populatedGroups.length > 1
+        ? `${plan.creates.length} stories added across ${populatedGroups.length} boards`
+        : plan.creates.length === 1
+          ? "Story added to the issue board"
+          : `${plan.creates.length} stories added to the issue board`
+    : revises
+      ? `${totalActions} changes ready for the issue board`
+      : populatedGroups.length > 1
+        ? `${plan.creates.length} stories ready for ${populatedGroups.length} boards`
+        : plan.creates.length === 1
+          ? "1 story ready for the issue board"
+          : `${plan.creates.length} stories ready for the issue board`;
 
   const detail =
     populatedGroups.length > 1
-      ? `${describeGroupCounts(populatedGroups)}. Each story is created on the board of the project that owns the code.`
-      : imported
+      ? `${describeGroupCounts(
+          populatedGroups.map((group) => ({
+            title: group.title,
+            count: group.creates.length + group.updates.length + group.cancels.length,
+          })),
+        )}. Each change lands on the board of the project that owns the code.`
+      : applied
         ? "You can open the board when you are ready to start work."
         : "Ask for revisions in chat, then add only the version you want to keep.";
 
   return (
-    <div className="mt-3 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-border/70 bg-card/45 p-3">
-      <div className="min-w-0">
-        <p className="text-sm font-medium text-foreground">{headline}</p>
-        <p className="mt-0.5 text-xs text-muted-foreground">{detail}</p>
-        {unroutablePaths.length > 0 ? (
-          <p className="mt-0.5 text-warning text-xs">
-            {unroutablePaths.join(", ")} {unroutablePaths.length === 1 ? "is" : "are"} not a linked
-            project here, so{" "}
-            {unroutablePaths.length === 1 ? "that story stays" : "those stories stay"} on{" "}
-            {currentProject.title}'s board.
-          </p>
-        ) : null}
-      </div>
-      <div className="flex items-center gap-2">
-        {imported && runnableBoards.length > 0 ? (
-          <Button
-            size="sm"
-            variant="outline"
-            disabled={startingRun}
-            onClick={() => setConfirmingRun(true)}
-          >
-            {startingRun ? <Spinner className="size-3.5" /> : <BotIcon className="size-4" />}
-            {runnableBoards.length === 1
-              ? "Autonomous mode"
-              : `Autonomous mode · ${runnableBoards.length} boards`}
+    <div className="mt-3 rounded-xl border border-border/70 bg-card/45 p-3">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div className="min-w-0">
+          <p className="text-sm font-medium text-foreground">{headline}</p>
+          <p className="mt-0.5 text-xs text-muted-foreground">{detail}</p>
+          {plan.unroutablePaths.length > 0 ? (
+            <p className="mt-0.5 text-warning text-xs">
+              {plan.unroutablePaths.join(", ")} {plan.unroutablePaths.length === 1 ? "is" : "are"}{" "}
+              not a linked project here, so{" "}
+              {plan.unroutablePaths.length === 1 ? "that story stays" : "those stories stay"} on{" "}
+              {currentProject.title}'s board.
+            </p>
+          ) : null}
+        </div>
+        <div className="flex items-center gap-2">
+          {applied && runnableBoards.length > 0 ? (
+            <Button
+              size="sm"
+              variant="outline"
+              disabled={startingRun}
+              onClick={() => setConfirmingRun(true)}
+            >
+              {startingRun ? <Spinner className="size-3.5" /> : <BotIcon className="size-4" />}
+              {runnableBoards.length === 1
+                ? "Autonomous mode"
+                : `Autonomous mode · ${runnableBoards.length} boards`}
+            </Button>
+          ) : null}
+          <Button size="sm" disabled={submitting || applied} onClick={() => void handleImport()}>
+            {applied ? <CheckIcon className="size-4" /> : <ListPlusIcon className="size-4" />}
+            {applied ? "Added to board" : submitting ? "Adding…" : "Add to board"}
           </Button>
-        ) : null}
-        <Button size="sm" disabled={submitting || imported} onClick={() => void handleImport()}>
-          {imported ? <CheckIcon className="size-4" /> : <ListPlusIcon className="size-4" />}
-          {imported ? "Added to board" : submitting ? "Adding…" : "Add to board"}
-        </Button>
+        </div>
+      </div>
+
+      <div
+        className={cn(
+          "mt-3 grid gap-3 border-t border-border/60 pt-3",
+          // Only the sections with something in them get a column, so the
+          // ordinary create-only plan reads across the whole card instead of
+          // truncating every title into a third of it.
+          populatedSections === 3
+            ? "sm:grid-cols-3"
+            : populatedSections === 2
+              ? "sm:grid-cols-2"
+              : "",
+        )}
+      >
+        <PlanSection label="Create" items={sectionItems.create} />
+        <PlanSection label="Update" items={sectionItems.update} />
+        <PlanSection label="Cancel" items={sectionItems.cancel} />
       </div>
 
       <AlertDialog

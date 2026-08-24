@@ -103,6 +103,15 @@ instruction that tells an agent how to emit the block is exported from the
 contracts as `ISSUE_DECOMPOSITION_PROMPT_INSTRUCTIONS` so the format lives in
 exactly one place.
 
+A block may also revise the board it was planned against: an entry's `updates`
+names an existing issue to rewrite and `supersedes` names ones to cancel. Only
+work nobody has started qualifies (`isIssueOpenToRevision`), and an entry naming
+anything else makes the whole block invalid, exactly as a dependency cycle does.
+The web import derives what applying the block would do —
+`planIssueDecompositionImport` in
+`apps/web/src/components/issues/issueDecompositionImport.logic.ts` — and applying
+stays a user action, because a revised plan must never silently rewrite a board.
+
 ### Autonomous mode
 
 #### Autonomous mode

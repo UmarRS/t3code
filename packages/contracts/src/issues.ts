@@ -176,6 +176,24 @@ export function isIssueDependencySatisfied(status: IssueStatus): boolean {
 }
 
 /**
+ * Whether a decomposition may rewrite or replace this issue.
+ *
+ * Only work nobody has picked up is fair game. An issue that has started, is
+ * being reviewed, is finished, or has been flagged for a human is a decision
+ * that has already cost something — a worktree, a pull request, a person's
+ * attention — and a later plan must not quietly erase it. Such an issue is
+ * still read as context and may still be depended on; it simply cannot be
+ * edited or canceled from a block.
+ */
+export function isIssueOpenToRevision(issue: {
+  readonly status: IssueStatus;
+  readonly threadId?: string | null | undefined;
+  readonly needsAttentionAt?: string | null | undefined;
+}): boolean {
+  return issue.status === "backlog" && issue.threadId == null && !issueNeedsAttention(issue);
+}
+
+/**
  * Depth-first search for a cycle that adding `dependsOn` to `issueId` would
  * create, returning the offending path (starting and ending at `issueId`) or
  * null when the graph stays acyclic. `issues` is the current project graph; the
@@ -230,6 +248,20 @@ const IssueDecompositionKey = TrimmedNonEmptyString.check(
 );
 export type IssueDecompositionKey = typeof IssueDecompositionKey.Type;
 
+const ISSUE_ID_PATTERN =
+  /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
+
+/**
+ * Whether a `dependsOn` name means an issue that already exists rather than a
+ * story defined in the same block. The two are told apart by shape: a key is a
+ * short slug the agent invents, while every issue id this app mints is a UUID.
+ * Callers check the block first, so this only ever decides what a name the
+ * block does not define was meant to be.
+ */
+export function isExistingIssueReference(value: string): boolean {
+  return ISSUE_ID_PATTERN.test(value);
+}
+
 /**
  * One story inside a `t3-issues` block. `key` is block-local: dependencies name
  * other keys in the same block, and the server swaps them for real issue ids
@@ -240,6 +272,10 @@ export type IssueDecompositionKey = typeof IssueDecompositionKey.Type;
  * board. It names a linked project by workspace root — the same handle
  * `list_linked_projects` reports and the agent can see on disk, rather than a
  * project id it has no way to learn.
+ *
+ * `updates` and `supersedes` are how a second decomposition revises a board
+ * instead of duplicating it. Both name issues that already exist, by id, and
+ * both are limited to work nobody has started (see `isIssueOpenToRevision`).
  */
 export const IssueDecompositionEntry = Schema.Struct({
   key: IssueDecompositionKey,
@@ -254,6 +290,20 @@ export const IssueDecompositionEntry = Schema.Struct({
   project: Schema.optional(ProjectLinkPath),
   dependsOn: Schema.optional(
     Schema.Array(IssueDecompositionKey).check(Schema.isMaxLength(ISSUE_MAX_DEPENDENCIES)),
+  ),
+  /**
+   * An issue already on the board that this entry rewrites rather than adds to
+   * it. Title, description, priority, `modelSelection` and `dependsOn` land on
+   * that issue instead of creating a new one.
+   */
+  updates: Schema.optional(IssueId),
+  /**
+   * Issues already on the board this entry replaces. They are canceled when
+   * the plan is applied, so a revised plan retires what it made obsolete
+   * instead of leaving two versions of the same work on the board.
+   */
+  supersedes: Schema.optional(
+    Schema.Array(IssueId).check(Schema.isMaxLength(ISSUE_MAX_DEPENDENCIES)),
   ),
 });
 export type IssueDecompositionEntry = typeof IssueDecompositionEntry.Type;
@@ -284,7 +334,11 @@ End your final message with a single fenced code block tagged \`${ISSUE_DECOMPOS
 - \`priority\` (optional): one of "low", "medium", "high", "urgent".
 - \`modelSelection\` (optional only when no configured worker list was supplied): the worker to use, as \`{ "instanceId": "...", "model": "..." }\`. When configured workers were included earlier in the prompt, choose one for every story. Otherwise omit it to inherit the project's default.
 - \`project\` (optional, and only ever one of the linked projects listed earlier in this prompt): the workspace root of the repository the story's work belongs in, copied exactly as it was listed. Omit it for work in the project you were asked about — that is the default and the common case. Set it only when the story's changes genuinely land in the other repository, so each story is created on the board of the project that owns the code.
-- \`dependsOn\` (optional): keys of other stories in this same block that must be finished first. Order does not matter — you may reference a key defined later in the array. Never create a dependency cycle, and never depend on yourself. A dependency may name a story on another \`project\`: when the frontend story genuinely cannot be built until the backend story has landed, say so with \`dependsOn\` rather than in prose, and the boards hold that story until its blocker is merged. Use it only for ordering that is real — a story blocked across repositories waits for a whole other pull request to land, so parallel work with an agreed interface is usually the better plan, and the description is the place to state that interface.
+- \`dependsOn\` (optional): keys of other stories in this same block that must be finished first, and the ids of stories already on a board when the new work genuinely waits on one of them. Order does not matter — you may reference a key defined later in the array. Never create a dependency cycle, and never depend on yourself. A dependency may name a story on another \`project\`: when the frontend story genuinely cannot be built until the backend story has landed, say so with \`dependsOn\` rather than in prose, and the boards hold that story until its blocker is merged. Use it only for ordering that is real — a story blocked across repositories waits for a whole other pull request to land, so parallel work with an agreed interface is usually the better plan, and the description is the place to state that interface.
+- \`updates\` (optional): the id of a story already on the board that this entry rewrites. Its title, description, priority, worker and dependencies become the ones you give here, and no new story is created. Use it when the plan changes something the board already decided, rather than filing a near-duplicate beside it.
+- \`supersedes\` (optional): ids of stories already on the board that this entry replaces. They are canceled when the plan is applied. Use it when one new story covers work that several existing ones were going to do, or when the approach they describe is no longer the plan.
+
+Only a story that has not started may be updated or superseded: it must still be in the backlog, have no thread, and not be flagged for a human. Anything in progress, in review, done or flagged is context you may read and depend on, and nothing else — naming one in \`updates\` or \`supersedes\` makes the whole block unusable. An id you name must belong to the same board the story routes to.
 
 Emit at most ${ISSUE_DECOMPOSITION_MAX_ENTRIES} stories, emit the block only once, and put nothing but JSON inside it. Example:
 
