@@ -1971,6 +1971,38 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
       };
     }
 
+    case "issue.review.reset": {
+      const issue = yield* requireIssue({
+        readModel,
+        command,
+        issueId: command.issueId,
+      });
+      // Idempotent by re-emission, like `issue.attention.clear`: resetting an
+      // issue nobody has reviewed lands on the same state without churning
+      // updatedAt. A reviewer claim with no verdict still counts as something
+      // to reset — it is what a retried review would otherwise be matched
+      // against — so the timestamp only holds when every review field is
+      // already clear.
+      const alreadyReset =
+        (issue.reviewVerdict ?? null) === null &&
+        (issue.reviewerThreadId ?? null) === null &&
+        (issue.reviewedAt ?? null) === null;
+      const occurredAt = yield* nowIso;
+      return {
+        ...(yield* withEventBase({
+          aggregateKind: "issue",
+          aggregateId: command.issueId,
+          occurredAt,
+          commandId: command.commandId,
+        })),
+        type: "issue.review-reset",
+        payload: {
+          issueId: command.issueId,
+          updatedAt: alreadyReset ? issue.updatedAt : occurredAt,
+        },
+      };
+    }
+
     case "issue.review.start": {
       yield* requireIssue({
         readModel,

@@ -781,6 +781,20 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
             });
             return;
 
+          case "issue.review-reset":
+            // The mirror of the record above, notes included: an issue whose
+            // review was thrown away must not keep showing the old reviewer's
+            // write-up. `reviewNotes` is a defaulted column rather than a
+            // nullable one, so empty is its null.
+            yield* patchIssueRow(event.payload.issueId, {
+              reviewVerdict: null,
+              reviewerThreadId: null,
+              reviewedAt: null,
+              reviewNotes: "",
+              updatedAt: event.payload.updatedAt,
+            });
+            return;
+
           default:
             return;
         }

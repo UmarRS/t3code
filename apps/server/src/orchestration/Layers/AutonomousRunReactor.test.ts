@@ -1269,6 +1269,110 @@ describe("AutonomousRunReactor", () => {
     }).pipe(Effect.scoped, Effect.provide(harness.layer));
   });
 
+  it.effect("releases the merge queue when a claimed review is thrown away", () => {
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      const run = yield* bootRun();
+      yield* run.createProject();
+      yield* run.createIssue("issue-a");
+      yield* run.enableAutonomous();
+      yield* run.reactor.drain;
+
+      const threadId = harness.started[0]?.command.threadId;
+      if (!threadId) throw new Error("expected the issue to have started");
+      yield* run.createWorkerThread(threadId, "/tmp/acme-worktrees/issue-a", "issue/issue-a");
+      yield* run.receiptsWhile(2, run.endTurn(threadId, "idle"));
+      expect(harness.reviews).toHaveLength(1);
+
+      // The reviewer has claimed the issue but recorded nothing, and the merge
+      // queue is serialized on that review settling. A reset is allowed here —
+      // the decider counts an unrecorded claim as something to throw away — so
+      // it has to release the queue too, or no issue on the board is ever
+      // reviewed again.
+      const seen = yield* run.receiptsWhile(
+        1,
+        run.dispatch({
+          type: "issue.review.reset",
+          commandId: run.nextCommandId("review-reset"),
+          issueId: IssueId.make("issue-a"),
+        }),
+      );
+      expect(seen).toEqual(["autonomous.review.started"]);
+      expect(harness.reviews).toHaveLength(2);
+      expect(harness.reviews[1]?.issueId).toBe(IssueId.make("issue-a"));
+    }).pipe(Effect.scoped, Effect.provide(harness.layer));
+  });
+
+  it.effect("re-reviews an issue whose verdict was thrown away", () => {
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      const run = yield* bootRun();
+      yield* run.createProject();
+      yield* run.createIssue("issue-a");
+      yield* run.enableAutonomous();
+      yield* run.reactor.drain;
+
+      const threadId = harness.started[0]?.command.threadId;
+      if (!threadId) throw new Error("expected the issue to have started");
+      yield* run.createWorkerThread(threadId, "/tmp/acme-worktrees/issue-a", "issue/issue-a");
+      yield* run.receiptsWhile(2, run.endTurn(threadId, "idle"));
+      expect(harness.reviews).toHaveLength(1);
+
+      // The reviewer reads the change and refuses it, which parks the issue
+      // and takes the board's last piece of work out of play, so the run
+      // finishes.
+      const reviewerThreadId = harness.reviews[0]?.threadId;
+      if (!reviewerThreadId) throw new Error("expected a reviewer thread");
+      yield* run.receiptsWhile(
+        1,
+        run.dispatch({
+          type: "issue.review.record",
+          commandId: run.nextCommandId("review-a"),
+          issueId: IssueId.make("issue-a"),
+          reviewerThreadId,
+          verdict: "needs_attention",
+          notes: "The migration drops a column that is still read.",
+        }),
+      );
+      expect((yield* run.findIssue("issue-a"))?.reviewVerdict).toBe("needs_attention");
+      const reviewed = yield* run.snapshotQuery.getIssueDetailById(IssueId.make("issue-a"));
+      expect(Option.isSome(reviewed) ? reviewed.value.reviewNotes : "").toContain("drops a column");
+
+      // Unflagging alone leaves the verdict, and a verdict is what holds the
+      // merge queue off: the issue sits in review, doing nothing, forever.
+      yield* run.dispatch({
+        type: "issue.attention.clear",
+        commandId: run.nextCommandId("clear"),
+        issueId: IssueId.make("issue-a"),
+      });
+      yield* run.enableAutonomous();
+      yield* run.reactor.drain;
+      expect(harness.reviews).toHaveLength(1);
+
+      // Throwing the verdict away is what makes it reviewable again, and the
+      // reactor picks it up on the event rather than on the next sweep.
+      const seen = yield* run.receiptsWhile(
+        1,
+        run.dispatch({
+          type: "issue.review.reset",
+          commandId: run.nextCommandId("review-reset"),
+          issueId: IssueId.make("issue-a"),
+        }),
+      );
+      expect(seen).toEqual(["autonomous.review.started"]);
+      expect(harness.reviews).toHaveLength(2);
+      expect(harness.reviews[1]?.issueId).toBe(IssueId.make("issue-a"));
+
+      const issue = yield* run.findIssue("issue-a");
+      expect(issue?.reviewVerdict).toBeNull();
+      expect(issue?.status).toBe("in_review");
+      // The old reviewer's write-up goes with the verdict, so the card cannot
+      // show notes about a review that no longer applies.
+      const detail = yield* run.snapshotQuery.getIssueDetailById(IssueId.make("issue-a"));
+      expect(Option.isSome(detail) ? detail.value.reviewNotes : "unread").toBe("");
+    }).pipe(Effect.scoped, Effect.provide(harness.layer));
+  });
+
   it.effect(
     "replaces provisional review attention when the pull request was merged outside Atlas",
     () => {

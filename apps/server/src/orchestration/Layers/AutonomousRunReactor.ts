@@ -1158,6 +1158,7 @@ const make = Effect.gen(function* () {
       case "issue.attention-flagged":
       case "issue.attention-cleared":
       case "issue.review-recorded":
+      case "issue.review-reset":
       case "issue.pull-request-linked": {
         const issueId = event.payload.issueId;
         const issues = yield* projectionSnapshotQuery
@@ -1178,8 +1179,11 @@ const make = Effect.gen(function* () {
 
   const processEvent = Effect.fn("processEvent")(function* (event: OrchestrationEvent) {
     // A recorded verdict releases the merge queue before anything else, so the
-    // next review starts even if the re-evaluation below fails.
-    if (event.type === "issue.review-recorded") {
+    // next review starts even if the re-evaluation below fails. A reset does
+    // the same: the decider lets a claimed-but-unrecorded review be thrown
+    // away, and the queue would otherwise hold on a deferred no verdict is
+    // ever coming for.
+    if (event.type === "issue.review-recorded" || event.type === "issue.review-reset") {
       yield* completePendingReview(event.payload.issueId);
     }
     if (event.type === "thread.session-set") {

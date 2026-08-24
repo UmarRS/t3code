@@ -429,13 +429,16 @@ type AttentionRetryView = AttentionKindView & Pick<ReviewIssueView, "status" | "
 /**
  * Clearing the flag is all a backlog issue needs; anything further along keeps
  * its thread and its status, so it becomes startable again only after the
- * thread link is dropped and it is put back in the backlog. These are the exact
- * commands each affordance has to dispatch, in order.
+ * thread link is dropped and it is put back in the backlog. Work a reviewer
+ * already judged also has to lose that verdict, or the redone work reaches
+ * `in_review` a second time and the merge queue skips it forever. These are
+ * the exact commands each affordance has to dispatch, in order.
  */
 export type IssueRetryStep =
   | { readonly kind: "clear-attention" }
   | { readonly kind: "unlink-thread" }
-  | { readonly kind: "reset-to-backlog" };
+  | { readonly kind: "reset-to-backlog" }
+  | { readonly kind: "reset-review" };
 
 export function planIssueAttentionClear(): ReadonlyArray<IssueRetryStep> {
   return [{ kind: "clear-attention" }];
@@ -452,12 +455,28 @@ export function planIssueAttentionRetry(issue: AttentionRetryView): ReadonlyArra
   if (issue.status !== "backlog") {
     steps.push({ kind: "reset-to-backlog" });
   }
+  // Last, and after the status has moved: an issue that is unflagged and back
+  // in the backlog is inert to the run's review queue, while an `in_review`
+  // issue that loses its verdict is picked up for review of the very pull
+  // request this retry is about to throw away.
+  if (issue.reviewVerdict != null) {
+    steps.push({ kind: "reset-review" });
+  }
   return steps;
 }
 
 /** Whether "retry" would do more than clear the flag. */
 export function issueRetryRestartsWork(issue: AttentionRetryView): boolean {
   return planIssueAttentionRetry(issue).length > 1;
+}
+
+/**
+ * Whether "retry" would also throw away a reviewer's verdict. The one
+ * difference between the two affordances a card has to spell out: clearing the
+ * flag accepts the review, retrying discards it along with the work.
+ */
+export function issueRetryDiscardsReview(issue: AttentionRetryView): boolean {
+  return planIssueAttentionRetry(issue).some((step) => step.kind === "reset-review");
 }
 
 /**

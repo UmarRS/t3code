@@ -225,6 +225,19 @@ rows are unclassified rather than deliberately `other`, which is what licenses
 `resolveIssueAttentionKind`'s fallback to reading the reason text
 (`apps/web/src/components/issues/autonomousRun.logic.ts`).
 
+#### Review reset
+
+A recorded verdict is what keeps the merge queue off an issue, so work that is
+redone from scratch has to lose it: `issue.review.reset` clears `reviewVerdict`,
+`reviewerThreadId`, `reviewedAt` and the notes, and the reactor re-evaluates the
+board on `issue.review-reset` so an issue that became reviewable again is
+enqueued without waiting for the next sweep. Retry on a flagged, reviewed issue
+dispatches it last, after the issue is unflagged, unlinked from its thread and
+back in the backlog — an `in_review` issue that loses its verdict any earlier is
+picked straight back up for review of the pull request the retry is throwing
+away. Clearing the flag deliberately does not reset: clearing accepts the
+reviewer's judgement, retrying discards it.
+
 #### Review notes
 
 The reviewer's markdown record of what it checked, fixed, and decided, carried

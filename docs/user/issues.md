@@ -208,6 +208,10 @@ Two ways out, from the card menu or the Review tab:
   as the pull request is linked — even if autonomous mode is paused.
 - **Clear & retry** also unlinks the thread and returns the issue to the backlog, so it is fresh
   work again. A live run picks it up on its next pass; if the run already finished, start it again.
+- **Discard review & retry** is what **Clear & retry** becomes once a reviewer has left a verdict.
+  It does the same thing and throws the review away with it — verdict and notes both — because an
+  issue that keeps an old verdict is never picked up for review again. **Clear flag** is the
+  opposite choice: it keeps the review exactly as the reviewer left it.
 
 ### Runs on a schedule
 

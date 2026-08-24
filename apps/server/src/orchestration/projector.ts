@@ -51,6 +51,7 @@ import {
   IssueAttentionClearedPayload,
   IssueAttentionFlaggedPayload,
   IssueReviewRecordedPayload,
+  IssueReviewResetPayload,
   IssueReviewStartedPayload,
   ProjectAutonomousDisabledPayload,
   ProjectAutonomousEnabledPayload,
@@ -1047,6 +1048,24 @@ export function projectEvent(
             reviewerThreadId: payload.reviewerThreadId,
             reviewedAt: payload.reviewedAt,
             ...(payload.status !== undefined ? { status: payload.status } : {}),
+            updatedAt: payload.updatedAt,
+          }),
+        })),
+      );
+
+    case "issue.review-reset":
+      return decodeForEvent(IssueReviewResetPayload, event.payload, event.type, "payload").pipe(
+        Effect.map((payload) => ({
+          ...nextBase,
+          // Back to how the issue looked before any reviewer touched it: no
+          // verdict, no claim, no review timestamp. The notes go the same way
+          // in the projection table, which is the only place they live. The
+          // status is deliberately left where it is — moving the work is the
+          // caller's business, and this command only forgets the review.
+          issues: updateIssue(nextBase.issues, payload.issueId, {
+            reviewVerdict: null,
+            reviewerThreadId: null,
+            reviewedAt: null,
             updatedAt: payload.updatedAt,
           }),
         })),

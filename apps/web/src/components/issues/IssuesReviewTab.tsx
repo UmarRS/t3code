@@ -25,6 +25,7 @@ import {
   buildReviewSections,
   formatBoardTitles,
   issueAttentionRetryKind,
+  issueRetryDiscardsReview,
   issueRetryRestartsWork,
   resolveIssueAttentionPresentation,
   type AutonomousPlanBoards,
@@ -142,6 +143,9 @@ function ReviewCard({
   const openPrLink = useOpenPrLink();
   const attentionPresentation = resolveIssueAttentionPresentation(issue);
   const flagged = attentionPresentation !== null;
+  // Retrying reviewed work throws the verdict away with it, and that is the
+  // whole difference between the two buttons — so the card says it.
+  const discardsReview = flagged && issueRetryDiscardsReview(issue);
 
   // One detail read per expanded card, never for the collapsed list.
   const detail = useEnvironmentQuery(
@@ -222,17 +226,39 @@ function ReviewCard({
                 want after taking the thread over yourself. Retry is only a
                 distinct action once there is a thread or a status to reset. */}
             {issueRetryRestartsWork(issue) ? (
-              <Button size="sm" variant="ghost" disabled={pending} onClick={onClearFlag}>
+              <Button
+                size="sm"
+                variant="ghost"
+                disabled={pending}
+                title={
+                  discardsReview
+                    ? "Unflag this issue and keep the reviewer's verdict."
+                    : "Unflag this issue and leave the work where it is."
+                }
+                onClick={onClearFlag}
+              >
                 Clear flag
               </Button>
             ) : null}
-            <Button size="sm" variant="outline" disabled={pending} onClick={onRetry}>
+            <Button
+              size="sm"
+              variant="outline"
+              disabled={pending}
+              title={
+                discardsReview
+                  ? "Discard this review and start the work again from the backlog."
+                  : undefined
+              }
+              onClick={onRetry}
+            >
               {pending ? <Spinner className="size-3.5" /> : <RotateCcwIcon className="size-3.5" />}
               {issueAttentionRetryKind(issue) === "pull-request"
                 ? "Retry pull request"
-                : issueRetryRestartsWork(issue)
-                  ? "Clear & retry"
-                  : "Clear flag"}
+                : discardsReview
+                  ? "Discard review & retry"
+                  : issueRetryRestartsWork(issue)
+                    ? "Clear & retry"
+                    : "Clear flag"}
             </Button>
           </div>
         ) : null}
@@ -244,6 +270,12 @@ function ReviewCard({
               underneath it, because that is the part with the detail in it. */}
           <p className="font-medium">{attentionPresentation.headline}</p>
           <p className="mt-0.5 opacity-90">{attentionPresentation.reason}</p>
+          {discardsReview && onClearFlag && onRetry ? (
+            <p className="mt-1 opacity-90">
+              Retry discards this review and starts the work over from the backlog. Clear flag keeps
+              the review as it stands.
+            </p>
+          ) : null}
           {/* The stall says "start a run there". This is that run: the boards
               holding the blocker, plus whatever their own plans depend on,
               started together with this one. */}
