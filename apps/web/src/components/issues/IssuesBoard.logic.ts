@@ -1,6 +1,7 @@
 import {
   findIssueDependencyCycle,
   isIssueDependencySatisfied,
+  isIssueOpenToRevision,
   issueNeedsAttention,
   ISSUE_DECOMPOSITION_PROMPT_INSTRUCTIONS,
   type IssueId,
@@ -267,7 +268,33 @@ export interface IssueDecompositionLinkedProject {
   readonly title: string;
   readonly workspaceRoot: string;
   readonly description: string;
+  /**
+   * That board's stories, so a plan reaching into this repository revises what
+   * is already tracked there instead of filing it a second time.
+   */
+  readonly boardIssues?: ReadonlyArray<IssueDecompositionBoardIssue>;
 }
+
+/**
+ * One story already on a board, as the prompt needs to state it. `started` is
+ * the read-only mark: work someone or something has picked up, which a plan
+ * may depend on but must not rewrite (`isIssueOpenToRevision`).
+ */
+export interface IssueDecompositionBoardIssue {
+  readonly id: IssueId;
+  readonly title: string;
+  readonly status: IssueStatus;
+  readonly priority: IssuePriority | null;
+  readonly dependsOn: ReadonlyArray<IssueId>;
+  readonly started: boolean;
+}
+
+/**
+ * How many stories one board contributes to the prompt before the rest are
+ * summarised as a count. A long-lived board would otherwise spend the whole
+ * turn's context describing itself.
+ */
+export const ISSUE_DECOMPOSITION_BOARD_CONTEXT_LIMIT = 60;
 
 /** Everything the decomposition prompt is built from, minus the user's own text. */
 export interface IssueDecompositionPromptContext {
@@ -279,6 +306,95 @@ export interface IssueDecompositionPromptContext {
    * reads instructions about repositories it cannot see.
    */
   readonly linkedProjects?: ReadonlyArray<IssueDecompositionLinkedProject>;
+  /**
+   * The target project's own board. Empty — a first decomposition — leaves the
+   * board section out entirely, so the common case reads exactly as it did
+   * before boards had anything on them.
+   */
+  readonly boardIssues?: ReadonlyArray<IssueDecompositionBoardIssue>;
+}
+
+/**
+ * Turns a board's issues into the summary lines the agent plans against. Each
+ * line leads with the id, because the id is what the agent has to copy into
+ * `dependsOn`, `updates` or `supersedes`, and marks whether the story is still
+ * open to revision or is settled context.
+ */
+function describeBoardIssues(issues: ReadonlyArray<IssueDecompositionBoardIssue>): string[] {
+  const shown = issues.slice(0, ISSUE_DECOMPOSITION_BOARD_CONTEXT_LIMIT);
+  const omitted = issues.length - shown.length;
+  return [
+    ...shown.map((issue) => {
+      const marks = [
+        ISSUE_STATUS_LABEL[issue.status].toLowerCase(),
+        ...(issue.priority === null ? [] : [issue.priority]),
+        issue.started ? "started, read-only" : "not started",
+      ];
+      const dependsOn =
+        issue.dependsOn.length === 0 ? "" : ` — waits on ${issue.dependsOn.join(", ")}`;
+      return `- ${issue.id} [${marks.join(", ")}] ${issue.title}${dependsOn}`;
+    }),
+    ...(omitted > 0 ? [`- …and ${omitted} more not listed here.`] : []),
+  ];
+}
+
+/**
+ * The board as the prompt should see it: the work that is still part of the
+ * plan, with the stories a new plan may still rewrite first so a board too long
+ * to list keeps the revisable half.
+ *
+ * Canceled and archived issues are left out. Both are settled — an abandoned
+ * decision and finished work filed away — and listing them would spend the
+ * turn's context arguing with history rather than describing the plan.
+ */
+export function toIssueDecompositionBoardIssues(
+  issues: ReadonlyArray<BoardIssue & { readonly threadId?: string | null | undefined }>,
+): ReadonlyArray<IssueDecompositionBoardIssue> {
+  return issues
+    .filter((issue) => issue.status !== "canceled" && issue.status !== "archived")
+    .map((issue, index) => ({
+      index,
+      issue: {
+        id: issue.id,
+        title: issue.title,
+        status: issue.status,
+        priority: issue.priority,
+        dependsOn: issue.dependsOn,
+        started: !isIssueOpenToRevision(issue),
+      } satisfies IssueDecompositionBoardIssue,
+    }))
+    .toSorted(
+      (left, right) =>
+        Number(left.issue.started) - Number(right.issue.started) ||
+        issuePriorityRank(left.issue.priority) - issuePriorityRank(right.issue.priority) ||
+        left.index - right.index,
+    )
+    .map((entry) => entry.issue);
+}
+
+/**
+ * The board context one decomposition turn plans against: the target project's
+ * stories and every linked project's, ready to spread into the prompt input.
+ *
+ * `issues` is every issue in the environment, because a plan that reaches into
+ * a linked repository needs that board too and they arrive together.
+ */
+export function buildIssueDecompositionBoardContext<
+  TProject extends IssueDecompositionLinkedProject & { readonly id: ProjectId },
+>(input: {
+  readonly issues: ReadonlyArray<BoardIssue & { readonly threadId?: string | null | undefined }>;
+  readonly projectId: ProjectId;
+  readonly linkedProjects: ReadonlyArray<TProject>;
+}): Required<Pick<IssueDecompositionPromptContext, "boardIssues" | "linkedProjects">> {
+  const forProject = (projectId: ProjectId) =>
+    toIssueDecompositionBoardIssues(input.issues.filter((issue) => issue.projectId === projectId));
+  return {
+    boardIssues: forProject(input.projectId),
+    linkedProjects: input.linkedProjects.map((project) => ({
+      ...project,
+      boardIssues: forProject(project.id),
+    })),
+  };
 }
 
 /**
@@ -295,6 +411,13 @@ export function buildIssueDecompositionInstructions(
 ): string {
   const availableModels = input.availableModels ?? [];
   const linkedProjects = input.linkedProjects ?? [];
+  const boardIssues = input.boardIssues ?? [];
+  const linkedBoards = linkedProjects.flatMap((project) =>
+    (project.boardIssues ?? []).length === 0
+      ? []
+      : [{ project, issues: project.boardIssues ?? [] }],
+  );
+  const hasBoardContext = boardIssues.length > 0 || linkedBoards.length > 0;
   return [
     `Break this work for ${input.projectTitle} into stories. Ask me every clarifying question you have before emitting the block — once the stories exist they are worked without my input.`,
     "",
@@ -313,6 +436,24 @@ export function buildIssueDecompositionInstructions(
             (project) => `- ${project.workspaceRoot} — ${project.title}: ${project.description}`,
           ),
           "Read the relevant code in these repositories before deciding what each story needs; do not assume their shape.",
+          "",
+        ]
+      : []),
+    ...(hasBoardContext
+      ? [
+          "Read what is already planned before you plan anything. Do not file work that is already tracked; when new work genuinely waits on one of these stories, name its id in `dependsOn`; and when this plan changes something already decided, rewrite that story with `updates` or replace it with `supersedes` instead of leaving two versions of it on the board. Only a story marked `not started` may be updated or superseded — the rest are context you may depend on and nothing more.",
+          ...(boardIssues.length > 0
+            ? [
+                "",
+                `Stories already on ${input.projectTitle}'s board:`,
+                ...describeBoardIssues(boardIssues),
+              ]
+            : []),
+          ...linkedBoards.flatMap((board) => [
+            "",
+            `Stories already on ${board.project.title}'s board (${board.project.workspaceRoot}):`,
+            ...describeBoardIssues(board.issues),
+          ]),
           "",
         ]
       : []),

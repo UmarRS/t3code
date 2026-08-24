@@ -154,6 +154,22 @@ describe("parseIssueDecomposition", () => {
 });
 
 describe("resolveIssueDecomposition", () => {
+  it.effect("keeps a dependency that names an issue already on a board", () =>
+    Effect.gen(function* () {
+      const result = yield* parseIssueDecomposition(
+        fence(`[
+  { "key": "ui", "title": "Build the login screen", "description": "Form.", "dependsOn": ["5f3a1c22-1111-4a11-8a11-111111111111"] }
+]`),
+      );
+      expect(result.kind).toBe("parsed");
+      if (result.kind !== "parsed") return;
+      expect(result.entries[0]?.dependsOnKeys).toEqual([]);
+      expect(result.entries[0]?.dependsOnIssueIds).toEqual([
+        IssueId.make("5f3a1c22-1111-4a11-8a11-111111111111"),
+      ]);
+    }),
+  );
+
   it.effect("swaps block keys for the ids the caller minted", () =>
     Effect.gen(function* () {
       const parsed = yield* parseIssueDecomposition(VALID);
@@ -163,6 +179,126 @@ describe("resolveIssueDecomposition", () => {
       expect(resolved.map((entry) => entry.issueId)).toEqual(ids);
       expect(resolved[0]?.dependsOn).toEqual([]);
       expect(resolved[1]?.dependsOn).toEqual([IssueId.make("id-schema")]);
+    }),
+  );
+});
+
+const OPEN = IssueId.make("5f3a1c22-1111-4a11-8a11-111111111111");
+const STARTED = IssueId.make("5f3a1c22-2222-4a11-8a11-222222222222");
+const board = [
+  { id: OPEN, status: "backlog" as const, threadId: null, needsAttentionAt: null },
+  { id: STARTED, status: "in_progress" as const, threadId: "thread-1", needsAttentionAt: null },
+];
+
+describe("parseIssueDecomposition revisions", () => {
+  it.effect("carries what a story rewrites and replaces", () =>
+    Effect.gen(function* () {
+      const result = yield* parseIssueDecomposition(
+        fence(`[
+  { "key": "auth", "title": "Rework the session flow", "description": "One story.", "updates": "${OPEN}" }
+]`),
+        { existingIssues: board },
+      );
+      expect(result.kind).toBe("parsed");
+      if (result.kind !== "parsed") return;
+      expect(result.entries[0]?.updates).toBe(OPEN);
+      expect(result.entries[0]?.supersedes).toEqual([]);
+    }),
+  );
+
+  it.effect("rejects a story rewriting work that has started", () =>
+    Effect.gen(function* () {
+      const result = yield* parseIssueDecomposition(
+        fence(`[
+  { "key": "auth", "title": "Rework it", "description": "No.", "updates": "${STARTED}" }
+]`),
+        { existingIssues: board },
+      );
+      expect(result.kind).toBe("invalid");
+      if (result.kind !== "invalid") return;
+      expect(result.detail).toContain("already started");
+    }),
+  );
+
+  it.effect("rejects a story naming an issue that is not on the board", () =>
+    Effect.gen(function* () {
+      const result = yield* parseIssueDecomposition(
+        fence(`[
+  { "key": "auth", "title": "Rework it", "description": "No.", "supersedes": ["5f3a1c22-9999-4a11-8a11-999999999999"] }
+]`),
+        { existingIssues: board },
+      );
+      expect(result.kind).toBe("invalid");
+      if (result.kind !== "invalid") return;
+      expect(result.detail).toContain("not on the board");
+    }),
+  );
+
+  it.effect("rejects two stories claiming the same issue", () =>
+    Effect.gen(function* () {
+      const result = yield* parseIssueDecomposition(
+        fence(`[
+  { "key": "one", "title": "One", "description": "A.", "updates": "${OPEN}" },
+  { "key": "two", "title": "Two", "description": "B.", "supersedes": ["${OPEN}"] }
+]`),
+        { existingIssues: board },
+      );
+      expect(result.kind).toBe("invalid");
+      if (result.kind !== "invalid") return;
+      expect(result.detail).toContain("claimed by more than one story");
+    }),
+  );
+
+  it.effect("rejects a plan that waits on a story it cancels", () =>
+    Effect.gen(function* () {
+      const result = yield* parseIssueDecomposition(
+        fence(`[
+  { "key": "one", "title": "One", "description": "A.", "supersedes": ["${OPEN}"] },
+  { "key": "two", "title": "Two", "description": "B.", "dependsOn": ["${OPEN}"] }
+]`),
+        { existingIssues: board },
+      );
+      expect(result.kind).toBe("invalid");
+      if (result.kind !== "invalid") return;
+      expect(result.detail).toContain("which this plan cancels");
+    }),
+  );
+
+  // Applying the same block twice must leave the board where it is, so a story
+  // this plan already canceled is not a story it may no longer touch.
+  it.effect("accepts a block whose cancellations already landed", () =>
+    Effect.gen(function* () {
+      const result = yield* parseIssueDecomposition(
+        fence(`[
+  { "key": "one", "title": "One", "description": "A.", "supersedes": ["${OPEN}"] }
+]`),
+        {
+          existingIssues: [
+            { id: OPEN, status: "canceled" as const, threadId: null, needsAttentionAt: null },
+          ],
+        },
+      );
+      expect(result.kind).toBe("parsed");
+    }),
+  );
+
+  it.effect("rewrites the named issue rather than the id the caller minted", () =>
+    Effect.gen(function* () {
+      const parsed = yield* parseIssueDecomposition(
+        fence(`[
+  { "key": "auth", "title": "Rework the session flow", "description": "One story.", "updates": "${OPEN}" },
+  { "key": "ui", "title": "Screen", "description": "Form.", "dependsOn": ["auth"] }
+]`),
+        { existingIssues: board },
+      );
+      if (parsed.kind !== "parsed") throw new Error("expected a parsed block");
+      const resolved = resolveIssueDecomposition(parsed.entries, [
+        IssueId.make("id-auth"),
+        IssueId.make("id-ui"),
+      ]);
+      expect(resolved[0]?.issueId).toBe(OPEN);
+      expect(resolved[0]?.updatesExisting).toBe(true);
+      expect(resolved[1]?.dependsOn).toEqual([OPEN]);
     }),
   );
 });

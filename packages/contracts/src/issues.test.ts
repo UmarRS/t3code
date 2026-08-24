@@ -1,9 +1,13 @@
+import * as Schema from "effect/Schema";
 import { describe, expect, it } from "vite-plus/test";
 
 import { IssueId, ProjectId } from "./baseSchemas.ts";
 import {
   activeAutonomousIssues,
   encodeIssueDecompositionBlock,
+  IssueDecompositionBlock,
+  isExistingIssueReference,
+  isIssueOpenToRevision,
   evaluateAutonomousRun,
   findIssueDependencyCycle,
   isIssueDependencySatisfied,
@@ -214,6 +218,68 @@ describe("decomposition prompt", () => {
   it("says stories are merged automatically, so none of them asks for sign-off", () => {
     expect(ISSUE_DECOMPOSITION_PROMPT_INSTRUCTIONS).toContain("merged automatically");
     expect(ISSUE_DECOMPOSITION_PROMPT_INSTRUCTIONS).toContain("Never write a human sign-off");
+  });
+
+  it("documents revising the board and the one issue a revision may not touch", () => {
+    expect(ISSUE_DECOMPOSITION_PROMPT_INSTRUCTIONS).toContain("`updates` (optional)");
+    expect(ISSUE_DECOMPOSITION_PROMPT_INSTRUCTIONS).toContain("`supersedes` (optional)");
+    expect(ISSUE_DECOMPOSITION_PROMPT_INSTRUCTIONS).toContain(
+      "Only a story that has not started may be updated or superseded",
+    );
+  });
+});
+
+describe("decomposition block schema", () => {
+  const decode = Schema.decodeUnknownSync(IssueDecompositionBlock);
+
+  it("accepts a story that revises the board", () => {
+    const [entry] = decode([
+      {
+        key: "auth",
+        title: "Rework the session flow",
+        description: "One story replaces three.",
+        updates: "5f3a1c22-1111-4a11-8a11-111111111111",
+        supersedes: ["5f3a1c22-2222-4a11-8a11-222222222222"],
+      },
+    ]);
+    expect(entry?.updates).toBe("5f3a1c22-1111-4a11-8a11-111111111111");
+    expect(entry?.supersedes).toEqual(["5f3a1c22-2222-4a11-8a11-222222222222"]);
+  });
+
+  it("leaves both absent on a plain creation", () => {
+    const [entry] = decode([{ key: "api", title: "Build API", description: "Endpoints." }]);
+    expect(entry?.updates).toBeUndefined();
+    expect(entry?.supersedes).toBeUndefined();
+  });
+});
+
+describe("isIssueOpenToRevision", () => {
+  const backlog = {
+    status: "backlog",
+    threadId: null,
+    needsAttentionAt: null,
+  } as const;
+
+  it("accepts backlog work nobody has picked up", () => {
+    expect(isIssueOpenToRevision(backlog)).toBe(true);
+  });
+
+  it.each([
+    { ...backlog, status: "in_progress" } as const,
+    { ...backlog, status: "in_review" } as const,
+    { ...backlog, status: "done" } as const,
+    { ...backlog, status: "canceled" } as const,
+    { ...backlog, threadId: "thread-1" } as const,
+    { ...backlog, needsAttentionAt: "2026-01-01T00:00:00.000Z" } as const,
+  ])("refuses work that has started or been flagged", (issue) => {
+    expect(isIssueOpenToRevision(issue)).toBe(false);
+  });
+});
+
+describe("isExistingIssueReference", () => {
+  it("tells a minted issue id apart from a block-local key", () => {
+    expect(isExistingIssueReference("5f3a1c22-1111-4a11-8a11-111111111111")).toBe(true);
+    expect(isExistingIssueReference("auth-api")).toBe(false);
   });
 });
 

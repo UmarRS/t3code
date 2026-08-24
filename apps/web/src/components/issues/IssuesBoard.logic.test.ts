@@ -21,8 +21,11 @@ import {
   filterIssueDependencyCandidates,
   indexIssuesById,
   ISSUE_DECOMPOSITION_PROMPT_PLACEHOLDER,
+  buildIssueDecompositionBoardContext,
+  ISSUE_DECOMPOSITION_BOARD_CONTEXT_LIMIT,
   ISSUE_STATUS_COLUMNS,
   issuePriorityRank,
+  toIssueDecompositionBoardIssues,
   resolveIssueBlockers,
   resolveIssueDelegationLinks,
   resolveIssueStartDisabledReason,
@@ -390,6 +393,160 @@ describe("buildIssueDecompositionInstructions", () => {
   it("omits the linked-project section when nothing is in scope", () => {
     const instructions = buildIssueDecompositionInstructions({ projectTitle: "Atlas" });
     expect(instructions).not.toContain("This work may also touch these linked projects");
+  });
+
+  it("lists what is already on the board, with the ids a revision has to name", () => {
+    const instructions = buildIssueDecompositionInstructions({
+      projectTitle: "Atlas",
+      boardIssues: [
+        {
+          id: IssueId.make("issue-1"),
+          title: "Add the session table",
+          status: "backlog",
+          priority: "high",
+          dependsOn: [],
+          started: false,
+        },
+        {
+          id: IssueId.make("issue-2"),
+          title: "Expose session endpoints",
+          status: "in_progress",
+          priority: null,
+          dependsOn: [IssueId.make("issue-1")],
+          started: true,
+        },
+      ],
+    });
+
+    expect(instructions).toContain("Stories already on Atlas's board:");
+    expect(instructions).toContain("- issue-1 [backlog, high, not started] Add the session table");
+    expect(instructions).toContain(
+      "- issue-2 [in progress, started, read-only] Expose session endpoints — waits on issue-1",
+    );
+    expect(instructions).toContain("Read what is already planned before you plan anything.");
+  });
+
+  it("lists a linked project's board under its own heading", () => {
+    const instructions = buildIssueDecompositionInstructions({
+      projectTitle: "Atlas",
+      linkedProjects: [
+        {
+          title: "web-client",
+          workspaceRoot: "/repos/web-client",
+          description: "the browser front end",
+          boardIssues: [
+            {
+              id: IssueId.make("issue-9"),
+              title: "Build the login screen",
+              status: "backlog",
+              priority: null,
+              dependsOn: [],
+              started: false,
+            },
+          ],
+        },
+      ],
+    });
+
+    expect(instructions).toContain("Stories already on web-client's board (/repos/web-client):");
+    expect(instructions).toContain("- issue-9 [backlog, not started] Build the login screen");
+  });
+
+  it("omits the board section entirely when nothing is tracked yet", () => {
+    const instructions = buildIssueDecompositionInstructions({
+      projectTitle: "Atlas",
+      boardIssues: [],
+      linkedProjects: [
+        {
+          title: "web-client",
+          workspaceRoot: "/repos/web-client",
+          description: "the browser front end",
+          boardIssues: [],
+        },
+      ],
+    });
+
+    expect(instructions).not.toContain("Read what is already planned");
+    expect(instructions).not.toContain("Stories already on");
+  });
+
+  it("summarises the tail of a board too long to list", () => {
+    const instructions = buildIssueDecompositionInstructions({
+      projectTitle: "Atlas",
+      boardIssues: Array.from(
+        { length: ISSUE_DECOMPOSITION_BOARD_CONTEXT_LIMIT + 3 },
+        (_, index) => ({
+          id: IssueId.make(`issue-${index}`),
+          title: `Story ${index}`,
+          status: "backlog" as const,
+          priority: null,
+          dependsOn: [],
+          started: false,
+        }),
+      ),
+    });
+
+    expect(instructions).toContain("- …and 3 more not listed here.");
+  });
+});
+
+describe("toIssueDecompositionBoardIssues", () => {
+  const row = (id: string, overrides: Partial<BoardIssue & { threadId: string | null }> = {}) => ({
+    id: IssueId.make(id),
+    projectId: BOARD,
+    title: id,
+    status: "backlog" as IssueStatus,
+    priority: null,
+    dependsOn: [],
+    createdAt: "2026-01-01T00:00:00.000Z",
+    threadId: null,
+    ...overrides,
+  });
+
+  it("marks started, linked and flagged work as read-only context", () => {
+    const board = toIssueDecompositionBoardIssues([
+      row("open"),
+      row("running", { status: "in_progress" }),
+      row("linked", { threadId: "thread-1" }),
+      row("flagged", { needsAttentionAt: "2026-01-02T00:00:00.000Z" }),
+    ]);
+
+    expect(board.map((issue) => [issue.id, issue.started])).toEqual([
+      ["open", false],
+      ["running", true],
+      ["linked", true],
+      ["flagged", true],
+    ]);
+  });
+
+  it("gives every board in scope its own stories", () => {
+    const context = buildIssueDecompositionBoardContext({
+      issues: [row("mine"), row("theirs", { projectId: OTHER_BOARD })],
+      projectId: BOARD,
+      linkedProjects: [
+        {
+          id: OTHER_BOARD,
+          title: "web-client",
+          workspaceRoot: "/repos/web-client",
+          description: "the browser front end",
+        },
+      ],
+    });
+
+    expect(context.boardIssues.map((issue) => issue.id)).toEqual(["mine"]);
+    expect(context.linkedProjects[0]?.boardIssues?.map((issue) => issue.id)).toEqual(["theirs"]);
+  });
+
+  it("drops settled work and puts revisable stories first", () => {
+    const board = toIssueDecompositionBoardIssues([
+      row("archived", { status: "archived" }),
+      row("running", { status: "in_progress" }),
+      row("canceled", { status: "canceled" }),
+      row("open", { priority: "low" }),
+      row("urgent", { priority: "urgent" }),
+    ]);
+
+    expect(board.map((issue) => issue.id)).toEqual(["urgent", "open", "running"]);
   });
 });
 
