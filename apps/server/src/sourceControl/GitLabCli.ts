@@ -21,6 +21,8 @@ import {
 import type * as SourceControlProvider from "./SourceControlProvider.ts";
 
 const DEFAULT_TIMEOUT_MS = 30_000;
+/** Merging waits on the provider's own merge job, which is slower than a read. */
+const MERGE_TIMEOUT_MS = 120_000;
 
 const gitLabCliExecutionErrorContext = {
   operation: Schema.Literal("execute"),
@@ -294,6 +296,11 @@ export class GitLabCli extends Context.Service<
       readonly reference: string;
       readonly force?: boolean;
     }) => Effect.Effect<void, GitLabCliError>;
+
+    readonly mergeMergeRequest: (input: {
+      readonly cwd: string;
+      readonly reference: string;
+    }) => Effect.Effect<void, GitLabCliError>;
   }
 >()("t3/sourceControl/GitLabCli") {}
 
@@ -416,6 +423,7 @@ export const make = Effect.gen(function* () {
     readonly cwd: string;
     readonly reference: string;
     readonly args: ReadonlyArray<string>;
+    readonly timeoutMs?: number;
   }) =>
     run(input, (error) =>
       GitLabMergeRequestNotFoundError.fromVcsError(
@@ -629,6 +637,16 @@ export const make = Effect.gen(function* () {
         cwd: input.cwd,
         reference: input.reference,
         args: ["mr", "checkout", input.reference],
+      }).pipe(Effect.asVoid),
+    mergeMergeRequest: (input) =>
+      executeMergeRequest({
+        cwd: input.cwd,
+        reference: input.reference,
+        // `--yes` because nothing is at the keyboard to answer the prompt, and
+        // no `--remove-source-branch`: that branch is checked out in a live
+        // worktree.
+        args: ["mr", "merge", input.reference, "--squash", "--yes"],
+        timeoutMs: MERGE_TIMEOUT_MS,
       }).pipe(Effect.asVoid),
   });
 });

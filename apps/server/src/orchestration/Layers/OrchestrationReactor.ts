@@ -5,6 +5,7 @@ import {
   OrchestrationReactor,
   type OrchestrationReactorShape,
 } from "../Services/OrchestrationReactor.ts";
+import { AutoShipReactor } from "../Services/AutoShipReactor.ts";
 import { AutonomousRunReactor } from "../Services/AutonomousRunReactor.ts";
 import { AutonomousScheduleReactor } from "../Services/AutonomousScheduleReactor.ts";
 import { CheckpointReactor } from "../Services/CheckpointReactor.ts";
@@ -20,6 +21,7 @@ export const makeOrchestrationReactor = Effect.gen(function* () {
   const checkpointReactor = yield* CheckpointReactor;
   const threadDeletionReactor = yield* ThreadDeletionReactor;
   const autonomousRunReactor = yield* AutonomousRunReactor;
+  const autoShipReactor = yield* AutoShipReactor;
   const autonomousScheduleReactor = yield* AutonomousScheduleReactor;
   const limitResumeReactor = yield* LimitResumeReactor;
   const issueArchiveReactor = yield* IssueArchiveReactor;
@@ -30,6 +32,7 @@ export const makeOrchestrationReactor = Effect.gen(function* () {
     yield* checkpointReactor.start();
     yield* threadDeletionReactor.start();
     yield* autonomousRunReactor.start();
+    yield* autoShipReactor.start();
     yield* autonomousScheduleReactor.start();
     yield* limitResumeReactor.start();
     yield* issueArchiveReactor.start();

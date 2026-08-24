@@ -145,6 +145,9 @@ marked **Auto**, so it is always clear what you are looking at.
 - **It waits on the other boards in the plan.** A story whose dependency is tracked on another
   board stays queued until that story is merged, and the run stays on while it waits rather than
   reporting itself finished. When the blocker lands, the story starts on its own.
+- **It files its own finished threads away.** Once an issue's work is merged, the worker and
+  reviewer threads settle themselves — still there to read, no longer in the way of the work that
+  needs you. A follow-up message wakes either of them straight back up.
 - **It parks anything it cannot finish** and keeps going with the rest.
 - **It turns itself off** when nothing is left to start and nothing is still moving.
 

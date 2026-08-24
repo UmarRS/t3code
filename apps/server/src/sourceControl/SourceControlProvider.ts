@@ -126,5 +126,16 @@ export class SourceControlProvider extends Context.Service<
       readonly reference: string;
       readonly force?: boolean;
     }) => Effect.Effect<void, SourceControlProviderError>;
+    /**
+     * Lands a change request, squashing it into the base branch. The source
+     * branch is deliberately left behind: Atlas merges branches that are
+     * checked out in a live worktree, and removing one underneath a running
+     * thread is worse than leaving it to the worktree sweeper.
+     */
+    readonly mergeChangeRequest: (input: {
+      readonly cwd: string;
+      readonly context?: SourceControlProviderContext;
+      readonly reference: string;
+    }) => Effect.Effect<void, SourceControlProviderError>;
   }
 >()("t3/sourceControl/SourceControlProvider") {}

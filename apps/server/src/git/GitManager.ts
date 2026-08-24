@@ -93,6 +93,22 @@ export class GitManager extends Context.Service<
     readonly resolvePullRequest: (
       input: GitPullRequestRefInput,
     ) => Effect.Effect<GitResolvePullRequestResult, GitManagerServiceError>;
+    /**
+     * Squash-merges an open pull request. Deliberately the whole operation:
+     * everything about *how* a branch lands is the provider's business, and
+     * the caller only ever wants it landed.
+     */
+    readonly mergePullRequest: (
+      input: GitPullRequestRefInput,
+    ) => Effect.Effect<void, GitManagerServiceError>;
+    /**
+     * The branch a pull request opened here would target — the same answer the
+     * PR step resolves for itself, exposed so a caller can ask what "shippable
+     * work" is measured against without guessing `main`.
+     */
+    readonly resolveBaseBranch: (input: {
+      readonly cwd: string;
+    }) => Effect.Effect<string, GitManagerServiceError>;
     readonly preparePullRequestThread: (
       input: GitPreparePullRequestThreadInput,
     ) => Effect.Effect<GitPreparePullRequestThreadResult, GitManagerServiceError>;
@@ -1725,11 +1741,7 @@ export const make = Effect.gen(function* () {
           Effect.logWarning("PR content generation failed; using commit-derived fallback", {
             cwd,
             detail: error.message,
-          }).pipe(
-            Effect.as(
-              fallbackPrContent(headContext.headBranch, rangeContext.commitSummary),
-            ),
-          ),
+          }).pipe(Effect.as(fallbackPrContent(headContext.headBranch, rangeContext.commitSummary))),
         ),
       );
 
@@ -1837,6 +1849,36 @@ export const make = Effect.gen(function* () {
 
     return { pullRequest };
   });
+
+  const resolveTargetBaseBranch: GitManager["Service"]["resolveBaseBranch"] = Effect.fn(
+    "resolveTargetBaseBranch",
+  )(function* (input) {
+    const details = yield* gitCore.statusDetails(input.cwd);
+    if (!details.branch) {
+      return yield* new GitManagerError({
+        operation: "resolveBaseBranch",
+        cwd: input.cwd,
+        detail: "Cannot resolve a base branch from detached HEAD.",
+      });
+    }
+    const headContext = yield* resolveBranchHeadContext(input.cwd, {
+      branch: details.branch,
+      upstreamRef: details.upstreamRef,
+    });
+    return yield* resolveBaseBranch(input.cwd, details.branch, details.upstreamRef, headContext);
+  });
+
+  const mergePullRequest: GitManager["Service"]["mergePullRequest"] = Effect.fn("mergePullRequest")(
+    function* (input) {
+      yield* (yield* sourceControlProvider(input.cwd)).mergeChangeRequest({
+        cwd: input.cwd,
+        reference: normalizePullRequestReference(input.reference),
+      });
+      // The branch is behind its base now and the PR is closed; anything still
+      // holding the pre-merge status would keep saying "1 open pull request".
+      yield* invalidateStatus(input.cwd);
+    },
+  );
 
   const preparePullRequestThread: GitManager["Service"]["preparePullRequestThread"] = Effect.fn(
     "preparePullRequestThread",
@@ -2261,6 +2303,8 @@ export const make = Effect.gen(function* () {
     invalidateRemoteStatus,
     invalidateStatus,
     resolvePullRequest,
+    mergePullRequest,
+    resolveBaseBranch: resolveTargetBaseBranch,
     preparePullRequestThread,
     runStackedAction,
   });

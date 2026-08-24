@@ -64,6 +64,10 @@ export const ExecutionEnvironmentCapabilities = Schema.Struct({
   /** Server understands regenerateTitle on thread.meta.update. Absent on
       older servers, so clients hide the action instead of sending it. */
   threadTitleRegeneration: Schema.optionalKey(Schema.Boolean),
+  /** Server understands thread.auto-ship.set, and ships auto-ship threads
+      itself. Same version-skew contract as threadSettlement: absent means the
+      client hides the toggle rather than offering a switch nothing acts on. */
+  threadAutoShip: Schema.optionalKey(Schema.Boolean),
   /** The update path clients should offer for this server. Absent on
       servers that must be relaunched manually (dev checkouts, Windows
       foreground runs, pre-update servers). */

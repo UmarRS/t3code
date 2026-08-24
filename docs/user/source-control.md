@@ -42,6 +42,31 @@ Atlas works with the platforms your team already uses:
 - Command-click (Control-click on Windows and Linux) a pull request number in the sidebar to open it in your browser instead of in T3 Code
 - Check out a teammate's branch to review code locally
 
+### Let a Chat Ship Its Own Work
+
+Some threads produce work you do not want to review — a chore, a rename, a
+dependency bump. Turn on **Auto-ship** in that chat's composer controls (next to
+**Generate stories**; under the **…** menu on narrow windows) and Atlas takes the
+whole trip itself: at the end of every turn that changed the codebase it commits,
+pushes, opens a pull request, and squash-merges it. Nobody is asked to look at it
+in between.
+
+- It is per chat, and it stays on until you turn it off. The button shows its
+  state, and the tooltip says what it will do.
+- Turning it on ships whatever is already in the worktree, so you see straight
+  away that it works.
+- Turns that change nothing ship nothing — asking a question does not open a
+  pull request.
+- It needs a worktree. A chat working the project directory directly has no
+  branch of its own, so the toggle is disabled and says so.
+- Every ship writes a line into the chat's timeline. If the merge is refused —
+  a required check, a conflict, a branch-protection rule — the pull request is
+  still open and the line links to it so you can finish it by hand.
+- Auto-ship does not delete the branch it merged: the chat is still working in
+  it.
+- Once the merge lands, the chat settles itself — it drops out of the active
+  list without being archived, and your next message brings it back.
+
 ### Know Your Setup at a Glance
 
 The **Source Control settings** page shows you exactly what's connected:

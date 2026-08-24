@@ -18,6 +18,8 @@ import {
 } from "./gitHubPullRequests.ts";
 
 const DEFAULT_TIMEOUT_MS = 30_000;
+/** Merging waits on the provider's own merge job, which is slower than a read. */
+const MERGE_TIMEOUT_MS = 120_000;
 
 const gitHubCliFailureFields = {
   command: Schema.Literal("gh"),
@@ -251,6 +253,11 @@ export class GitHubCli extends Context.Service<
       readonly reference: string;
       readonly force?: boolean;
     }) => Effect.Effect<void, GitHubCliError>;
+
+    readonly mergePullRequest: (input: {
+      readonly cwd: string;
+      readonly reference: string;
+    }) => Effect.Effect<void, GitHubCliError>;
   }
 >()("t3/sourceControl/GitHubCli") {}
 
@@ -456,6 +463,14 @@ export const make = Effect.gen(function* () {
       execute({
         cwd: input.cwd,
         args: ["pr", "checkout", input.reference, ...(input.force ? ["--force"] : [])],
+      }).pipe(Effect.asVoid),
+    mergePullRequest: (input) =>
+      execute({
+        cwd: input.cwd,
+        // No `--delete-branch`: the branch being merged is checked out in a
+        // live worktree, and gh would move that worktree off it to delete it.
+        args: ["pr", "merge", input.reference, "--squash"],
+        timeoutMs: MERGE_TIMEOUT_MS,
       }).pipe(Effect.asVoid),
   });
 });

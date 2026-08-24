@@ -46,6 +46,7 @@ import * as ProcessRunner from "./processRunner.ts";
 import * as GitManager from "./git/GitManager.ts";
 import * as Keybindings from "./keybindings.ts";
 import * as ServerRuntimeStartup from "./serverRuntimeStartup.ts";
+import { AutoShipReactorLive } from "./orchestration/Layers/AutoShipReactor.ts";
 import { AutonomousRunReactorLive } from "./orchestration/Layers/AutonomousRunReactor.ts";
 import { AutonomousScheduleReactorLive } from "./orchestration/Layers/AutonomousScheduleReactor.ts";
 import { IssueArchiveReactorLive } from "./orchestration/Layers/IssueArchiveReactor.ts";
@@ -221,6 +222,9 @@ const PlatformServicesLive = Layer.unwrap(
 const ReactorLayerLive = Layer.empty.pipe(
   Layer.provideMerge(OrchestrationReactorLive),
   Layer.provideMerge(AutonomousRunReactorLive),
+  // Same shape as the run reactor, minus the board and the reviewer: one
+  // thread's work, landed at the end of its own turn.
+  Layer.provideMerge(AutoShipReactorLive),
   Layer.provideMerge(AutonomousScheduleReactorLive),
   // Provided before ModelFailoverLive below, which it consumes: the ticker only
   // decides *when* a parked thread is due, and hands the restart itself to the

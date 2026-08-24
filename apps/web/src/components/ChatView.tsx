@@ -234,6 +234,7 @@ import {
 import { vcsEnvironment } from "../state/vcs";
 import { useEnvironments, usePrimaryEnvironment } from "../state/environments";
 import {
+  readEnvironmentSupportsAutoShip,
   useProject,
   useProjects,
   useThread,
@@ -242,6 +243,7 @@ import {
 } from "../state/entities";
 import { environmentShell } from "../state/shell";
 import { ChatComposer, type ChatComposerHandle } from "./chat/ChatComposer";
+import { type ComposerAutoShipState } from "./chat/composerAutoShip";
 import { DraftHeroHeadline } from "./chat/DraftHeroHeadline";
 import { ExpandedImageDialog } from "./chat/ExpandedImageDialog";
 import { PullRequestThreadDialog } from "./PullRequestThreadDialog";
@@ -1216,6 +1218,9 @@ function ChatViewContent(props: ChatViewProps) {
     reportFailure: false,
   });
   const setThreadInteractionMode = useAtomCommand(threadEnvironment.setInteractionMode, {
+    reportFailure: false,
+  });
+  const setThreadAutoShip = useAtomCommand(threadEnvironment.setAutoShip, {
     reportFailure: false,
   });
   const startThreadTurn = useAtomCommand(threadEnvironment.startTurn, { reportFailure: false });
@@ -3230,6 +3235,40 @@ function ChatViewContent(props: ChatViewProps) {
   const toggleInteractionMode = useCallback(() => {
     handleInteractionModeChange(interactionMode === "plan" ? "default" : "plan");
   }, [handleInteractionModeChange, interactionMode]);
+
+  /**
+   * Auto-ship is thread state, not composer state: it outlives the draft and
+   * the server acts on it after the turn is over, so the toggle dispatches
+   * straight through rather than staging a value the next send would carry.
+   */
+  const autoShip = useMemo((): ComposerAutoShipState | null => {
+    if (!activeThreadRef || !isServerThread) return null;
+    if (!readEnvironmentSupportsAutoShip(activeThreadRef.environmentId)) return null;
+    const enabled = activeServerThread?.autoShipEnabledAt != null;
+    return {
+      enabled,
+      // A thread working the project directory has no branch of its own, so
+      // there is nothing to open a pull request from.
+      disabledReason:
+        activeServerThread?.worktreePath == null
+          ? "Auto-ship needs a worktree — this thread works the project directory directly."
+          : null,
+    };
+  }, [
+    activeServerThread?.autoShipEnabledAt,
+    activeServerThread?.worktreePath,
+    activeThreadRef,
+    isServerThread,
+  ]);
+
+  const handleToggleAutoShip = useCallback(() => {
+    if (!activeThreadRef || !autoShip || autoShip.disabledReason !== null) return;
+    void setThreadAutoShip({
+      environmentId: activeThreadRef.environmentId,
+      input: { threadId: activeThreadRef.threadId, enabled: !autoShip.enabled },
+    });
+    scheduleComposerFocus();
+  }, [activeThreadRef, autoShip, scheduleComposerFocus, setThreadAutoShip]);
   const createBrowserSurface = useCallback(() => {
     if (!activeThreadRef) return;
     void addBrowserSurface({ threadRef: activeThreadRef, openPreview });
@@ -6315,6 +6354,8 @@ function ChatViewContent(props: ChatViewProps) {
                             toggleInteractionMode={toggleInteractionMode}
                             handleRuntimeModeChange={handleRuntimeModeChange}
                             handleInteractionModeChange={handleInteractionModeChange}
+                            autoShip={autoShip}
+                            onToggleAutoShip={handleToggleAutoShip}
                             focusComposer={focusComposer}
                             scheduleComposerFocus={scheduleComposerFocus}
                             setThreadError={setThreadError}

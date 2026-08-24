@@ -5,6 +5,7 @@ import * as ManagedRuntime from "effect/ManagedRuntime";
 import * as Scope from "effect/Scope";
 import { afterEach, describe, expect, it } from "vite-plus/test";
 
+import { AutoShipReactor } from "../Services/AutoShipReactor.ts";
 import { AutonomousRunReactor } from "../Services/AutonomousRunReactor.ts";
 import { AutonomousScheduleReactor } from "../Services/AutonomousScheduleReactor.ts";
 import { CheckpointReactor } from "../Services/CheckpointReactor.ts";
@@ -26,7 +27,7 @@ describe("OrchestrationReactor", () => {
     runtime = null;
   });
 
-  it("starts provider ingestion, provider command, checkpoint, thread deletion, autonomous, limit-resume, and issue archive reactors", async () => {
+  it("starts provider ingestion, provider command, checkpoint, thread deletion, autonomous, auto-ship, limit-resume, and issue archive reactors", async () => {
     const started: string[] = [];
 
     runtime = ManagedRuntime.make(
@@ -77,6 +78,15 @@ describe("OrchestrationReactor", () => {
           }),
         ),
         Layer.provideMerge(
+          Layer.succeed(AutoShipReactor, {
+            start: () => {
+              started.push("auto-ship-reactor");
+              return Effect.void;
+            },
+            drain: Effect.void,
+          }),
+        ),
+        Layer.provideMerge(
           Layer.succeed(AutonomousScheduleReactor, {
             start: () => {
               started.push("autonomous-schedule-reactor");
@@ -116,6 +126,7 @@ describe("OrchestrationReactor", () => {
       "checkpoint-reactor",
       "thread-deletion-reactor",
       "autonomous-run-reactor",
+      "auto-ship-reactor",
       "autonomous-schedule-reactor",
       "limit-resume-reactor",
       "issue-archive-reactor",

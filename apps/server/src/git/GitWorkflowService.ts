@@ -56,6 +56,14 @@ export class GitWorkflowService extends Context.Service<
     readonly resolvePullRequest: (
       input: GitPullRequestRefInput,
     ) => Effect.Effect<GitResolvePullRequestResult, GitManagerServiceError>;
+    /** Squash-merges an open pull request. See `GitManager.mergePullRequest`. */
+    readonly mergePullRequest: (
+      input: GitPullRequestRefInput,
+    ) => Effect.Effect<void, GitManagerServiceError>;
+    /** The branch a pull request opened here would target. */
+    readonly resolveBaseBranch: (input: {
+      readonly cwd: string;
+    }) => Effect.Effect<string, GitManagerServiceError>;
     readonly preparePullRequestThread: (
       input: GitPreparePullRequestThreadInput,
     ) => Effect.Effect<GitPreparePullRequestThreadResult, GitManagerServiceError>;
@@ -306,6 +314,14 @@ export const make = Effect.gen(function* () {
     resolvePullRequest: routeGitManager(
       "GitWorkflowService.resolvePullRequest",
       gitManager.resolvePullRequest,
+    ),
+    mergePullRequest: routeGitManager(
+      "GitWorkflowService.mergePullRequest",
+      gitManager.mergePullRequest,
+    ),
+    resolveBaseBranch: routeGitManager(
+      "GitWorkflowService.resolveBaseBranch",
+      gitManager.resolveBaseBranch,
     ),
     preparePullRequestThread: routeGitManager(
       "GitWorkflowService.preparePullRequestThread",

@@ -9,6 +9,7 @@ This is a living glossary for Atlas. It explains what common terms mean in this 
 - [Project and workspace](#project-and-workspace)
 - [Issues](#issues)
 - [Autonomous mode](#autonomous-mode)
+- [Auto-ship](#auto-ship)
 - [Thread timeline](#thread-timeline)
 - [Orchestration](#orchestration)
 - [Provider runtime](#provider-runtime)
@@ -209,6 +210,54 @@ on `issue.review-recorded` and stored on the issue. Like descriptions, notes are
 unbounded and therefore ride the detail read (`orchestration.getIssue`) rather
 than the shell snapshot; the summary carries only `reviewVerdict`,
 `reviewerThreadId`, and `reviewedAt`.
+
+#### Settling merged work
+
+The park a merge earns. When work lands — a reviewer's `merged` verdict, an
+external merge reconciled into one, an already-merged pull request found on the
+worker's branch, or an [auto-ship](#auto-ship) run — the server settles the
+threads behind it (`settleMergedWork.ts`) and stops their idle provider
+sessions, the same pair of commands an interactive settle sends. An issue
+settles both of its threads, worker and reviewer, because a board that runs
+itself produces a pair per issue and neither has anything left to do.
+
+Deliberately a settle and not an archive: the thread stays readable, the next
+turn un-settles it by itself, and the worktree sweep starts counting from here.
+Best-effort by design — the decider refuses to settle a thread that is running,
+holding an approval, or about to start a turn, and that refusal is the right
+answer, because someone re-engaged the thread after the merge.
+
+### Auto-ship
+
+#### Auto-ship
+
+A per-thread switch that lands the thread's own work with no review step:
+whenever a turn ends having left shippable commits, the server commits, pushes,
+opens the pull request and squash-merges it. Turned on and off with
+`thread.auto-ship.set`; on is a non-null `autoShipEnabledAt` on the thread. It
+is the deliberate opposite of [autonomous mode](#autonomous-mode) — no board, no
+reviewer thread, no verdict — and it is a user decision, so the decider rejects
+it for a thread with no worktree rather than letting the switch mean nothing.
+The loop lives in `apps/server/src/orchestration/Layers/AutoShipReactor.ts`.
+
+A ship runs on a turn end and on the moment auto-ship is turned on for an idle
+thread, so flipping the switch is answerable. A server restart is deliberately
+not a trigger: a boot is not a turn end, and the next turn's ship picks up
+whatever a restart stranded.
+
+The merge always squashes and never removes the source branch — that branch is
+checked out in a live worktree, and pulling it out from under a running thread
+is worse than leaving it for the worktree sweeper.
+
+#### Ship outcome
+
+What one ship did, written to the thread's timeline as a
+`thread.auto-ship` activity (`packages/contracts/src/autoShip.ts`): `merged`,
+`opened` (the pull request exists but the merge was refused — a check, a
+conflict, a protection rule — so a human finishes it), or `failed`. A turn that
+left nothing to ship writes nothing at all; most turns change no code, and a
+timeline saying "nothing to ship" after each of them is noise. A `merged` ship
+also settles the thread — see [settling merged work](#settling-merged-work).
 
 ### Thread timeline
 

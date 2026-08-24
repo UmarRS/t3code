@@ -47,6 +47,7 @@ const BitbucketApiOperation = Schema.Literals([
   "createPullRequest",
   "probeAuth",
   "checkoutPullRequest",
+  "mergePullRequest",
 ]);
 type BitbucketApiOperation = typeof BitbucketApiOperation.Type;
 
@@ -288,6 +289,11 @@ export class BitbucketApi extends Context.Service<
       readonly context?: SourceControlProvider.SourceControlProviderContext;
       readonly reference: string;
       readonly force?: boolean;
+    }) => Effect.Effect<void, BitbucketApiError>;
+    readonly mergePullRequest: (input: {
+      readonly cwd: string;
+      readonly context?: SourceControlProvider.SourceControlProviderContext;
+      readonly reference: string;
     }) => Effect.Effect<void, BitbucketApiError>;
   }
 >()("t3/sourceControl/BitbucketApi") {}
@@ -754,6 +760,26 @@ export const make = Effect.gen(function* () {
         ),
         Effect.map(normalizeRepositoryCloneUrls),
       ),
+    mergePullRequest: (input) =>
+      Effect.gen(function* () {
+        const repository = yield* resolveRepository(input);
+        yield* executeJson(
+          "mergePullRequest",
+          HttpClientRequest.post(
+            apiUrl(
+              `/repositories/${encodeURIComponent(repository.workspace)}/${encodeURIComponent(repository.repoSlug)}/pullrequests/${encodeURIComponent(normalizeChangeRequestId(input.reference))}/merge`,
+            ),
+          ).pipe(
+            // `close_source_branch: false`: the source branch is checked out
+            // in a live worktree, so it has to survive the merge.
+            HttpClientRequest.bodyJsonUnsafe({
+              merge_strategy: "squash",
+              close_source_branch: false,
+            }),
+          ),
+          BitbucketPullRequestSchema,
+        );
+      }),
     createPullRequest: (input) =>
       Effect.gen(function* () {
         const repository = yield* resolveRepository(input);

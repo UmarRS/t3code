@@ -137,6 +137,40 @@ export const AutonomousScheduleFiredReceipt = Schema.Struct({
 });
 export type AutonomousScheduleFiredReceipt = typeof AutonomousScheduleFiredReceipt.Type;
 
+/**
+ * Auto-ship milestones for one thread's turn. The ship runs after the turn is
+ * already over, so without these a test would have nothing to wait on but the
+ * pull request appearing in someone else's cache.
+ */
+export const ThreadAutoShipCompletedReceipt = Schema.Struct({
+  type: Schema.Literal("thread.auto-ship.completed"),
+  threadId: ThreadId,
+  pullRequestUrl: Schema.NullOr(Schema.String),
+  createdAt: IsoDateTime,
+});
+export type ThreadAutoShipCompletedReceipt = typeof ThreadAutoShipCompletedReceipt.Type;
+
+/**
+ * The ship did not land. `reason` is what the user is shown, so it names the
+ * step that failed rather than the effect that raised.
+ */
+export const ThreadAutoShipFailedReceipt = Schema.Struct({
+  type: Schema.Literal("thread.auto-ship.failed"),
+  threadId: ThreadId,
+  reason: Schema.String,
+  createdAt: IsoDateTime,
+});
+export type ThreadAutoShipFailedReceipt = typeof ThreadAutoShipFailedReceipt.Type;
+
+/** The turn left nothing to ship. Not a failure: most turns are like this. */
+export const ThreadAutoShipSkippedReceipt = Schema.Struct({
+  type: Schema.Literal("thread.auto-ship.skipped"),
+  threadId: ThreadId,
+  reason: Schema.String,
+  createdAt: IsoDateTime,
+});
+export type ThreadAutoShipSkippedReceipt = typeof ThreadAutoShipSkippedReceipt.Type;
+
 export const OrchestrationRuntimeReceipt = Schema.Union([
   CheckpointBaselineCapturedReceipt,
   CheckpointDiffFinalizedReceipt,
@@ -148,6 +182,9 @@ export const OrchestrationRuntimeReceipt = Schema.Union([
   AutonomousIssueCompletedWithoutChangesReceipt,
   AutonomousRunCompletedReceipt,
   AutonomousScheduleFiredReceipt,
+  ThreadAutoShipCompletedReceipt,
+  ThreadAutoShipFailedReceipt,
+  ThreadAutoShipSkippedReceipt,
 ]);
 export type OrchestrationRuntimeReceipt = typeof OrchestrationRuntimeReceipt.Type;
 

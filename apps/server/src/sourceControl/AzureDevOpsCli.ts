@@ -20,6 +20,8 @@ import {
 import * as SourceControlProvider from "./SourceControlProvider.ts";
 
 const DEFAULT_TIMEOUT_MS = 30_000;
+/** Merging waits on the provider's own merge job, which is slower than a read. */
+const MERGE_TIMEOUT_MS = 120_000;
 
 const azureDevOpsCommandErrorFields = {
   operation: Schema.Literal("execute"),
@@ -245,6 +247,11 @@ export class AzureDevOpsCli extends Context.Service<
       readonly cwd: string;
       readonly reference: string;
       readonly remoteName?: string;
+    }) => Effect.Effect<void, AzureDevOpsCliError>;
+
+    readonly mergePullRequest: (input: {
+      readonly cwd: string;
+      readonly reference: string;
     }) => Effect.Effect<void, AzureDevOpsCliError>;
   }
 >()("t3/sourceControl/AzureDevOpsCli") {}
@@ -529,6 +536,29 @@ export const make = Effect.gen(function* () {
           "--remote-name",
           input.remoteName ?? "origin",
         ],
+      }).pipe(Effect.asVoid),
+    mergePullRequest: (input) =>
+      execute({
+        cwd: input.cwd,
+        // Azure DevOps lands a pull request by completing it. The source
+        // branch stays: it is checked out in a live worktree.
+        args: [
+          "repos",
+          "pr",
+          "update",
+          "--only-show-errors",
+          "--detect",
+          "true",
+          "--id",
+          normalizeChangeRequestId(input.reference),
+          "--status",
+          "completed",
+          "--squash",
+          "true",
+          "--delete-source-branch",
+          "false",
+        ],
+        timeoutMs: MERGE_TIMEOUT_MS,
       }).pipe(Effect.asVoid),
   });
 });

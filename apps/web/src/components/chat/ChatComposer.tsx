@@ -89,6 +89,7 @@ import { ProviderModelPicker } from "./ProviderModelPicker";
 import { type ComposerCommandItem, ComposerCommandMenu } from "./ComposerCommandMenu";
 import { ComposerPendingApprovalActions } from "./ComposerPendingApprovalActions";
 import { CompactComposerControlsMenu } from "./CompactComposerControlsMenu";
+import { composerAutoShipTooltip, type ComposerAutoShipState } from "./composerAutoShip";
 import { ComposerPrimaryActions } from "./ComposerPrimaryActions";
 import { ComposerPendingApprovalPanel } from "./ComposerPendingApprovalPanel";
 import { ComposerPendingUserInputPanel } from "./ComposerPendingUserInputPanel";
@@ -203,6 +204,7 @@ import {
   LockIcon,
   LockOpenIcon,
   PenLineIcon,
+  RocketIcon,
   SparklesIcon,
   XIcon,
 } from "lucide-react";
@@ -426,6 +428,46 @@ const ComposerGenerateStoriesAction = memo(function ComposerGenerateStoriesActio
   );
 });
 
+/**
+ * The auto-ship switch. Sits beside story generation because both are things
+ * done *to* the thread rather than to the message being written. See
+ * `CompactComposerControlsMenu` for the equivalent at narrow widths.
+ */
+const ComposerAutoShipAction = memo(function ComposerAutoShipAction(props: {
+  state: ComposerAutoShipState;
+  onToggle: () => void;
+}) {
+  const disabled = props.state.disabledReason !== null;
+
+  return (
+    <>
+      <Separator orientation="vertical" className="mx-0.5 hidden h-4 sm:block" />
+      <Tooltip>
+        <TooltipTrigger
+          render={
+            <ComposerControl
+              type="button"
+              disabled={disabled}
+              aria-pressed={props.state.enabled}
+              onClick={props.onToggle}
+              className={cn(
+                "shrink-0 whitespace-nowrap",
+                props.state.enabled
+                  ? "text-foreground"
+                  : "text-secondary-label hover:text-foreground",
+              )}
+            />
+          }
+        >
+          <ComposerControlIcon icon={RocketIcon} />
+          <span className="sr-only sm:not-sr-only">Auto-ship</span>
+        </TooltipTrigger>
+        <TooltipPopup side="top">{composerAutoShipTooltip(props.state)}</TooltipPopup>
+      </Tooltip>
+    </>
+  );
+});
+
 const ComposerFooterPrimaryActions = memo(function ComposerFooterPrimaryActions(props: {
   compact: boolean;
   activeContextWindow: ReturnType<typeof deriveLatestContextWindowSnapshot>;
@@ -630,6 +672,10 @@ export interface ChatComposerProps {
   handleRuntimeModeChange: (mode: RuntimeMode) => void;
   handleInteractionModeChange: (mode: ProviderInteractionMode) => void;
 
+  /** Null hides the auto-ship toggle entirely. See `ComposerAutoShipState`. */
+  autoShip: ComposerAutoShipState | null;
+  onToggleAutoShip: () => void;
+
   focusComposer: () => void;
   scheduleComposerFocus: () => void;
   setThreadError: (threadId: ThreadId | null, error: string | null) => void;
@@ -701,6 +747,8 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     toggleInteractionMode,
     handleRuntimeModeChange,
     handleInteractionModeChange,
+    autoShip,
+    onToggleAutoShip,
     focusComposer,
     scheduleComposerFocus,
     setThreadError,
@@ -3259,9 +3307,11 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                     showInteractionModeToggle={composerProviderControls.showInteractionModeToggle}
                     traitsMenuContent={providerTraitsMenuContent}
                     generateStoriesProjectTitle={generateStoriesProject?.title ?? null}
+                    autoShip={autoShip}
                     onToggleInteractionMode={toggleInteractionMode}
                     onRuntimeModeChange={handleRuntimeModeChange}
                     onGenerateStories={prepareGenerateStoriesPrompt}
+                    onToggleAutoShip={onToggleAutoShip}
                   />
                 ) : (
                   <>
@@ -3282,6 +3332,9 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                       projectTitle={generateStoriesProject?.title ?? null}
                       onClick={prepareGenerateStoriesPrompt}
                     />
+                    {autoShip ? (
+                      <ComposerAutoShipAction state={autoShip} onToggle={onToggleAutoShip} />
+                    ) : null}
                   </>
                 )}
               </div>

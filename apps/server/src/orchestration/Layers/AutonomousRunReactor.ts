@@ -39,6 +39,7 @@ import {
   resolveReviewerModelSelection,
   resolveTieredReviewerModelSelection,
 } from "../reviewerModelSelection.ts";
+import { makeSettleMergedThread } from "../settleMergedWork.ts";
 
 /**
  * The autonomous run loop.
@@ -85,6 +86,11 @@ const make = Effect.gen(function* () {
   const providerRegistry = yield* ProviderRegistry;
   const receipts = yield* RuntimeReceiptBus;
   const reviewComplexityClassifier = yield* ReviewComplexityClassifier;
+
+  const settleMergedThread = makeSettleMergedThread({
+    orchestrationEngine,
+    projectionSnapshotQuery,
+  });
 
   const nowIso = Effect.map(DateTime.now, DateTime.formatIso);
   const serverCommandId = (tag: string) =>
@@ -521,6 +527,10 @@ const make = Effect.gen(function* () {
             status: "done",
           })
           .pipe(Effect.ignoreCause({ log: true }));
+        // Delivered before anyone looked: there is no review to wait for, so
+        // the worker thread parks here rather than at a verdict that will
+        // never be recorded.
+        yield* settleMergedThread({ threadId, mergeKey: `issue:${issue.id}` });
       }
       return;
     }
@@ -828,6 +838,29 @@ const make = Effect.gen(function* () {
     });
 
   /**
+   * A merged verdict is the end of an issue's threads, both of them.
+   *
+   * The worker wrote the change and the reviewer landed it; neither has
+   * anything left to do, and a board that runs itself produces a pair of them
+   * per issue. Left active they would crowd out the threads a human is
+   * actually needed on, so the run parks its own finished work the same way a
+   * user would — settled, still readable, and woken by any follow-up turn.
+   */
+  const settleMergedIssueThreads = Effect.fn("settleMergedIssueThreads")(function* (
+    issueId: IssueId,
+    reviewerThreadId: ThreadId,
+  ) {
+    yield* settleMergedThread({ threadId: reviewerThreadId, mergeKey: `issue:${issueId}` });
+    const issueOption = yield* projectionSnapshotQuery
+      .getIssueSummaryById(issueId)
+      .pipe(Effect.orElseSucceed(() => Option.none()));
+    if (Option.isNone(issueOption)) return;
+    const workerThreadId = issueOption.value.threadId;
+    if (workerThreadId === null || workerThreadId === reviewerThreadId) return;
+    yield* settleMergedThread({ threadId: workerThreadId, mergeKey: `issue:${issueId}` });
+  });
+
+  /**
    * A reviewer thread whose session died without reporting a verdict would
    * otherwise hold the merge queue forever. Record the failure as the verdict
    * so the queue advances and the issue is parked for a human.
@@ -926,6 +959,9 @@ const make = Effect.gen(function* () {
     // next review starts even if the re-evaluation below fails.
     if (event.type === "issue.review-recorded") {
       yield* completePendingReview(event.payload.issueId);
+      if (event.payload.verdict === "merged") {
+        yield* settleMergedIssueThreads(event.payload.issueId, event.payload.reviewerThreadId);
+      }
     }
     if (event.type === "thread.session-set") {
       const status = event.payload.session.status;

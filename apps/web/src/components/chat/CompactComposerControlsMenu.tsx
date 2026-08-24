@@ -1,7 +1,8 @@
 import { ProviderInteractionMode, RuntimeMode } from "@t3tools/contracts";
 import { memo, type ReactNode } from "react";
-import { EllipsisIcon, SparklesIcon } from "lucide-react";
+import { EllipsisIcon, RocketIcon, SparklesIcon } from "lucide-react";
 import { Button } from "../ui/button";
+import { composerAutoShipTooltip, type ComposerAutoShipState } from "./composerAutoShip";
 import {
   Menu,
   MenuItem,
@@ -19,9 +20,12 @@ export const CompactComposerControlsMenu = memo(function CompactComposerControls
   traitsMenuContent?: ReactNode;
   /** Null when the composer target has no resolvable project — disables the action. */
   generateStoriesProjectTitle: string | null;
+  /** Null hides the auto-ship item entirely. See `ComposerAutoShipState`. */
+  autoShip: ComposerAutoShipState | null;
   onToggleInteractionMode: () => void;
   onRuntimeModeChange: (mode: RuntimeMode) => void;
   onGenerateStories: () => void;
+  onToggleAutoShip: () => void;
 }) {
   return (
     <Menu>
@@ -51,6 +55,16 @@ export const CompactComposerControlsMenu = memo(function CompactComposerControls
           <SparklesIcon aria-hidden="true" className="size-4" />
           Generate stories
         </MenuItem>
+        {props.autoShip ? (
+          <MenuItem
+            disabled={props.autoShip.disabledReason !== null}
+            title={composerAutoShipTooltip(props.autoShip)}
+            onClick={props.onToggleAutoShip}
+          >
+            <RocketIcon aria-hidden="true" className="size-4" />
+            {props.autoShip.enabled ? "Turn off auto-ship" : "Auto-ship"}
+          </MenuItem>
+        ) : null}
         <MenuDivider />
         {props.showInteractionModeToggle ? (
           <>

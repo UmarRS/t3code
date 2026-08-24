@@ -63,6 +63,7 @@ import {
   OrchestrationEngineService,
   type OrchestrationEngineShape,
 } from "../src/orchestration/Services/OrchestrationEngine.ts";
+import { AutoShipReactor } from "../src/orchestration/Services/AutoShipReactor.ts";
 import { AutonomousRunReactor } from "../src/orchestration/Services/AutonomousRunReactor.ts";
 import { AutonomousScheduleReactor } from "../src/orchestration/Services/AutonomousScheduleReactor.ts";
 import { IssueArchiveReactor } from "../src/orchestration/Services/IssueArchiveReactor.ts";
@@ -389,6 +390,12 @@ export const makeOrchestrationIntegrationHarness = (
       // provider-registry stack into every scenario here.
       Layer.provideMerge(
         Layer.succeed(AutonomousRunReactor, {
+          start: () => Effect.void,
+          drain: Effect.void,
+        }),
+      ),
+      Layer.provideMerge(
+        Layer.succeed(AutoShipReactor, {
           start: () => Effect.void,
           drain: Effect.void,
         }),

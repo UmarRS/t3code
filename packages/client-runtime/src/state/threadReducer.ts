@@ -244,6 +244,16 @@ export function applyThreadDetailEvent(
         },
       };
 
+    case "thread.auto-ship-set":
+      return {
+        kind: "updated",
+        thread: {
+          ...thread,
+          autoShipEnabledAt: event.payload.autoShipEnabledAt,
+          updatedAt: event.payload.updatedAt,
+        },
+      };
+
     // ── Turn lifecycle ──────────────────────────────────────────────
     case "thread.turn-start-requested":
       return {

@@ -777,6 +777,10 @@ describe("AutonomousRunReactor", () => {
       expect(issue?.pullRequestUrl).toBe("https://example.test/pr/9");
       expect(harness.stackedActions).toEqual([]);
       expect(harness.reviews).toEqual([]);
+      // Merged is merged, whoever pressed the button: the worker thread parks
+      // here, since no review will ever record a verdict for it.
+      const thread = Option.getOrThrow(yield* run.snapshotQuery.getThreadShellById(threadId));
+      expect(thread.settledOverride).toBe("settled");
     }).pipe(Effect.scoped, Effect.provide(harness.layer));
   });
 
@@ -1152,6 +1156,96 @@ describe("AutonomousRunReactor", () => {
       expect(harness.reviews[1]?.issueId).toBe(IssueId.make("issue-b"));
 
       expect((yield* run.findIssue("issue-a"))?.status).toBe("done");
+    }).pipe(Effect.scoped, Effect.provide(harness.layer));
+  });
+
+  it.effect("settles the worker and reviewer threads once the work is merged", () => {
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      const run = yield* bootRun();
+      yield* run.createProject();
+      yield* run.createIssue("issue-a");
+      yield* run.enableAutonomous();
+      yield* run.reactor.drain;
+
+      const workerThreadId = harness.started[0]?.command.threadId;
+      if (!workerThreadId) throw new Error("expected the issue to have started");
+      yield* run.createWorkerThread(workerThreadId, "/tmp/acme-worktrees/issue-a", "issue/issue-a");
+      yield* run.receiptsWhile(2, run.endTurn(workerThreadId, "idle"));
+
+      const reviewerThreadId = harness.reviews[0]?.threadId;
+      if (!reviewerThreadId) throw new Error("expected a reviewer thread");
+      // The coordinator is stubbed here, so the reviewer thread it would have
+      // created has to be stood up by the scenario.
+      yield* run.createWorkerThread(
+        reviewerThreadId,
+        "/tmp/acme-worktrees/issue-a",
+        "issue/issue-a",
+      );
+
+      // The run completing is what proves the merged verdict has been through
+      // the reactor's event loop, and the settles run ahead of it.
+      const seen = yield* run.receiptsWhile(
+        1,
+        run.dispatch({
+          type: "issue.review.record",
+          commandId: run.nextCommandId("review-a"),
+          issueId: IssueId.make("issue-a"),
+          reviewerThreadId,
+          verdict: "merged",
+          notes: "Rebased and merged.",
+        }),
+      );
+      expect(seen).toEqual(["autonomous.run.completed"]);
+
+      // Neither thread has anything left to do, and a board that runs itself
+      // produces a pair of them per issue.
+      for (const threadId of [workerThreadId, reviewerThreadId]) {
+        const thread = Option.getOrThrow(yield* run.snapshotQuery.getThreadShellById(threadId));
+        expect(thread.settledOverride).toBe("settled");
+        expect(thread.settledAt).not.toBeNull();
+      }
+    }).pipe(Effect.scoped, Effect.provide(harness.layer));
+  });
+
+  it.effect("leaves an unmerged issue's threads active for the human it was handed to", () => {
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      const run = yield* bootRun();
+      yield* run.createProject();
+      yield* run.createIssue("issue-a");
+      yield* run.enableAutonomous();
+      yield* run.reactor.drain;
+
+      const workerThreadId = harness.started[0]?.command.threadId;
+      if (!workerThreadId) throw new Error("expected the issue to have started");
+      yield* run.createWorkerThread(workerThreadId, "/tmp/acme-worktrees/issue-a", "issue/issue-a");
+      yield* run.receiptsWhile(2, run.endTurn(workerThreadId, "idle"));
+
+      const reviewerThreadId = harness.reviews[0]?.threadId;
+      if (!reviewerThreadId) throw new Error("expected a reviewer thread");
+      yield* run.createWorkerThread(
+        reviewerThreadId,
+        "/tmp/acme-worktrees/issue-a",
+        "issue/issue-a",
+      );
+
+      yield* run.receiptsWhile(
+        1,
+        run.dispatch({
+          type: "issue.review.record",
+          commandId: run.nextCommandId("review-a"),
+          issueId: IssueId.make("issue-a"),
+          reviewerThreadId,
+          verdict: "needs_attention",
+          notes: "The tests do not pass on this branch.",
+        }),
+      );
+
+      for (const threadId of [workerThreadId, reviewerThreadId]) {
+        const thread = Option.getOrThrow(yield* run.snapshotQuery.getThreadShellById(threadId));
+        expect(thread.settledOverride).toBeNull();
+      }
     }).pipe(Effect.scoped, Effect.provide(harness.layer));
   });
 

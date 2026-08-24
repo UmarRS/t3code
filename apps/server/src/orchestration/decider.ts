@@ -1124,6 +1124,45 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
       };
     }
 
+    case "thread.auto-ship.set": {
+      const thread = yield* requireThreadNotArchived({
+        readModel,
+        command,
+        threadId: command.threadId,
+      });
+      // Auto-ship only means anything for a thread with somewhere to ship
+      // from. Rejecting here rather than at ship time is what keeps the switch
+      // honest: a thread working the project directory would silently do
+      // nothing every turn, which reads as a broken toggle rather than an
+      // unsupported one.
+      if (thread.worktreePath === null) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: `thread ${command.threadId} has no worktree, so it has no branch to ship`,
+        });
+      }
+      // Idempotent by re-emission (see thread.settle): flipping the switch to
+      // where it already is keeps the original timestamps so it projects as a
+      // no-op, and re-enabling never resets "on since".
+      const existingEnabledAt = thread.autoShipEnabledAt ?? null;
+      const occurredAt = yield* nowIso;
+      const unchanged = command.enabled === (existingEnabledAt !== null);
+      return {
+        ...(yield* withEventBase({
+          aggregateKind: "thread",
+          aggregateId: command.threadId,
+          occurredAt,
+          commandId: command.commandId,
+        })),
+        type: "thread.auto-ship-set",
+        payload: {
+          threadId: command.threadId,
+          autoShipEnabledAt: command.enabled ? (existingEnabledAt ?? occurredAt) : null,
+          updatedAt: unchanged ? thread.updatedAt : occurredAt,
+        },
+      };
+    }
+
     case "thread.turn.start": {
       const targetThread = yield* requireThread({
         readModel,

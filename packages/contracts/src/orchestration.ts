@@ -449,6 +449,10 @@ export const OrchestrationThread = Schema.Struct({
   // servers never need each other's threads to agree on the merged list.
   // Optional so payloads from pre-reorder servers still decode.
   pinOrderKey: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
+  // Auto-ship: while this is set the server commits, pushes, opens and merges
+  // this thread's pull request itself at the end of every turn, with no review
+  // in between. Optional so payloads from pre-auto-ship servers still decode.
+  autoShipEnabledAt: Schema.optional(Schema.NullOr(IsoDateTime)),
   // Pending-only state. Optional so older servers remain compatible.
   titleRegeneration: Schema.optional(Schema.NullOr(ThreadTitleRegeneration)),
   deletedAt: Schema.NullOr(IsoDateTime),
@@ -534,6 +538,9 @@ export const OrchestrationThreadShell = Schema.Struct({
   snoozedAt: Schema.optional(Schema.NullOr(IsoDateTime)),
   pinnedAt: Schema.optional(Schema.NullOr(IsoDateTime)),
   pinOrderKey: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
+  // Carried on the shell so the auto-ship reactor can decide from shell state
+  // alone, without loading thread detail on every turn end.
+  autoShipEnabledAt: Schema.optional(Schema.NullOr(IsoDateTime)),
   titleRegeneration: Schema.optional(Schema.NullOr(ThreadTitleRegeneration)),
   session: Schema.NullOr(OrchestrationSession),
   latestUserMessageAt: Schema.NullOr(IsoDateTime),
@@ -883,6 +890,20 @@ const ThreadInteractionModeSetCommand = Schema.Struct({
   createdAt: IsoDateTime,
 });
 
+/**
+ * Auto-ship: while it is on, the server ships this thread's work by itself
+ * every time a turn ends — commit, push, open the pull request, merge it. It
+ * is a thread-level opt-out of review, so it is a boolean the user flips
+ * rather than anything the agent can turn on for itself.
+ */
+const ThreadAutoShipSetCommand = Schema.Struct({
+  type: Schema.Literal("thread.auto-ship.set"),
+  commandId: CommandId,
+  threadId: ThreadId,
+  enabled: Schema.Boolean,
+  createdAt: IsoDateTime,
+});
+
 const ThreadTurnStartBootstrapCreateThread = Schema.Struct({
   projectId: ProjectId,
   title: TrimmedNonEmptyString,
@@ -1209,6 +1230,7 @@ const DispatchableClientOrchestrationCommand = Schema.Union([
   ThreadMetaUpdateCommand,
   ThreadRuntimeModeSetCommand,
   ThreadInteractionModeSetCommand,
+  ThreadAutoShipSetCommand,
   ThreadTurnStartCommand,
   ThreadTurnInterruptCommand,
   ThreadApprovalRespondCommand,
@@ -1250,6 +1272,7 @@ export const ClientOrchestrationCommand = Schema.Union([
   ThreadMetaUpdateCommand,
   ThreadRuntimeModeSetCommand,
   ThreadInteractionModeSetCommand,
+  ThreadAutoShipSetCommand,
   ClientThreadTurnStartCommand,
   ThreadTurnInterruptCommand,
   ThreadApprovalRespondCommand,
@@ -1437,6 +1460,7 @@ export const OrchestrationEventType = Schema.Literals([
   "thread.meta-updated",
   "thread.runtime-mode-set",
   "thread.interaction-mode-set",
+  "thread.auto-ship-set",
   "thread.message-sent",
   "thread.turn-start-requested",
   "thread.turn-interrupt-requested",
@@ -1630,6 +1654,17 @@ export const ThreadInteractionModeSetPayload = Schema.Struct({
   interactionMode: ProviderInteractionMode.pipe(
     Schema.withDecodingDefault(Effect.succeed(DEFAULT_PROVIDER_INTERACTION_MODE)),
   ),
+  updatedAt: IsoDateTime,
+});
+
+/**
+ * Non-null `autoShipEnabledAt` means auto-ship is on, and says since when.
+ * Turning it off records null rather than dropping the field, so the reverse
+ * state projects as plainly as the forward one.
+ */
+export const ThreadAutoShipSetPayload = Schema.Struct({
+  threadId: ThreadId,
+  autoShipEnabledAt: Schema.NullOr(IsoDateTime),
   updatedAt: IsoDateTime,
 });
 
@@ -1951,6 +1986,11 @@ export const OrchestrationEvent = Schema.Union([
     ...EventBaseFields,
     type: Schema.Literal("thread.interaction-mode-set"),
     payload: ThreadInteractionModeSetPayload,
+  }),
+  Schema.Struct({
+    ...EventBaseFields,
+    type: Schema.Literal("thread.auto-ship-set"),
+    payload: ThreadAutoShipSetPayload,
   }),
   Schema.Struct({
     ...EventBaseFields,
