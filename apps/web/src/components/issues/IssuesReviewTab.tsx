@@ -270,7 +270,7 @@ function ReviewCard({
               underneath it, because that is the part with the detail in it. */}
           <p className="font-medium">{attentionPresentation.headline}</p>
           <p className="mt-0.5 opacity-90">{attentionPresentation.reason}</p>
-          {discardsReview && onRetry ? (
+          {discardsReview && onClearFlag && onRetry ? (
             <p className="mt-1 opacity-90">
               Retry discards this review and starts the work over from the backlog. Clear flag keeps
               the review as it stands.

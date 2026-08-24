@@ -604,17 +604,22 @@ it.layer(NodeServices.layer)("autonomous mode decider", (it) => {
 
     it.effect("is a no-op on an issue nobody reviewed", () =>
       Effect.gen(function* () {
+        const readModel = makeReadModel({ issues: [issue("issue-a")] });
         const events = yield* decide(
           {
             type: "issue.review.reset",
             commandId: CommandId.make("cmd-review-reset"),
             issueId: IssueId.make("issue-a"),
           },
-          makeReadModel({ issues: [issue("issue-a")] }),
+          readModel,
         );
-        if (events[0]?.type === "issue.review-reset") {
-          expect(events[0].payload.updatedAt).toBe(NOW);
-        }
+        const reset = events[0];
+        if (reset?.type !== "issue.review-reset") throw new Error("expected a reset event");
+        // `occurredAt` is the real clock, so an `updatedAt` still on the row's
+        // own timestamp is the whole proof: nothing about the issue moved.
+        expect(reset.payload.updatedAt).toBe(NOW);
+        const next = yield* projectEvent(readModel, { ...reset, sequence: 1 }).pipe(Effect.orDie);
+        expect(next.issues).toEqual(readModel.issues);
       }),
     );
 

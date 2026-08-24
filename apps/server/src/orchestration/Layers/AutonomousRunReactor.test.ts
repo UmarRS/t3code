@@ -1269,6 +1269,40 @@ describe("AutonomousRunReactor", () => {
     }).pipe(Effect.scoped, Effect.provide(harness.layer));
   });
 
+  it.effect("releases the merge queue when a claimed review is thrown away", () => {
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      const run = yield* bootRun();
+      yield* run.createProject();
+      yield* run.createIssue("issue-a");
+      yield* run.enableAutonomous();
+      yield* run.reactor.drain;
+
+      const threadId = harness.started[0]?.command.threadId;
+      if (!threadId) throw new Error("expected the issue to have started");
+      yield* run.createWorkerThread(threadId, "/tmp/acme-worktrees/issue-a", "issue/issue-a");
+      yield* run.receiptsWhile(2, run.endTurn(threadId, "idle"));
+      expect(harness.reviews).toHaveLength(1);
+
+      // The reviewer has claimed the issue but recorded nothing, and the merge
+      // queue is serialized on that review settling. A reset is allowed here —
+      // the decider counts an unrecorded claim as something to throw away — so
+      // it has to release the queue too, or no issue on the board is ever
+      // reviewed again.
+      const seen = yield* run.receiptsWhile(
+        1,
+        run.dispatch({
+          type: "issue.review.reset",
+          commandId: run.nextCommandId("review-reset"),
+          issueId: IssueId.make("issue-a"),
+        }),
+      );
+      expect(seen).toEqual(["autonomous.review.started"]);
+      expect(harness.reviews).toHaveLength(2);
+      expect(harness.reviews[1]?.issueId).toBe(IssueId.make("issue-a"));
+    }).pipe(Effect.scoped, Effect.provide(harness.layer));
+  });
+
   it.effect("re-reviews an issue whose verdict was thrown away", () => {
     const harness = makeHarness();
     return Effect.gen(function* () {
