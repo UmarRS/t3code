@@ -14,6 +14,7 @@ import { useAtomValue } from "@effect/atom-react";
 import { BotIcon, CheckIcon, ListPlusIcon, TriangleAlertIcon } from "lucide-react";
 import { useMemo, useState } from "react";
 
+import { cn } from "~/lib/utils";
 import { useProjects } from "~/state/entities";
 import { issueEnvironment, useEnvironmentIssues } from "~/state/issues";
 import { projectEnvironment } from "~/state/projects";
@@ -286,7 +287,12 @@ export function IssueDecompositionImportCard({
     }
 
     for (const planned of plan.updates) {
-      if (planned.applied || done.has(planned.issueId)) continue;
+      if (done.has(planned.issueId)) continue;
+      // A story still nobody has picked up is rewritten even when its visible
+      // fields already match: the description does not ride the board's rows,
+      // so a revision that only rewrites the body would otherwise be dropped.
+      // One that has since started is finished with, and left alone.
+      if (planned.applied && !planned.revisable) continue;
       const result = await updateIssue({
         environmentId,
         input: {
@@ -340,6 +346,7 @@ export function IssueDecompositionImportCard({
     });
   };
 
+  const populatedSections = Object.values(sectionItems).filter((items) => items.length > 0).length;
   const totalActions = plan.creates.length + plan.updates.length + plan.cancels.length;
   const revises = plan.updates.length + plan.cancels.length > 0;
   const headline = applied
@@ -365,7 +372,7 @@ export function IssueDecompositionImportCard({
             title: group.title,
             count: group.creates.length + group.updates.length + group.cancels.length,
           })),
-        )}. Each story is created on the board of the project that owns the code.`
+        )}. Each change lands on the board of the project that owns the code.`
       : applied
         ? "You can open the board when you are ready to start work."
         : "Ask for revisions in chat, then add only the version you want to keep.";
@@ -406,7 +413,19 @@ export function IssueDecompositionImportCard({
         </div>
       </div>
 
-      <div className="mt-3 grid gap-3 border-t border-border/60 pt-3 sm:grid-cols-3">
+      <div
+        className={cn(
+          "mt-3 grid gap-3 border-t border-border/60 pt-3",
+          // Only the sections with something in them get a column, so the
+          // ordinary create-only plan reads across the whole card instead of
+          // truncating every title into a third of it.
+          populatedSections === 3
+            ? "sm:grid-cols-3"
+            : populatedSections === 2
+              ? "sm:grid-cols-2"
+              : "",
+        )}
+      >
         <PlanSection label="Create" items={sectionItems.create} />
         <PlanSection label="Update" items={sectionItems.update} />
         <PlanSection label="Cancel" items={sectionItems.cancel} />

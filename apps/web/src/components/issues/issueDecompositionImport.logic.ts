@@ -146,8 +146,14 @@ export interface PlannedIssueUpdate extends PlannedIssueFields {
   readonly key: string;
   /** The story being rewritten, as it stands on the board right now. */
   readonly existing: DecompositionImportIssue;
-  /** True once the board already reads the way this entry would leave it. */
+  /**
+   * True once the board already reads the way this entry would leave it, as
+   * far as a summary can tell — the description does not ride the board's
+   * rows, so this is what the card shows and not a reason to skip the write.
+   */
   readonly applied: boolean;
+  /** Whether the story is still work nobody has picked up, and safe to rewrite. */
+  readonly revisable: boolean;
 }
 
 export interface PlannedIssueCancel {
@@ -247,7 +253,9 @@ export function planIssueDecompositionImport(input: {
       const existing = issuesById.get(entry.updates);
       if (existing === undefined) return null;
       if (existing.projectId !== entryProjectId) return null;
-      if (!isIssueOpenToRevision(existing)) return null;
+      // Whether it may still be rewritten is settled below, once the fields
+      // this entry would write are resolved: a rewrite that already landed
+      // stays valid even after somebody picks the story up.
       if (!claim(existing.id)) return null;
     }
     for (const supersededId of entry.supersedes ?? []) {
@@ -308,18 +316,19 @@ export function planIssueDecompositionImport(input: {
     }
     const existing = issuesById.get(entry.updates);
     if (existing === undefined) return null;
-    updates.push({
-      ...fields,
-      key: entry.key,
-      existing,
-      // The description is the one field a board summary does not carry, so a
-      // re-apply that only rewrites text is cheap rather than detectable.
-      applied:
-        existing.title === fields.title &&
-        existing.priority === fields.priority &&
-        sameModelSelection(fields.modelSelection, existing.modelSelection) &&
-        sameIds(existing.dependsOn, fields.dependsOn),
-    });
+    // The description is the one field a board summary does not carry, so this
+    // says the visible fields already match, not that the rewrite landed.
+    const applied =
+      existing.title === fields.title &&
+      existing.priority === fields.priority &&
+      sameModelSelection(fields.modelSelection, existing.modelSelection) &&
+      sameIds(existing.dependsOn, fields.dependsOn);
+    const revisable = isIssueOpenToRevision(existing);
+    // A story that already reads the way this entry would leave it has nothing
+    // left to rewrite, so starting it afterwards must not retroactively make
+    // the block invalid and take the card out of the transcript.
+    if (!revisable && !applied) return null;
+    updates.push({ ...fields, key: entry.key, existing, applied, revisable });
   }
 
   // The graph the plan would leave behind, so a revision cannot quietly draw a

@@ -211,6 +211,44 @@ describe("planIssueDecompositionImport", () => {
     ).toBeNull();
   });
 
+  // Revising a story and then starting it is the ordinary next step, and the
+  // card has to stay in the transcript when it happens.
+  it("keeps a rewrite that already landed valid once the story is picked up", () => {
+    const result = plan(
+      [entry({ key: "auth", title: "Rework the session flow", updates: EXISTING_A })],
+      [
+        existing(EXISTING_A, {
+          title: "Rework the session flow",
+          status: "in_progress",
+          threadId: "thread-1",
+        }),
+      ],
+    );
+
+    expect(result?.updates[0]?.applied).toBe(true);
+    expect(result?.updates[0]?.revisable).toBe(false);
+    expect(
+      result === null
+        ? null
+        : isIssueDecompositionImportApplied(result, {
+            existingIssueIds: new Set([EXISTING_A]),
+            completedIds: new Set(),
+          }),
+    ).toBe(true);
+  });
+
+  // The board's rows carry no description, so matching metadata cannot prove
+  // the rewrite landed: the card has to write it again rather than skip it.
+  it("still offers to rewrite a story whose visible fields already match", () => {
+    const result = plan(
+      [entry({ key: "auth", title: "Story 5f3a", updates: EXISTING_A })],
+      [existing(EXISTING_A)],
+    );
+
+    expect(result?.updates[0]?.applied).toBe(true);
+    expect(result?.updates[0]?.revisable).toBe(true);
+  });
+
   it("refuses a story naming an issue that is not there", () => {
     expect(plan([entry({ key: "auth", updates: EXISTING_A })])).toBeNull();
   });
