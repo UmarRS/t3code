@@ -467,6 +467,61 @@ function unfinishedDependencies<Issue extends AutonomousIssueView>(
 }
 
 /**
+ * Dependencies of `issue` that are neither finished nor gone, resolved across
+ * every board in `issues`. The flagged-issue rule the run derivations apply
+ * elsewhere deliberately does not apply here: a stuck issue's blockers are
+ * exactly what a human needs named.
+ */
+export function unfinishedIssueDependencies<Issue extends AutonomousIssueView>(
+  issue: AutonomousIssueView,
+  issues: ReadonlyArray<Issue>,
+): ReadonlyArray<Issue> {
+  return unfinishedDependencies(issue, new Map(issues.map((entry) => [entry.id, entry] as const)));
+}
+
+/**
+ * Every board a plan rooted on `projectId` reaches, that board included.
+ *
+ * A run only advances the board it is switched on for, but a plan does not
+ * stop at a repository boundary: a story here may wait on a story there.
+ * These are the boards that have to be live for this one's plan to finish, so
+ * they are the boards the run switch starts and stops as one action, and the
+ * boards the run loop asks about liveness before deciding a story is stuck
+ * rather than merely waiting.
+ *
+ * Only unfinished dependencies are followed — a blocker that is already done
+ * needs nobody running its board — and the walk is transitive, so a board
+ * reached only through another board comes back too. `visited` is what makes a
+ * cycle in the issue graph terminate instead of recursing forever; the graph is
+ * kept acyclic, so that is belt and braces.
+ */
+export function reachableAutonomousProjectIds<Issue extends AutonomousIssueView>(
+  issues: ReadonlyArray<Issue>,
+  projectId: ProjectId,
+): ReadonlySet<ProjectId> {
+  const byId = new Map(issues.map((issue) => [issue.id, issue] as const));
+  const projectIds = new Set<ProjectId>([projectId]);
+  const visited = new Set<IssueId>();
+  const walk = (issue: Issue) => {
+    for (const dependency of unfinishedDependencies(issue, byId)) {
+      if (visited.has(dependency.id)) continue;
+      visited.add(dependency.id);
+      projectIds.add(dependency.projectId);
+      walk(dependency);
+    }
+  };
+  for (const issue of issues) {
+    // Seeded from the work this board might still do. Finished and canceled
+    // issues are nobody's plan any more, so a dependency hanging off one of
+    // them is not a reason to start another board.
+    if (issue.projectId !== projectId) continue;
+    if (isIssueDependencySatisfied(issue.status) || issue.status === "canceled") continue;
+    walk(issue);
+  }
+  return projectIds;
+}
+
+/**
  * Issues autonomous mode may start right now: still in the backlog, not
  * flagged for a human, not already attached to a thread, and with every
  * dependency `done` — including dependencies on another project's board.

@@ -3,7 +3,9 @@ import {
   blockedAutonomousIssues,
   isProviderAvailable,
   issueNeedsAttention,
+  reachableAutonomousProjectIds,
   startableAutonomousIssues,
+  unfinishedIssueDependencies,
   type AutonomousIssueView,
   type AutonomousScope,
   type EnvironmentId,
@@ -388,4 +390,132 @@ export function hasAutonomousReviewerProvider(providers: ReadonlyArray<ServerPro
       isProviderAvailable(provider) &&
       provider.models.length > 0,
   );
+}
+
+/**
+ * Boards, as the run switch talks about them: a plan that spans repositories is
+ * worked by more than one run, and the switch has to name the others.
+ */
+export interface AutonomousBoardRef {
+  readonly id: ProjectId;
+  readonly title: string;
+}
+
+export interface AutonomousBoardView extends AutonomousBoardRef {
+  readonly autonomousStartedAt?: string | null | undefined;
+}
+
+/** Sorted by title so the same set always reads the same way. */
+function toBoardRefs(
+  projectIds: Iterable<ProjectId>,
+  byId: ReadonlyMap<ProjectId, AutonomousBoardView>,
+): ReadonlyArray<AutonomousBoardRef> {
+  const boards: AutonomousBoardRef[] = [];
+  for (const projectId of projectIds) {
+    const board = byId.get(projectId);
+    if (board === undefined) continue;
+    boards.push({ id: board.id, title: board.title });
+  }
+  return boards.toSorted((left, right) => left.title.localeCompare(right.title));
+}
+
+/** "Acme", "Acme and Acme Web", "Acme, Acme Web and Acme API". */
+export function formatBoardTitles(boards: ReadonlyArray<AutonomousBoardRef>): string {
+  const titles = boards.map((board) => board.title);
+  if (titles.length <= 1) return titles.join("");
+  return `${titles.slice(0, -1).join(", ")} and ${titles.at(-1)}`;
+}
+
+export interface AutonomousPlanBoards {
+  /**
+   * The other boards to name in the confirmation, already filtered to the ones
+   * this action would actually change: boards it is about to start, or boards
+   * it is about to stop. Empty when the plan does not leave this board, which
+   * is what leaves the ordinary single-board dialog unchanged.
+   */
+  readonly boards: ReadonlyArray<AutonomousBoardRef>;
+  /**
+   * What to send as the command's `additionalProjectIds`: every other board the
+   * plan reaches, whatever state it is in. The server drops the ones the action
+   * cannot change (already running, already stopped, gone), so this stays the
+   * plan's shape rather than a snapshot of liveness the client raced to read.
+   */
+  readonly additionalProjectIds: ReadonlyArray<ProjectId>;
+}
+
+/**
+ * The boards one press of the run switch acts on.
+ *
+ * Starting offers the boards this board's plan waits on that are not already
+ * running — enabling them separately is what leaves the window where this board
+ * ticks, finds its work blocked by a board that is still off, and flags it.
+ *
+ * Stopping is symmetric, and deliberately narrower: only boards that are still
+ * live *and* still reachable from this plan come back, so a board the user
+ * started on its own is never swept up by stopping this one.
+ */
+export function resolveAutonomousPlanBoards(input: {
+  readonly issues: ReadonlyArray<AutonomousIssueView>;
+  readonly projects: ReadonlyArray<AutonomousBoardView>;
+  readonly projectId: ProjectId;
+  readonly action: "enable" | "stop";
+}): AutonomousPlanBoards {
+  const byId = new Map(input.projects.map((project) => [project.id, project] as const));
+  const reachable = [...reachableAutonomousProjectIds(input.issues, input.projectId)].filter(
+    (projectId) => projectId !== input.projectId,
+  );
+  const named = reachable.filter((projectId) => {
+    const board = byId.get(projectId);
+    if (board === undefined) return false;
+    return input.action === "enable"
+      ? board.autonomousStartedAt == null
+      : board.autonomousStartedAt != null;
+  });
+  return { boards: toBoardRefs(named, byId), additionalProjectIds: reachable };
+}
+
+/** The sentence the confirmation dialog adds when a plan spans boards. */
+export function describeAutonomousPlanBoards(
+  plan: AutonomousPlanBoards,
+  action: "enable" | "stop",
+): string | null {
+  if (plan.boards.length === 0) return null;
+  const titles = formatBoardTitles(plan.boards);
+  return action === "enable"
+    ? `Also starts ${titles}, which this plan depends on.`
+    : `Also stops ${titles}, started with this run.`;
+}
+
+/**
+ * The boards to start from a flagged issue's card: the ones holding what it is
+ * blocked on, that nobody is running. This is the dead end `describeStall`
+ * names on the server — a blocker sitting in a backlog with no run — offered
+ * back as an action rather than only as an explanation.
+ *
+ * `additionalProjectIds` carries each blocking board's own plan too, since a
+ * board started here can be stuck behind a third board in exactly the same way.
+ * Null when nothing is stuck behind an idle board, which is every other reason
+ * an issue is flagged.
+ */
+export function resolveStalledDependencyBoards(input: {
+  readonly issue: AutonomousIssueView;
+  readonly issues: ReadonlyArray<AutonomousIssueView>;
+  readonly projects: ReadonlyArray<AutonomousBoardView>;
+}): AutonomousPlanBoards | null {
+  const byId = new Map(input.projects.map((project) => [project.id, project] as const));
+  const blocking = new Set<ProjectId>();
+  for (const blocker of unfinishedIssueDependencies(input.issue, input.issues)) {
+    if (blocker.projectId === input.issue.projectId) continue;
+    const board = byId.get(blocker.projectId);
+    if (board === undefined || board.autonomousStartedAt != null) continue;
+    blocking.add(blocker.projectId);
+  }
+  if (blocking.size === 0) return null;
+  const additionalProjectIds = new Set<ProjectId>(blocking);
+  for (const projectId of blocking) {
+    for (const reached of reachableAutonomousProjectIds(input.issues, projectId)) {
+      if (reached !== input.issue.projectId) additionalProjectIds.add(reached);
+    }
+  }
+  return { boards: toBoardRefs(blocking, byId), additionalProjectIds: [...additionalProjectIds] };
 }

@@ -169,31 +169,28 @@ export function IssueDecompositionImportCard({
 
   const handleStartRuns = async () => {
     if (startingRun) return;
+    const [first, ...rest] = runnableBoards;
+    if (first === undefined) return;
     setStartingRun(true);
-    const failures: string[] = [];
-    for (const board of runnableBoards) {
-      const result = await enableAutonomous({
-        environmentId,
-        input: { projectId: board.projectId },
-      });
-      if (result._tag === "Failure" && !isAtomCommandInterrupted(result)) {
-        const failure = squashAtomCommandFailure(result);
-        failures.push(
-          `${board.title}: ${failure instanceof Error ? failure.message : "An error occurred."}`,
-        );
-      }
-    }
+    // One command, not one per board: a plan's stories depend on each other
+    // across boards, and a board that goes live while its sibling is still off
+    // finds that work blocked by nothing that is running and flags it.
+    const result = await enableAutonomous({
+      environmentId,
+      input: {
+        projectId: first.projectId,
+        additionalProjectIds: rest.map((board) => board.projectId),
+      },
+    });
     setStartingRun(false);
     setConfirmingRun(false);
-    if (failures.length > 0) {
+    if (result._tag === "Failure" && !isAtomCommandInterrupted(result)) {
+      const failure = squashAtomCommandFailure(result);
       toastManager.add(
         stackedThreadToast({
           type: "error",
-          title:
-            failures.length === runnableBoards.length
-              ? "Could not start autonomous mode"
-              : "Some boards did not start",
-          description: failures.join(" · "),
+          title: "Could not start autonomous mode",
+          description: failure instanceof Error ? failure.message : "An error occurred.",
         }),
       );
       return;

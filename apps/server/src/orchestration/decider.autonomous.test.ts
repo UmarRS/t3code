@@ -17,6 +17,8 @@ import { decideOrchestrationCommand } from "./decider.ts";
 
 const NOW = "2026-01-01T00:00:00.000Z";
 const PROJECT_ID = ProjectId.make("project-1");
+/** The other half of a plan that spans repositories. */
+const OTHER_PROJECT_ID = ProjectId.make("project-2");
 const THREAD_ID = ThreadId.make("thread-1");
 const REVIEWER_THREAD_ID = ThreadId.make("reviewer-1");
 
@@ -177,6 +179,106 @@ it.layer(NodeServices.layer)("autonomous mode decider", (it) => {
         if (events[0]?.type === "project.autonomous-disabled") {
           expect(events[0].payload.reason).toBe("completed");
         }
+      }),
+    );
+
+    // One command, one transaction: every board a plan reaches is live before
+    // any of them can tick and give up on work the others still owe it.
+    it.effect("starts the other boards a plan reaches in the same command", () =>
+      Effect.gen(function* () {
+        const events = yield* decide(
+          {
+            type: "project.autonomous.enable",
+            commandId: CommandId.make("cmd-enable"),
+            projectId: PROJECT_ID,
+            // Repeated on purpose: a graph can reach one board by several paths.
+            additionalProjectIds: [OTHER_PROJECT_ID, OTHER_PROJECT_ID, PROJECT_ID],
+            createdAt: NOW,
+          },
+          makeReadModel({
+            projects: [project(), project({ id: OTHER_PROJECT_ID, title: "Acme Web" })],
+          }),
+        );
+        expect(events.map((event) => event.type)).toEqual([
+          "project.autonomous-enabled",
+          "project.autonomous-enabled",
+        ]);
+        expect(events.map((event) => event.aggregateId)).toEqual([PROJECT_ID, OTHER_PROJECT_ID]);
+      }),
+    );
+
+    it.effect("leaves a board that is already running out of a multi-board start", () =>
+      Effect.gen(function* () {
+        const events = yield* decide(
+          {
+            type: "project.autonomous.enable",
+            commandId: CommandId.make("cmd-enable"),
+            projectId: PROJECT_ID,
+            additionalProjectIds: [OTHER_PROJECT_ID, ProjectId.make("project-gone")],
+            createdAt: NOW,
+          },
+          makeReadModel({
+            projects: [
+              project(),
+              project({ id: OTHER_PROJECT_ID, title: "Acme Web", autonomousStartedAt: NOW }),
+            ],
+          }),
+        );
+        expect(events.map((event) => event.aggregateId)).toEqual([PROJECT_ID]);
+      }),
+    );
+
+    it.effect("stops the boards started with this one", () =>
+      Effect.gen(function* () {
+        const events = yield* decide(
+          {
+            type: "project.autonomous.disable",
+            commandId: CommandId.make("cmd-disable"),
+            projectId: PROJECT_ID,
+            additionalProjectIds: [OTHER_PROJECT_ID],
+            reason: "user",
+          },
+          makeReadModel({
+            projects: [
+              project({ autonomousStartedAt: NOW }),
+              project({ id: OTHER_PROJECT_ID, title: "Acme Web", autonomousStartedAt: NOW }),
+            ],
+          }),
+        );
+        expect(events.map((event) => event.aggregateId)).toEqual([PROJECT_ID, OTHER_PROJECT_ID]);
+        expect(
+          events.every(
+            (event) =>
+              event.type === "project.autonomous-disabled" && event.payload.reason === "disabled",
+          ),
+        ).toBe(true);
+      }),
+    );
+
+    // A board that already finished keeps saying so: relabelling it as
+    // hand-stopped would lose the one signal that tells the two apart.
+    it.effect("leaves a board that is already stopped out of a multi-board stop", () =>
+      Effect.gen(function* () {
+        const events = yield* decide(
+          {
+            type: "project.autonomous.disable",
+            commandId: CommandId.make("cmd-disable"),
+            projectId: PROJECT_ID,
+            additionalProjectIds: [OTHER_PROJECT_ID],
+            reason: "user",
+          },
+          makeReadModel({
+            projects: [
+              project({ autonomousStartedAt: NOW }),
+              project({
+                id: OTHER_PROJECT_ID,
+                title: "Acme Web",
+                autonomousFinishedReason: "completed",
+              }),
+            ],
+          }),
+        );
+        expect(events.map((event) => event.aggregateId)).toEqual([PROJECT_ID]);
       }),
     );
 

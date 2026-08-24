@@ -355,11 +355,15 @@ const bootRun = Effect.fn("bootRun")(function* () {
       createdAt: NOW,
     });
 
-  const enableAutonomousFor = (projectId: ProjectId) =>
+  const enableAutonomousFor = (
+    projectId: ProjectId,
+    additionalProjectIds: ReadonlyArray<ProjectId> = [],
+  ) =>
     dispatch({
       type: "project.autonomous.enable",
       commandId: nextCommandId("enable"),
       projectId,
+      additionalProjectIds,
       createdAt: NOW,
     });
 
@@ -531,6 +535,64 @@ describe("AutonomousRunReactor", () => {
       expect(harness.started.map((entry) => entry.command.issueId)).toContain(
         IssueId.make("issue-ui"),
       );
+    }).pipe(Effect.scoped, Effect.provide(harness.layer));
+  });
+
+  // The race the multi-board start exists to close: enabling the two boards as
+  // two commands lets this one tick first, find its only story blocked by a
+  // board that is still off, flag it and switch itself off — all before the
+  // other board goes live.
+  it.effect("starts the boards its plan reaches as one action, flagging nothing", () => {
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      const run = yield* bootRun();
+      yield* run.createProject();
+      yield* run.createOtherProject();
+      yield* run.createIssueIn(OTHER_PROJECT_ID, "issue-api");
+      yield* run.createIssue("issue-ui", ["issue-api"]);
+      yield* run.enableAutonomousFor(PROJECT_ID, [OTHER_PROJECT_ID]);
+      yield* run.reactor.drain;
+
+      // The blocker is worked on the board this action switched on with it.
+      expect(harness.started.map((entry) => entry.command.issueId)).toEqual([
+        IssueId.make("issue-api"),
+      ]);
+      // And the story waiting on it is waiting, not stuck: no flag, and its
+      // board is still live to pick the work up when the blocker lands.
+      const waiting = yield* run.findIssue("issue-ui");
+      expect(waiting?.needsAttentionAt ?? null).toBeNull();
+      const project = yield* run.snapshotQuery.getProjectShellById(PROJECT_ID);
+      expect(Option.getOrThrow(project).autonomousStartedAt).not.toBeNull();
+      const other = yield* run.snapshotQuery.getProjectShellById(OTHER_PROJECT_ID);
+      expect(Option.getOrThrow(other).autonomousStartedAt).not.toBeNull();
+    }).pipe(Effect.scoped, Effect.provide(harness.layer));
+  });
+
+  it.effect("stops every board the action started, together", () => {
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      const run = yield* bootRun();
+      yield* run.createProject();
+      yield* run.createOtherProject();
+      yield* run.createIssueIn(OTHER_PROJECT_ID, "issue-api");
+      yield* run.createIssue("issue-ui", ["issue-api"]);
+      yield* run.enableAutonomousFor(PROJECT_ID, [OTHER_PROJECT_ID]);
+      yield* run.reactor.drain;
+
+      yield* run.dispatch({
+        type: "project.autonomous.disable",
+        commandId: run.nextCommandId("disable"),
+        projectId: PROJECT_ID,
+        additionalProjectIds: [OTHER_PROJECT_ID],
+        reason: "user",
+      });
+      yield* run.reactor.drain;
+
+      for (const projectId of [PROJECT_ID, OTHER_PROJECT_ID]) {
+        const project = yield* run.snapshotQuery.getProjectShellById(projectId);
+        expect(Option.getOrThrow(project).autonomousStartedAt).toBeNull();
+        expect(Option.getOrThrow(project).autonomousFinishedReason).toBe("disabled");
+      }
     }).pipe(Effect.scoped, Effect.provide(harness.layer));
   });
 

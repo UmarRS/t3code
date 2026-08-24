@@ -1,16 +1,25 @@
+import { useAtomValue } from "@effect/atom-react";
 import {
   isAtomCommandInterrupted,
   squashAtomCommandFailure,
 } from "@t3tools/client-runtime/state/runtime";
-import type { EnvironmentId, IssueId, OrchestrationIssue } from "@t3tools/contracts";
+import {
+  issueNeedsAttention,
+  type EnvironmentId,
+  type IssueId,
+  type OrchestrationIssue,
+} from "@t3tools/contracts";
 import { useCallback, useState } from "react";
 
-import { issueEnvironment } from "~/state/issues";
+import { issueEnvironment, useEnvironmentIssues } from "~/state/issues";
+import { environmentProjects, projectEnvironment } from "~/state/projects";
 import { useAtomCommand } from "~/state/use-atom-command";
 import { stackedThreadToast, toastManager } from "../ui/toast";
 import {
   planIssueAttentionClear,
   planIssueAttentionRetry,
+  resolveStalledDependencyBoards,
+  type AutonomousPlanBoards,
   type IssueRetryStep,
 } from "./autonomousRun.logic";
 
@@ -21,6 +30,9 @@ import {
  */
 export function useIssueAttentionActions(environmentId: EnvironmentId) {
   const clearAttention = useAtomCommand(issueEnvironment.clearAttention, { reportFailure: false });
+  const enableAutonomous = useAtomCommand(projectEnvironment.enableAutonomous, {
+    reportFailure: false,
+  });
   const updateIssue = useAtomCommand(issueEnvironment.update, { reportFailure: false });
   const setIssueStatus = useAtomCommand(issueEnvironment.setStatus, { reportFailure: false });
   const [pendingIssueId, setPendingIssueId] = useState<IssueId | null>(null);
@@ -55,10 +67,11 @@ export function useIssueAttentionActions(environmentId: EnvironmentId) {
               }),
             );
           }
-          return;
+          return false;
         }
       }
       setPendingIssueId(null);
+      return true;
     },
     [clearAttention, environmentId, setIssueStatus, updateIssue],
   );
@@ -73,5 +86,60 @@ export function useIssueAttentionActions(environmentId: EnvironmentId) {
     [runSteps],
   );
 
-  return { clearFlag, pendingIssueId, retry };
+  /**
+   * The way out of a cross-board dead end: start the board holding the blocker,
+   * with the rest of its own plan, and put this issue back in the run's way.
+   *
+   * The flag is cleared first and deliberately: it is what took the issue out
+   * of the run in the first place, so re-enabling the boards without clearing
+   * it would start them for work that is still parked. This board is the
+   * command's own project, so a run that switched itself off when it gave up
+   * comes back with them.
+   */
+  const startBlockingBoards = useCallback(
+    async (issue: OrchestrationIssue, plan: AutonomousPlanBoards) => {
+      if (!(await runSteps(issue, planIssueAttentionClear()))) return;
+      setPendingIssueId(issue.id);
+      const result = await enableAutonomous({
+        environmentId,
+        input: {
+          projectId: issue.projectId,
+          additionalProjectIds: plan.additionalProjectIds,
+        },
+      });
+      setPendingIssueId(null);
+      if (result._tag === "Failure" && !isAtomCommandInterrupted(result)) {
+        const error = squashAtomCommandFailure(result);
+        toastManager.add(
+          stackedThreadToast({
+            type: "error",
+            title: "Could not start the other board",
+            description: error instanceof Error ? error.message : "An error occurred.",
+          }),
+        );
+      }
+    },
+    [enableAutonomous, environmentId, runSteps],
+  );
+
+  return { clearFlag, pendingIssueId, retry, startBlockingBoards };
+}
+
+/**
+ * Resolves, for a flagged issue, the idle boards holding what it waits on —
+ * the "start a run there" the stall message asks for, as something a card can
+ * offer. Reads the environment's issues and boards rather than taking them as
+ * props, so both the board card and the Review tab can ask without either page
+ * threading cross-board state down to its cards.
+ */
+export function useStalledDependencyBoards(environmentId: EnvironmentId) {
+  const issues = useEnvironmentIssues(environmentId);
+  const projects = useAtomValue(environmentProjects.environmentProjectsAtom(environmentId));
+  return useCallback(
+    (issue: OrchestrationIssue): AutonomousPlanBoards | null =>
+      issueNeedsAttention(issue)
+        ? resolveStalledDependencyBoards({ issue, issues, projects })
+        : null,
+    [issues, projects],
+  );
 }

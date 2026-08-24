@@ -5,6 +5,7 @@ import {
   isSessionParkedForResume,
   IssueId,
   MessageId,
+  reachableAutonomousProjectIds,
   type OrchestrationEvent,
   type OrchestrationIssue,
   type ProjectId,
@@ -265,31 +266,6 @@ const make = Effect.gen(function* () {
     return true;
   });
 
-  /**
-   * The boards a dependency chain out of `issues` can reach, this one included.
-   * Only these need a liveness read: whether a board nobody is running holds a
-   * blocker is what separates a run that is waiting from one that is stuck.
-   */
-  const reachableProjectIds = (
-    issues: ReadonlyArray<OrchestrationIssue>,
-    byId: ReadonlyMap<IssueId, OrchestrationIssue>,
-    projectId: ProjectId,
-  ) => {
-    const projectIds = new Set<ProjectId>([projectId]);
-    const visited = new Set<IssueId>();
-    const walk = (issue: OrchestrationIssue) => {
-      for (const dependencyId of issue.dependsOn) {
-        const dependency = byId.get(dependencyId);
-        if (dependency === undefined || visited.has(dependency.id)) continue;
-        visited.add(dependency.id);
-        projectIds.add(dependency.projectId);
-        walk(dependency);
-      }
-    };
-    for (const issue of issues) walk(issue);
-    return projectIds;
-  };
-
   /** Why a blocked issue is never going to start, in the words a human reads on the card. */
   const describeStall = Effect.fn("describeStall")(function* (
     issue: OrchestrationIssue,
@@ -345,9 +321,13 @@ const make = Effect.gen(function* () {
       }
       issues = yield* projectionSnapshotQuery.listIssues();
 
-      const byId = new Map(issues.map((issue) => [issue.id, issue] as const));
+      // Only the boards this board's plan reaches need a liveness read:
+      // whether a board nobody is running holds a blocker is what separates a
+      // run that is waiting from one that is stuck. The same set is what the
+      // run switch starts, so the two cannot disagree about which boards a
+      // plan spans.
       const advancing = new Set<ProjectId>();
-      for (const candidate of reachableProjectIds(boardIssues(), byId, projectId)) {
+      for (const candidate of reachableAutonomousProjectIds(issues, projectId)) {
         if (yield* projectRunIsLive(candidate)) advancing.add(candidate);
       }
       const evaluation = evaluateAutonomousRun({

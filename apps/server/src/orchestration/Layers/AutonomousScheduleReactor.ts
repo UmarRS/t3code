@@ -1,7 +1,9 @@
 import {
   autonomousScheduleSlotKey,
   CommandId,
+  reachableAutonomousProjectIds,
   scheduleEntriesDueAt,
+  type OrchestrationIssue,
   type ProjectAutonomousScheduleEntry,
   type ProjectId,
 } from "@t3tools/contracts";
@@ -50,6 +52,24 @@ const make = Effect.gen(function* () {
 
   const nowIso = Effect.map(DateTime.now, DateTime.formatIso);
 
+  /**
+   * The other boards this board's plan depends on, which a scheduled run starts
+   * alongside it for exactly the reason the manual switch does: a board that
+   * ticks while a board it waits on is still off gives up on that work and
+   * flags it. A schedule has nobody watching to notice, so it needs this more
+   * than the switch does, not less.
+   */
+  const additionalProjectIdsFor = Effect.fn("additionalProjectIdsFor")(function* (
+    projectId: ProjectId,
+  ) {
+    const issues = yield* projectionSnapshotQuery
+      .listIssues()
+      .pipe(Effect.orElseSucceed(() => [] as ReadonlyArray<OrchestrationIssue>));
+    return [...reachableAutonomousProjectIds(issues, projectId)].filter(
+      (candidate) => candidate !== projectId,
+    );
+  });
+
   const startRunForEntry = Effect.fn("startRunForEntry")(function* (
     projectId: ProjectId,
     entry: ProjectAutonomousScheduleEntry,
@@ -63,6 +83,7 @@ const make = Effect.gen(function* () {
         // command, whether the repeat comes from a restart or a raced tick.
         commandId: CommandId.make(autonomousScheduleSlotKey(projectId, entry, at)),
         projectId,
+        additionalProjectIds: yield* additionalProjectIdsFor(projectId),
         createdAt,
       })
       .pipe(

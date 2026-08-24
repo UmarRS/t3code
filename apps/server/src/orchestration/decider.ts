@@ -7,6 +7,7 @@ import {
   type OrchestrationCommand,
   type OrchestrationEvent,
   type OrchestrationReadModel,
+  type ProjectId,
 } from "@t3tools/contracts";
 import { normalizeProjectPathForComparison } from "@t3tools/shared/path";
 import { projectsAreLinked } from "@t3tools/shared/projectLinks";
@@ -18,6 +19,7 @@ import type * as PlatformError from "effect/PlatformError";
 import { OrchestrationCommandInvariantError } from "./Errors.ts";
 import {
   findActiveIssueByThreadId,
+  findProjectById,
   findProjectLinkOwner,
   listActiveIssues,
   listActiveIssuesByProjectId,
@@ -38,6 +40,27 @@ import {
 import { projectEvent } from "./projector.ts";
 
 const nowIso = Effect.map(DateTime.now, DateTime.formatIso);
+
+/**
+ * The other boards a run switch names, without the board it is switched on and
+ * without repeats. A client resolves the set from the plan's dependency graph
+ * (`reachableAutonomousProjectIds`), and the graph can reach the same board by
+ * more than one path, so deduplicating here is what keeps one command from
+ * emitting two events for one project.
+ */
+function dedupeAdditionalProjectIds(command: {
+  readonly projectId: ProjectId;
+  readonly additionalProjectIds?: ReadonlyArray<ProjectId> | undefined;
+}): ReadonlyArray<ProjectId> {
+  const seen = new Set<ProjectId>([command.projectId]);
+  const ordered: ProjectId[] = [];
+  for (const projectId of command.additionalProjectIds ?? []) {
+    if (seen.has(projectId)) continue;
+    seen.add(projectId);
+    ordered.push(projectId);
+  }
+  return ordered;
+}
 
 // Session adoption takes seconds; a user message still unadopted after this
 // window is a failed/stale start, not pending work. Mirrors the client's
@@ -2047,20 +2070,52 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
       // does not jump when a raced client double-enables.
       const alreadyRunning = project.autonomousStartedAt != null;
       const occurredAt = yield* nowIso;
-      return {
-        ...(yield* withEventBase({
-          aggregateKind: "project",
-          aggregateId: command.projectId,
-          occurredAt,
-          commandId: command.commandId,
-        })),
-        type: "project.autonomous-enabled",
-        payload: {
-          projectId: command.projectId,
-          autonomousStartedAt: alreadyRunning ? project.autonomousStartedAt : occurredAt,
-          updatedAt: alreadyRunning ? project.updatedAt : occurredAt,
+      const enabled: PlannedOrchestrationEvent[] = [
+        {
+          ...(yield* withEventBase({
+            aggregateKind: "project",
+            aggregateId: command.projectId,
+            occurredAt,
+            commandId: command.commandId,
+          })),
+          type: "project.autonomous-enabled",
+          payload: {
+            projectId: command.projectId,
+            autonomousStartedAt: alreadyRunning ? project.autonomousStartedAt : occurredAt,
+            updatedAt: alreadyRunning ? project.updatedAt : occurredAt,
+          },
         },
-      };
+      ];
+      // The rest of the plan's boards, started in this same command so none of
+      // them can tick — and give up on work blocked by a sibling — while a
+      // board it depends on is still off. A board that is already running, was
+      // deleted, or no longer exists contributes no event: the first would only
+      // churn its start time, and the others cannot run at all.
+      for (const additionalProjectId of dedupeAdditionalProjectIds(command)) {
+        const additional = findProjectById(readModel, additionalProjectId);
+        if (
+          additional === undefined ||
+          additional.deletedAt !== null ||
+          additional.autonomousStartedAt != null
+        ) {
+          continue;
+        }
+        enabled.push({
+          ...(yield* withEventBase({
+            aggregateKind: "project",
+            aggregateId: additionalProjectId,
+            occurredAt,
+            commandId: command.commandId,
+          })),
+          type: "project.autonomous-enabled",
+          payload: {
+            projectId: additionalProjectId,
+            autonomousStartedAt: occurredAt,
+            updatedAt: occurredAt,
+          },
+        });
+      }
+      return enabled;
     }
 
     case "project.autonomous.disable": {
@@ -2073,23 +2128,50 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
       // finishes after a user already stopped it does not relabel itself.
       const alreadyStopped = project.autonomousStartedAt == null;
       const occurredAt = yield* nowIso;
-      return {
-        ...(yield* withEventBase({
-          aggregateKind: "project",
-          aggregateId: command.projectId,
-          occurredAt,
-          commandId: command.commandId,
-        })),
-        type: "project.autonomous-disabled",
-        payload: {
-          projectId: command.projectId,
-          reason: command.reason === "completed" ? "completed" : "disabled",
-          autonomousFinishedAt: alreadyStopped
-            ? (project.autonomousFinishedAt ?? occurredAt)
-            : occurredAt,
-          updatedAt: alreadyStopped ? project.updatedAt : occurredAt,
+      const reason = command.reason === "completed" ? "completed" : "disabled";
+      const disabled: PlannedOrchestrationEvent[] = [
+        {
+          ...(yield* withEventBase({
+            aggregateKind: "project",
+            aggregateId: command.projectId,
+            occurredAt,
+            commandId: command.commandId,
+          })),
+          type: "project.autonomous-disabled",
+          payload: {
+            projectId: command.projectId,
+            reason,
+            autonomousFinishedAt: alreadyStopped
+              ? (project.autonomousFinishedAt ?? occurredAt)
+              : occurredAt,
+            updatedAt: alreadyStopped ? project.updatedAt : occurredAt,
+          },
         },
-      };
+      ];
+      // Stopping is symmetric with enabling: the boards started alongside this
+      // one stop with it. Only boards that are still live are touched, so a
+      // board that already finished on its own keeps its `completed` reason
+      // instead of being relabelled as stopped by hand.
+      for (const additionalProjectId of dedupeAdditionalProjectIds(command)) {
+        const additional = findProjectById(readModel, additionalProjectId);
+        if (additional === undefined || additional.autonomousStartedAt == null) continue;
+        disabled.push({
+          ...(yield* withEventBase({
+            aggregateKind: "project",
+            aggregateId: additionalProjectId,
+            occurredAt,
+            commandId: command.commandId,
+          })),
+          type: "project.autonomous-disabled",
+          payload: {
+            projectId: additionalProjectId,
+            reason,
+            autonomousFinishedAt: occurredAt,
+            updatedAt: occurredAt,
+          },
+        });
+      }
+      return disabled;
     }
 
     case "project.autonomous.schedule.set": {

@@ -1018,11 +1018,20 @@ const ThreadTurnResumeCommand = Schema.Struct({
  * Turn on autonomous mode for a project: from here the server starts every
  * startable issue in parallel and merges them one at a time, until the backlog
  * has nothing left it can advance.
+ *
+ * `additionalProjectIds` starts the other boards this board's plan depends on
+ * in the same command, which is what stops one of them ticking, finding its
+ * work blocked by a board that is still off, and flagging it. One command is
+ * one transaction, so every board named here is live before any of them
+ * evaluates. Boards already running are left out of the emitted events rather
+ * than restarted. See `reachableAutonomousProjectIds` for who belongs in the
+ * set.
  */
 const ProjectAutonomousEnableCommand = Schema.Struct({
   type: Schema.Literal("project.autonomous.enable"),
   commandId: CommandId,
   projectId: ProjectId,
+  additionalProjectIds: Schema.optional(Schema.Array(ProjectId)),
   createdAt: IsoDateTime,
 });
 
@@ -1036,6 +1045,12 @@ const ProjectAutonomousDisableCommand = Schema.Struct({
   type: Schema.Literal("project.autonomous.disable"),
   commandId: CommandId,
   projectId: ProjectId,
+  /**
+   * The other boards started with this one, stopped in the same command so the
+   * switch is not a one-way door. Boards that are already stopped are left out
+   * of the emitted events, so a board that finished on its own keeps saying so.
+   */
+  additionalProjectIds: Schema.optional(Schema.Array(ProjectId)),
   reason: Schema.Literals(["user", "completed"]).pipe(
     Schema.withDecodingDefault(Effect.succeed("user" as const)),
   ),
