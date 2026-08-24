@@ -57,3 +57,32 @@ export function buildIssueReviewPrompt(input: IssueReviewPromptInput): string {
 
   return sections.join("\n\n");
 }
+
+export interface IssueReviewResumePromptInput {
+  /** Which attempt this is, counting the one the provider killed. */
+  readonly attempt: number;
+  /** How many attempts the review gets in total. */
+  readonly attempts: number;
+  /** The provider error the previous attempt died on. */
+  readonly detail: string;
+}
+
+const DETAIL_BUDGET = 500;
+
+/**
+ * The nudge that restarts a reviewer whose previous turn the provider killed.
+ *
+ * Short on purpose: this goes to the same thread, which still holds the full
+ * review prompt and everything the dead turn managed to do. What it has to say
+ * is that nothing was recorded, so the reviewer must finish with the block
+ * rather than assume it already did.
+ */
+export function buildIssueReviewResumePrompt(input: IssueReviewResumePromptInput): string {
+  const detail = input.detail.trim();
+  const truncated = detail.length > DETAIL_BUDGET ? `${detail.slice(0, DETAIL_BUDGET)}…` : detail;
+  return [
+    `Your last turn ended before you reported a verdict: the provider failed${truncated.length > 0 ? ` with \`${truncated}\`` : ""}. That is attempt ${input.attempt} of ${input.attempts}.`,
+    "Nothing from that turn was recorded, and the branch is exactly as you left it. Pick the review back up from wherever it actually got to — re-check anything you are unsure landed — and finish it.",
+    ISSUE_REVIEW_PROMPT_INSTRUCTIONS.trim(),
+  ].join("\n\n");
+}

@@ -15,11 +15,12 @@ import { OrchestrationEngineService } from "../Services/OrchestrationEngine.ts";
 import { ProjectionSnapshotQuery } from "../Services/ProjectionSnapshotQuery.ts";
 import {
   IssueStartCoordinator,
+  type IssueReviewResumeInput,
   type IssueReviewStartInput,
   type IssueStartCoordinatorShape,
 } from "../Services/IssueStartCoordinator.ts";
 import { buildIssueStartPrompt } from "../issueStartPrompt.ts";
-import { buildIssueReviewPrompt } from "../issueReviewPrompt.ts";
+import { buildIssueReviewPrompt, buildIssueReviewResumePrompt } from "../issueReviewPrompt.ts";
 
 const isDispatchCommandError = Schema.is(OrchestrationDispatchCommandError);
 
@@ -369,9 +370,46 @@ const make = Effect.gen(function* () {
       );
   });
 
+  const resumeIssueReview: IssueStartCoordinatorShape["resumeIssueReview"] = Effect.fn(
+    "resumeIssueReview",
+  )(function* (input: IssueReviewResumeInput) {
+    return yield* orchestrationEngine
+      .dispatch({
+        type: "thread.turn.start",
+        commandId: yield* serverCommandId("issue-review-resume-turn"),
+        threadId: input.threadId,
+        message: {
+          messageId: input.messageId,
+          role: "user",
+          text: buildIssueReviewResumePrompt({
+            attempt: input.attempt,
+            attempts: input.attempts,
+            detail: input.detail,
+          }),
+          attachments: [],
+        },
+        modelSelection: input.modelSelection,
+        runtimeMode: input.runtimeMode,
+        interactionMode: input.interactionMode,
+        createdAt: input.createdAt,
+      })
+      .pipe(
+        Effect.mapError(toDispatchError("Failed to restart the review turn.")),
+        Effect.tapError((error) =>
+          Effect.logWarning("issue review turn failed to resume", {
+            issueId: input.issueId,
+            threadId: input.threadId,
+            attempt: input.attempt,
+            detail: error.message,
+          }),
+        ),
+      );
+  });
+
   return {
     startIssue,
     startIssueReview,
+    resumeIssueReview,
   } satisfies IssueStartCoordinatorShape;
 });
 
