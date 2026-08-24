@@ -35,9 +35,17 @@ interface SidebarProjectPrefsState {
   expandedByProjectKey: Readonly<Record<string, boolean>>;
   /** Explicit overview-card colors. Missing keys retain their generated color. */
   accentByProjectKey: Readonly<Partial<Record<string, ProjectAccent>>>;
+  /**
+   * Finished-run "Review results" buttons the user has already dismissed,
+   * keyed by project plus the run's `finishedAt` (see
+   * `autonomousFinishedRunReviewKey`) rather than by project alone — a run
+   * that finishes later gets a fresh key, so the button comes back for it.
+   */
+  dismissedFinishedRunKeys: readonly string[];
   toggleFavorite: (projectKey: string) => void;
   setExpanded: (projectKey: string, expanded: boolean) => void;
   setAccent: (projectKey: string, accent: ProjectAccent | null) => void;
+  dismissFinishedRun: (reviewKey: string) => void;
 }
 
 export const useSidebarProjectPrefsStore = create<SidebarProjectPrefsState>()(
@@ -46,6 +54,7 @@ export const useSidebarProjectPrefsStore = create<SidebarProjectPrefsState>()(
       favoriteProjectKeys: [],
       expandedByProjectKey: {},
       accentByProjectKey: {},
+      dismissedFinishedRunKeys: [],
       toggleFavorite: (projectKey) =>
         set((state) => ({
           favoriteProjectKeys: state.favoriteProjectKeys.includes(projectKey)
@@ -63,6 +72,12 @@ export const useSidebarProjectPrefsStore = create<SidebarProjectPrefsState>()(
           else accentByProjectKey[projectKey] = accent;
           return { accentByProjectKey };
         }),
+      dismissFinishedRun: (reviewKey) =>
+        set((state) =>
+          state.dismissedFinishedRunKeys.includes(reviewKey)
+            ? state
+            : { dismissedFinishedRunKeys: [...state.dismissedFinishedRunKeys, reviewKey] },
+        ),
     }),
     {
       name: "t3code:sidebar-project-prefs:v1",
@@ -74,6 +89,7 @@ export const useSidebarProjectPrefsStore = create<SidebarProjectPrefsState>()(
         favoriteProjectKeys: state.favoriteProjectKeys,
         expandedByProjectKey: state.expandedByProjectKey,
         accentByProjectKey: state.accentByProjectKey,
+        dismissedFinishedRunKeys: state.dismissedFinishedRunKeys,
       }),
     },
   ),

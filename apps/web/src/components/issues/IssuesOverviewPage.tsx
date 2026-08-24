@@ -52,7 +52,7 @@ type OverviewView = typeof OverviewView.Type;
  * before any of them collapses.
  */
 const OVERVIEW_GRID_CLASS =
-  "grid items-center gap-3 grid-cols-[minmax(200px,2.2fr)_112px_repeat(5,44px)_minmax(112px,1.1fr)_minmax(170px,1.3fr)_minmax(220px,auto)]";
+  "grid items-center gap-3 grid-cols-[minmax(200px,2.2fr)_repeat(5,44px)_minmax(112px,1.1fr)_minmax(170px,1.3fr)_minmax(220px,auto)]";
 
 /** The status columns the table counts, in board order. Archived is history. */
 const COUNTED_STATUS_COLUMNS = ISSUE_STATUS_COLUMNS.filter(
@@ -260,7 +260,6 @@ export function IssuesOverviewPage() {
                   )}
                 >
                   <span>Project</span>
-                  <span>Machine</span>
                   {COUNTED_STATUS_COLUMNS.map((column) => (
                     <span key={column.status} className="text-center" title={column.label}>
                       {STATUS_SHORT_LABEL[column.status]}
@@ -464,9 +463,9 @@ const OverviewProjectRow = memo(function OverviewProjectRow(props: {
         </Menu>
         <button
           type="button"
-          title={`Open the ${project.title} board`}
+          title={`Open the ${project.title} board — ${props.environmentLabel ?? "Environment"} · ${project.workspaceRoot}`}
           onClick={openBoard}
-          className="shrink-0 cursor-pointer text-[13px] font-medium tracking-[-0.012em] text-foreground outline-none hover:underline focus-visible:underline"
+          className="min-w-0 shrink cursor-pointer truncate text-[13px] font-medium tracking-[-0.012em] text-foreground outline-none hover:underline focus-visible:underline"
         >
           {project.title}
         </button>
@@ -487,17 +486,7 @@ const OverviewProjectRow = memo(function OverviewProjectRow(props: {
         >
           <StarIcon aria-hidden className={cn("size-3.5", isFavorite && "fill-current")} />
         </button>
-        <span
-          className="truncate font-mono text-[11px] text-muted-foreground/60"
-          title={project.workspaceRoot}
-        >
-          {project.workspaceRoot}
-        </span>
       </div>
-
-      <span className="truncate text-[11px] text-muted-foreground">
-        {props.environmentLabel ?? "Environment"}
-      </span>
 
       {COUNTED_STATUS_COLUMNS.map((column) => {
         const count = counts.byStatus.get(column.status) ?? 0;

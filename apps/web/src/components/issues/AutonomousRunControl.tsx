@@ -8,6 +8,7 @@ import { BotIcon, CircleCheckIcon, SquareIcon, TriangleAlertIcon } from "lucide-
 import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { cn } from "~/lib/utils";
+import { useSidebarProjectPrefsStore } from "~/sidebarProjectPrefsStore";
 import { projectEnvironment } from "~/state/projects";
 import { EMPTY_SERVER_PROVIDERS, serverEnvironment } from "~/state/server";
 import { useAtomCommand } from "~/state/use-atom-command";
@@ -25,10 +26,12 @@ import { Spinner } from "../ui/spinner";
 import { stackedThreadToast, toastManager } from "../ui/toast";
 import { onAutonomousRunPrompt } from "./issuesDashboardBus";
 import {
+  autonomousFinishedRunReviewKey,
   autonomousRunActionLabel,
   autonomousRunCompactActionLabel,
   describeAutonomousRunStatus,
   hasAutonomousReviewerProvider,
+  shouldShowFinishedRunReviewButton,
   summarizeAutonomousProgress,
   type AutonomousRunState,
 } from "./autonomousRun.logic";
@@ -82,6 +85,37 @@ export function AutonomousRunControl({
   });
   const [confirming, setConfirming] = useState<"enable" | "stop" | null>(null);
   const [pending, setPending] = useState(false);
+
+  const dismissedFinishedRunKeys = useSidebarProjectPrefsStore(
+    (state) => state.dismissedFinishedRunKeys,
+  );
+  const dismissFinishedRun = useSidebarProjectPrefsStore((state) => state.dismissFinishedRun);
+  const dismissedReviewKeys = useMemo(
+    () => new Set(dismissedFinishedRunKeys),
+    [dismissedFinishedRunKeys],
+  );
+  const finishedRunReviewKey = useMemo(
+    () =>
+      autonomousFinishedRunReviewKey({
+        environmentId,
+        projectId,
+        finishedAt: runState.kind === "finished" ? runState.finishedAt : null,
+      }),
+    [environmentId, projectId, runState],
+  );
+  const showFinishedRunReview = useMemo(
+    () =>
+      shouldShowFinishedRunReviewButton({
+        runState,
+        reviewKey: finishedRunReviewKey,
+        dismissedKeys: dismissedReviewKeys,
+      }),
+    [dismissedReviewKeys, finishedRunReviewKey, runState],
+  );
+  const dismissAndOpenReview = useCallback(() => {
+    if (finishedRunReviewKey !== null) dismissFinishedRun(finishedRunReviewKey);
+    onOpenReview();
+  }, [dismissFinishedRun, finishedRunReviewKey, onOpenReview]);
 
   const progress = useMemo(
     () => summarizeAutonomousProgress(issues, { projectId }),
@@ -158,8 +192,8 @@ export function AutonomousRunControl({
           and needs-attention history for the Review tab to show. The tab's own
           empty state covers the case where there is truly nothing to see.
         */}
-        {!compact && runState.kind === "finished" ? (
-          <Button size="sm" variant="ghost" onClick={onOpenReview}>
+        {!compact && showFinishedRunReview ? (
+          <Button size="sm" variant="ghost" onClick={dismissAndOpenReview}>
             Review results
           </Button>
         ) : null}

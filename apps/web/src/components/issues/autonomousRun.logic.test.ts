@@ -1,4 +1,5 @@
 import {
+  EnvironmentId,
   IssueId,
   ProjectId,
   ThreadId,
@@ -9,6 +10,7 @@ import {
 import { describe, expect, it } from "vite-plus/test";
 
 import {
+  autonomousFinishedRunReviewKey,
   autonomousRunActionLabel,
   autonomousRunCompactActionLabel,
   buildReviewSections,
@@ -20,6 +22,7 @@ import {
   planIssueAttentionRetry,
   resolveAutonomousRunState,
   resolveIssueAttentionPresentation,
+  shouldShowFinishedRunReviewButton,
   summarizeAutonomousProgress,
   type ReviewIssueView,
 } from "./autonomousRun.logic";
@@ -27,6 +30,7 @@ import {
 /** The board under test, and the linked board a plan may reach into. */
 const BOARD = ProjectId.make("board");
 const OTHER_BOARD = ProjectId.make("other-board");
+const ENVIRONMENT = EnvironmentId.make("environment-1");
 
 describe("autonomousRunActionLabel", () => {
   it("only calls a user-stopped run resumable", () => {
@@ -41,6 +45,118 @@ describe("autonomousRunCompactActionLabel", () => {
     expect(autonomousRunCompactActionLabel({ kind: "finished", finishedAt: null })).toBe("Start");
     expect(autonomousRunCompactActionLabel({ kind: "stopped", finishedAt: null })).toBe("Resume");
     expect(autonomousRunCompactActionLabel({ kind: "running", startedAt: null })).toBe("Stop");
+  });
+});
+
+describe("autonomousFinishedRunReviewKey", () => {
+  it("combines the project and the run's finishedAt", () => {
+    expect(
+      autonomousFinishedRunReviewKey({
+        environmentId: ENVIRONMENT,
+        projectId: BOARD,
+        finishedAt: "2026-08-24T00:00:00.000Z",
+      }),
+    ).toBe("environment-1:board:2026-08-24T00:00:00.000Z");
+  });
+
+  it("returns null without a finishedAt to key on", () => {
+    expect(
+      autonomousFinishedRunReviewKey({
+        environmentId: ENVIRONMENT,
+        projectId: BOARD,
+        finishedAt: null,
+      }),
+    ).toBeNull();
+  });
+
+  it("gives two projects distinct keys for the same finish time", () => {
+    const shared = "2026-08-24T00:00:00.000Z";
+    expect(
+      autonomousFinishedRunReviewKey({
+        environmentId: ENVIRONMENT,
+        projectId: BOARD,
+        finishedAt: shared,
+      }),
+    ).not.toBe(
+      autonomousFinishedRunReviewKey({
+        environmentId: ENVIRONMENT,
+        projectId: OTHER_BOARD,
+        finishedAt: shared,
+      }),
+    );
+  });
+});
+
+describe("shouldShowFinishedRunReviewButton", () => {
+  const reviewKey = autonomousFinishedRunReviewKey({
+    environmentId: ENVIRONMENT,
+    projectId: BOARD,
+    finishedAt: "2026-08-24T00:00:00.000Z",
+  });
+
+  it("hides the button for any state but a finished run", () => {
+    expect(
+      shouldShowFinishedRunReviewButton({
+        runState: { kind: "running", startedAt: null },
+        reviewKey,
+        dismissedKeys: new Set(),
+      }),
+    ).toBe(false);
+    expect(
+      shouldShowFinishedRunReviewButton({
+        runState: { kind: "idle" },
+        reviewKey,
+        dismissedKeys: new Set(),
+      }),
+    ).toBe(false);
+  });
+
+  it("shows a finished run's button until its key is dismissed", () => {
+    expect(
+      shouldShowFinishedRunReviewButton({
+        runState: { kind: "finished", finishedAt: "2026-08-24T00:00:00.000Z" },
+        reviewKey,
+        dismissedKeys: new Set(),
+      }),
+    ).toBe(true);
+    expect(
+      shouldShowFinishedRunReviewButton({
+        runState: { kind: "finished", finishedAt: "2026-08-24T00:00:00.000Z" },
+        reviewKey,
+        dismissedKeys: new Set(reviewKey === null ? [] : [reviewKey]),
+      }),
+    ).toBe(false);
+  });
+
+  it("keeps showing a finished run with no finishedAt to key on, dismissed or not", () => {
+    expect(
+      shouldShowFinishedRunReviewButton({
+        runState: { kind: "finished", finishedAt: null },
+        reviewKey: null,
+        dismissedKeys: new Set(["some-other-key"]),
+      }),
+    ).toBe(true);
+  });
+
+  it("brings the button back for a later run that finishes after a dismissal", () => {
+    const firstKey = autonomousFinishedRunReviewKey({
+      environmentId: ENVIRONMENT,
+      projectId: BOARD,
+      finishedAt: "2026-08-24T00:00:00.000Z",
+    });
+    const secondKey = autonomousFinishedRunReviewKey({
+      environmentId: ENVIRONMENT,
+      projectId: BOARD,
+      finishedAt: "2026-08-25T00:00:00.000Z",
+    });
+    const dismissedKeys = new Set(firstKey === null ? [] : [firstKey]);
+    expect(
+      shouldShowFinishedRunReviewButton({
+        runState: { kind: "finished", finishedAt: "2026-08-25T00:00:00.000Z" },
+        reviewKey: secondKey,
+        dismissedKeys,
+      }),
+    ).toBe(true);
   });
 });
 
