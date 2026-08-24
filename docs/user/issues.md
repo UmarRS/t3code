@@ -148,6 +148,12 @@ marked **Auto**, so it is always clear what you are looking at.
 - **It parks anything it cannot finish** and keeps going with the rest.
 - **It turns itself off** when nothing is left to start and nothing is still moving.
 
+After an issue is recorded as merged, Atlas removes its checkout in the background as soon as it
+can do so safely. The branch and thread history remain. A dirty, unpushed, locked, pinned,
+still-busy, or cross-project worktree stays in place; the periodic cleanup checks settled
+worktrees every six hours and normally removes eligible checkouts after 24 hours. Advanced users
+can override `worktreeSweepInterval` and `worktreeSweepMinAge` in the server settings file.
+
 The threads a run opens have their permissions auto-approved: nobody is watching to answer a
 prompt, so those agents edit files and run commands without asking. That is what you are agreeing to
 when you turn the run on. Reviews need a Claude provider; without one, work is left for you instead

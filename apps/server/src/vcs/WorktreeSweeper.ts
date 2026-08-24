@@ -3,10 +3,12 @@
  *
  * Worktrees are created per thread under `<worktreesDir>/<repo>/<branch>` and
  * nothing ever removed them, so disk usage only grew. This sweep removes the
- * checkout - never the branch - once every thread pointing at a worktree has
- * been settled, archived, or deleted for `WORKTREE_SWEEP_MIN_AGE`, and only
- * when losing the local checkout cannot lose work: the branch is merged into
- * the repo's base branch, or the worktree is clean with nothing unpushed.
+ * checkout - never the branch - promptly after an autonomous issue merges, or
+ * once every thread pointing at it has been settled, archived, or deleted for
+ * 24 hours during the six-hour periodic sweep. Both durations are server
+ * settings. Removal only happens when losing the local checkout cannot lose
+ * work: the branch is merged into the repo's base branch, or the worktree is
+ * clean with nothing unpushed.
  * Anything else is skipped with a reason. When in doubt, skip.
  *
  * The candidate selection and the sweep itself are written against an explicit
@@ -16,7 +18,15 @@
  *
  * @module WorktreeSweeper
  */
-import { CommandId, type ProjectId, type ThreadId } from "@t3tools/contracts";
+import {
+  CommandId,
+  DEFAULT_WORKTREE_SWEEP_INTERVAL,
+  DEFAULT_WORKTREE_SWEEP_MIN_AGE,
+  type OrchestrationEvent,
+  type ProjectId,
+  type ServerSettings,
+  type ThreadId,
+} from "@t3tools/contracts";
 import * as Cause from "effect/Cause";
 import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
@@ -31,6 +41,7 @@ import * as Path from "effect/Path";
 import * as Schedule from "effect/Schedule";
 import * as Schema from "effect/Schema";
 import type * as Scope from "effect/Scope";
+import * as Stream from "effect/Stream";
 
 import * as ServerConfig from "../config.ts";
 import { GitWorkflowService } from "../git/GitWorkflowService.ts";
@@ -41,10 +52,10 @@ import { ServerSettingsService } from "../serverSettings.ts";
 import * as GitVcsDriver from "./GitVcsDriver.ts";
 
 /** A worktree is only swept once every thread on it has been parked this long. */
-export const WORKTREE_SWEEP_MIN_AGE = Duration.days(14);
+export const WORKTREE_SWEEP_MIN_AGE = DEFAULT_WORKTREE_SWEEP_MIN_AGE;
 
 /** Cadence of the periodic sweep after the first startup run. */
-export const WORKTREE_SWEEP_INTERVAL = Duration.days(1);
+export const WORKTREE_SWEEP_INTERVAL = DEFAULT_WORKTREE_SWEEP_INTERVAL;
 
 /**
  * Delay before the first sweep. Long enough to stay out of the way of boot
@@ -193,6 +204,7 @@ function judgeThread(input: {
   readonly thread: WorktreeSweepThread;
   readonly nowMs: number;
   readonly minAgeMs: number;
+  readonly waiveSettledAge: boolean;
 }): ThreadVerdict {
   const { thread } = input;
   if (thread.hasLiveWork || thread.settledOverride === "active") {
@@ -200,6 +212,9 @@ function judgeThread(input: {
   }
   if (thread.pinnedAt != null) {
     return { eligible: false, reason: "thread-pinned" };
+  }
+  if (input.waiveSettledAge) {
+    return { eligible: true };
   }
   const parkedAt = parkedAtMillis(thread);
   if (parkedAt === null) {
@@ -230,6 +245,7 @@ export function selectWorktreeSweepCandidates(input: {
   readonly worktreesDir: string;
   readonly nowMs: number;
   readonly minAgeMs: number;
+  readonly targetThreadId?: ThreadId;
 }): WorktreeSweepSelection {
   const projectsById = new Map(input.projects.map((project) => [project.projectId, project]));
   const workspaceRoots = new Set(
@@ -240,12 +256,22 @@ export function selectWorktreeSweepCandidates(input: {
     string,
     { readonly worktreePath: string; readonly threads: Array<WorktreeSweepThread> }
   >();
+  const targetPath =
+    input.targetThreadId === undefined
+      ? undefined
+      : input.threads.find((thread) => thread.threadId === input.targetThreadId)?.worktreePath;
   for (const thread of input.threads) {
     const worktreePath = thread.worktreePath?.trim();
     if (!worktreePath) {
       continue;
     }
     const key = normalizePathForComparison(worktreePath);
+    if (
+      input.targetThreadId !== undefined &&
+      (targetPath == null || key !== normalizePathForComparison(targetPath))
+    ) {
+      continue;
+    }
     const existing = groups.get(key);
     if (existing) {
       existing.threads.push(thread);
@@ -275,7 +301,12 @@ export function selectWorktreeSweepCandidates(input: {
 
     const reasons = new Set(
       group.threads.flatMap((thread) => {
-        const verdict = judgeThread({ thread, nowMs: input.nowMs, minAgeMs: input.minAgeMs });
+        const verdict = judgeThread({
+          thread,
+          nowMs: input.nowMs,
+          minAgeMs: input.minAgeMs,
+          waiveSettledAge: input.targetThreadId !== undefined,
+        });
         return verdict.eligible ? [] : [verdict.reason];
       }),
     );
@@ -442,6 +473,7 @@ const countLines = (stdout: string): number => {
  */
 export const sweepWorktrees = Effect.fn("sweepWorktrees")(function* (
   deps: WorktreeSweepDependencies,
+  options?: { readonly targetThreadId?: ThreadId },
 ) {
   const enabled = yield* deps.isEnabled;
   if (!enabled) {
@@ -457,6 +489,7 @@ export const sweepWorktrees = Effect.fn("sweepWorktrees")(function* (
     worktreesDir: deps.worktreesDir,
     nowMs,
     minAgeMs: deps.minAgeMs,
+    ...(options?.targetThreadId === undefined ? {} : { targetThreadId: options.targetThreadId }),
   });
 
   const canonicalWorktreesDir = yield* deps.canonicalizePath(deps.worktreesDir);
@@ -596,10 +629,11 @@ export const sweepWorktrees = Effect.fn("sweepWorktrees")(function* (
         allowNonZeroExit: true,
       })).exitCode === 0;
 
+    if (status.stdout.trim().length > 0) {
+      return skipped("uncommitted-changes");
+    }
+
     if (!merged) {
-      if (status.stdout.trim().length > 0) {
-        return skipped("uncommitted-changes");
-      }
       // Nothing to compare against means we cannot prove the commits exist
       // anywhere else, so the checkout stays.
       const compareRef = upstreamRef ?? baseRef;
@@ -679,7 +713,7 @@ export const sweepWorktrees = Effect.fn("sweepWorktrees")(function* (
 
   for (const skip of selection.skips) {
     const accumulator = accumulatorFor(skip.projectId);
-    if (LIFECYCLE_SKIP_REASONS.has(skip.reason)) {
+    if (options?.targetThreadId === undefined && LIFECYCLE_SKIP_REASONS.has(skip.reason)) {
       accumulator.retainedCount += 1;
       continue;
     }
@@ -772,7 +806,7 @@ export const sweepWorktrees = Effect.fn("sweepWorktrees")(function* (
 export interface WorktreeSweeperShape {
   /** Run one sweep now. Never fails: every outcome lands in the summary. */
   readonly sweepOnce: Effect.Effect<WorktreeSweepSummary>;
-  /** Start the delayed first sweep plus the daily cadence in the given scope. */
+  /** Start merge-triggered cleanup and the delayed periodic sweep in the given scope. */
   readonly start: () => Effect.Effect<void, never, Scope.Scope>;
 }
 
@@ -784,6 +818,23 @@ export interface WorktreeSweeperLiveOptions {
   readonly minAgeMs?: number;
   readonly intervalMs?: number;
   readonly startupDelayMs?: number;
+}
+
+export function resolveWorktreeSweepSchedule(
+  settings: Pick<ServerSettings, "worktreeSweepMinAge" | "worktreeSweepInterval">,
+  options?: WorktreeSweeperLiveOptions,
+): { readonly minAgeMs: number; readonly intervalMs: number; readonly startupDelayMs: number } {
+  return {
+    minAgeMs: Math.max(0, options?.minAgeMs ?? Duration.toMillis(settings.worktreeSweepMinAge)),
+    intervalMs: Math.max(
+      1,
+      options?.intervalMs ?? Duration.toMillis(settings.worktreeSweepInterval),
+    ),
+    startupDelayMs: Math.max(
+      0,
+      options?.startupDelayMs ?? Duration.toMillis(WORKTREE_SWEEP_STARTUP_DELAY),
+    ),
+  };
 }
 
 const isSettledOverride = (value: unknown): value is "settled" | "active" =>
@@ -801,14 +852,10 @@ const makeWorktreeSweeper = (options?: WorktreeSweeperLiveOptions) =>
     const serverSettings = yield* ServerSettingsService;
     const crypto = yield* Crypto.Crypto;
 
-    const minAgeMs = Math.max(0, options?.minAgeMs ?? Duration.toMillis(WORKTREE_SWEEP_MIN_AGE));
-    const intervalMs = Math.max(
-      1,
-      options?.intervalMs ?? Duration.toMillis(WORKTREE_SWEEP_INTERVAL),
-    );
-    const startupDelayMs = Math.max(
-      0,
-      options?.startupDelayMs ?? Duration.toMillis(WORKTREE_SWEEP_STARTUP_DELAY),
+    const startupSettings = yield* serverSettings.getSettings;
+    const { minAgeMs, intervalMs, startupDelayMs } = resolveWorktreeSweepSchedule(
+      startupSettings,
+      options,
     );
 
     const deps: WorktreeSweepDependencies = {
@@ -949,8 +996,40 @@ const makeWorktreeSweeper = (options?: WorktreeSweeperLiveOptions) =>
       ),
     );
 
+    const removeAfterMerge = Effect.fn("WorktreeSweeper.removeAfterMerge")(function* (
+      threadId: ThreadId,
+    ) {
+      yield* sweepWorktrees(deps, { targetThreadId: threadId });
+    });
+
+    const processEvent = (event: OrchestrationEvent) => {
+      if (event.type !== "issue.review-recorded" || event.payload.verdict !== "merged") {
+        return Effect.void;
+      }
+      return projectionSnapshotQuery.getIssueSummaryById(event.payload.issueId).pipe(
+        Effect.flatMap(
+          Option.match({
+            onNone: () => Effect.void,
+            onSome: (issue) =>
+              issue.status === "done" && issue.threadId !== null
+                ? removeAfterMerge(issue.threadId)
+                : Effect.void,
+          }),
+        ),
+        Effect.catchCause((cause) =>
+          Effect.logWarning("worktree.sweep.after-merge-failed", {
+            issueId: event.payload.issueId,
+            cause: Cause.pretty(cause),
+          }),
+        ),
+      );
+    };
+
     const start: WorktreeSweeperShape["start"] = () =>
       Effect.gen(function* () {
+        // This subscriber is independent of the autonomous merge queue. A slow
+        // git removal can only hold up cleanup's own event reader.
+        yield* forkParked(Stream.runForEach(orchestrationEngine.streamDomainEvents, processEvent));
         yield* forkParked(
           Effect.sleep(Duration.millis(startupDelayMs)).pipe(
             Effect.andThen(

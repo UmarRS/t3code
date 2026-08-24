@@ -1,13 +1,15 @@
 import { assert, describe, it } from "@effect/vitest";
-import { ProjectId, ThreadId } from "@t3tools/contracts";
+import { DEFAULT_SERVER_SETTINGS, ProjectId, ThreadId } from "@t3tools/contracts";
 import * as Clock from "effect/Clock";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
+import * as Duration from "effect/Duration";
 import * as TestClock from "effect/testing/TestClock";
 
 import {
   isPathInsideDirectory,
   parseWorktreeList,
+  resolveWorktreeSweepSchedule,
   selectWorktreeSweepCandidates,
   sweepWorktrees,
   WorktreeSweepError,
@@ -119,6 +121,35 @@ describe("parseWorktreeList", () => {
       { path: `${WORKTREES_DIR}/t3code/one`, locked: false, isMain: false },
       { path: `${WORKTREES_DIR}/t3code/two`, locked: true, isMain: false },
     ]);
+  });
+});
+
+describe("resolveWorktreeSweepSchedule", () => {
+  it("uses the 24-hour and six-hour defaults", () => {
+    assert.deepStrictEqual(resolveWorktreeSweepSchedule(DEFAULT_SERVER_SETTINGS), {
+      minAgeMs: DAY_MS,
+      intervalMs: 6 * 60 * 60 * 1000,
+      startupDelayMs: 2 * 60 * 1000,
+    });
+  });
+
+  it("uses server settings at startup while keeping explicit test options authoritative", () => {
+    const settings = {
+      ...DEFAULT_SERVER_SETTINGS,
+      worktreeSweepMinAge: Duration.days(14),
+      worktreeSweepInterval: Duration.days(1),
+    };
+
+    assert.deepStrictEqual(resolveWorktreeSweepSchedule(settings), {
+      minAgeMs: 14 * DAY_MS,
+      intervalMs: DAY_MS,
+      startupDelayMs: 2 * 60 * 1000,
+    });
+    assert.deepStrictEqual(resolveWorktreeSweepSchedule(settings, { minAgeMs: 1, intervalMs: 2 }), {
+      minAgeMs: 1,
+      intervalMs: 2,
+      startupDelayMs: 2 * 60 * 1000,
+    });
   });
 });
 
@@ -476,7 +507,7 @@ describe("sweepWorktrees", () => {
       const worktreePath = `${WORKTREES_DIR}/t3code/merged`;
       const fake = makeFakeSweep({
         threads: [thread("merged", { worktreePath, ...settledDaysAgo(nowMs, 15) })],
-        worktrees: { [worktreePath]: { merged: true, status: " M src/app.ts\n" } },
+        worktrees: { [worktreePath]: { merged: true } },
       });
 
       const summary = yield* sweepWorktrees(fake.deps);
@@ -487,6 +518,105 @@ describe("sweepWorktrees", () => {
       assert.equal(summary.failedCount, 0);
       assert.deepStrictEqual(summary.projects[0]?.removed, [worktreePath]);
       assert.equal(summary.projects[0]?.projectId, PROJECT_ID);
+    }),
+  );
+
+  it.effect("never removes a merged worktree with uncommitted changes", () =>
+    Effect.gen(function* () {
+      yield* TestClock.setTime(NOW_MS);
+      const nowMs = yield* Clock.currentTimeMillis;
+      const worktreePath = `${WORKTREES_DIR}/t3code/merged-dirty`;
+      const fake = makeFakeSweep({
+        threads: [thread("merged-dirty", { worktreePath, ...settledDaysAgo(nowMs, 30) })],
+        worktrees: { [worktreePath]: { merged: true, status: " M src/app.ts\n" } },
+      });
+
+      const summary = yield* sweepWorktrees(fake.deps);
+
+      assert.deepStrictEqual(fake.removed, []);
+      assert.deepStrictEqual(summary.projects[0]?.skipped, [
+        { worktreePath, reason: "uncommitted-changes" },
+      ]);
+    }),
+  );
+
+  it.effect("immediately removes only the merged issue worktree without waiting for age", () =>
+    Effect.gen(function* () {
+      yield* TestClock.setTime(NOW_MS);
+      const mergedPath = `${WORKTREES_DIR}/t3code/just-merged`;
+      const otherPath = `${WORKTREES_DIR}/t3code/other-old`;
+      const fake = makeFakeSweep({
+        threads: [
+          thread("just-merged", { worktreePath: mergedPath }),
+          thread("other-old", { worktreePath: otherPath, ...settledDaysAgo(NOW_MS, 30) }),
+        ],
+        worktrees: {
+          [mergedPath]: { merged: true },
+          [otherPath]: { merged: true },
+        },
+      });
+
+      const summary = yield* sweepWorktrees(fake.deps, {
+        targetThreadId: ThreadId.make("just-merged"),
+      });
+
+      assert.deepStrictEqual(fake.removed, [mergedPath]);
+      assert.deepStrictEqual(fake.clearedThreads, [ThreadId.make("just-merged")]);
+      assert.equal(summary.worktreeCount, 1);
+    }),
+  );
+
+  it.effect("immediate removal reports dirty and unpushed guard reasons", () =>
+    Effect.gen(function* () {
+      yield* TestClock.setTime(NOW_MS);
+      const dirtyPath = `${WORKTREES_DIR}/t3code/immediate-dirty`;
+      const dirty = makeFakeSweep({
+        threads: [thread("immediate-dirty", { worktreePath: dirtyPath })],
+        worktrees: { [dirtyPath]: { merged: true, status: "?? notes.md\n" } },
+      });
+      const dirtySummary = yield* sweepWorktrees(dirty.deps, {
+        targetThreadId: ThreadId.make("immediate-dirty"),
+      });
+
+      const aheadPath = `${WORKTREES_DIR}/t3code/immediate-ahead`;
+      const ahead = makeFakeSweep({
+        threads: [thread("immediate-ahead", { worktreePath: aheadPath })],
+        worktrees: {
+          [aheadPath]: { merged: false, upstream: "origin/immediate-ahead", aheadCount: 1 },
+        },
+      });
+      const aheadSummary = yield* sweepWorktrees(ahead.deps, {
+        targetThreadId: ThreadId.make("immediate-ahead"),
+      });
+
+      assert.equal(dirtySummary.projects[0]?.skipped[0]?.reason, "uncommitted-changes");
+      assert.equal(aheadSummary.projects[0]?.skipped[0]?.reason, "unpushed-commits");
+      assert.deepStrictEqual(dirty.removed, []);
+      assert.deepStrictEqual(ahead.removed, []);
+    }),
+  );
+
+  it.effect("immediate removal keeps a shared worktree while its reviewer is live", () =>
+    Effect.gen(function* () {
+      yield* TestClock.setTime(NOW_MS);
+      const worktreePath = `${WORKTREES_DIR}/t3code/reviewing`;
+      const fake = makeFakeSweep({
+        threads: [
+          thread("worker", { worktreePath }),
+          thread("reviewer", { worktreePath, hasLiveWork: true }),
+        ],
+        worktrees: { [worktreePath]: { merged: true } },
+      });
+
+      const summary = yield* sweepWorktrees(fake.deps, {
+        targetThreadId: ThreadId.make("worker"),
+      });
+
+      assert.deepStrictEqual(fake.removed, []);
+      assert.deepStrictEqual(summary.projects[0]?.skipped, [
+        { worktreePath, reason: "thread-active" },
+      ]);
+      assert.equal(summary.removedCount, 0);
     }),
   );
 
