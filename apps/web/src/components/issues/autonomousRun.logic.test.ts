@@ -14,14 +14,17 @@ import {
   autonomousRunActionLabel,
   autonomousRunCompactActionLabel,
   buildReviewSections,
+  describeAutonomousPlanBoards,
   describeAutonomousRunStatus,
   formatAutonomousProgressLabel,
   hasAutonomousReviewerProvider,
   issueRetryRestartsWork,
   planIssueAttentionClear,
   planIssueAttentionRetry,
+  resolveAutonomousPlanBoards,
   resolveAutonomousRunState,
   resolveIssueAttentionPresentation,
+  resolveStalledDependencyBoards,
   shouldShowFinishedRunReviewButton,
   summarizeAutonomousProgress,
   type ReviewIssueView,
@@ -30,6 +33,8 @@ import {
 /** The board under test, and the linked board a plan may reach into. */
 const BOARD = ProjectId.make("board");
 const OTHER_BOARD = ProjectId.make("other-board");
+/** A third board, reachable only through the second. */
+const THIRD_BOARD = ProjectId.make("third-board");
 const ENVIRONMENT = EnvironmentId.make("environment-1");
 
 describe("autonomousRunActionLabel", () => {
@@ -597,5 +602,162 @@ describe("hasAutonomousReviewerProvider", () => {
     expect(hasAutonomousReviewerProvider([{ ...claude, driver: "codex" } as ServerProvider])).toBe(
       false,
     );
+  });
+});
+
+describe("resolveAutonomousPlanBoards", () => {
+  const board = (id: ProjectId, title: string, startedAt: string | null = null) => ({
+    id,
+    title,
+    autonomousStartedAt: startedAt,
+  });
+  const PROJECTS = [
+    board(BOARD, "Acme"),
+    board(OTHER_BOARD, "Acme API"),
+    board(THIRD_BOARD, "Acme Infra"),
+  ];
+
+  // The dialog for an ordinary single-board plan must not change at all.
+  it("names nothing when the plan does not leave this board", () => {
+    const plan = resolveAutonomousPlanBoards({
+      issues: [issue("a"), issue("b", { dependsOn: ["a"] })],
+      projects: PROJECTS,
+      projectId: BOARD,
+      action: "enable",
+    });
+    expect(plan.boards).toEqual([]);
+    expect(plan.additionalProjectIds).toEqual([]);
+    expect(describeAutonomousPlanBoards(plan, "enable")).toBeNull();
+  });
+
+  it("names every board a start would switch on, transitively", () => {
+    const plan = resolveAutonomousPlanBoards({
+      issues: [
+        issue("infra", { projectId: THIRD_BOARD }),
+        issue("api", { projectId: OTHER_BOARD, dependsOn: ["infra"] }),
+        issue("ui", { dependsOn: ["api"] }),
+      ],
+      projects: PROJECTS,
+      projectId: BOARD,
+      action: "enable",
+    });
+    expect(plan.boards.map((entry) => entry.title)).toEqual(["Acme API", "Acme Infra"]);
+    expect(plan.additionalProjectIds.toSorted()).toEqual([OTHER_BOARD, THIRD_BOARD].toSorted());
+    expect(describeAutonomousPlanBoards(plan, "enable")).toBe(
+      "Also starts Acme API and Acme Infra, which this plan depends on.",
+    );
+  });
+
+  it("leaves a board that is already running out of the start summary", () => {
+    const plan = resolveAutonomousPlanBoards({
+      issues: [issue("api", { projectId: OTHER_BOARD }), issue("ui", { dependsOn: ["api"] })],
+      projects: [PROJECTS[0]!, board(OTHER_BOARD, "Acme API", "2026-01-01T00:00:00.000Z")],
+      projectId: BOARD,
+      action: "enable",
+    });
+    expect(plan.boards).toEqual([]);
+    // Still sent: the server decides what a live board needs, and re-sending it
+    // is a no-op there rather than a start time this client raced to read.
+    expect(plan.additionalProjectIds).toEqual([OTHER_BOARD]);
+  });
+
+  it("offers back only the live boards this plan reaches when stopping", () => {
+    const plan = resolveAutonomousPlanBoards({
+      issues: [
+        issue("infra", { projectId: THIRD_BOARD }),
+        issue("api", { projectId: OTHER_BOARD }),
+        issue("ui", { dependsOn: ["api", "infra"] }),
+      ],
+      projects: [
+        PROJECTS[0]!,
+        board(OTHER_BOARD, "Acme API", "2026-01-01T00:00:00.000Z"),
+        board(THIRD_BOARD, "Acme Infra"),
+      ],
+      projectId: BOARD,
+      action: "stop",
+    });
+    expect(plan.boards.map((entry) => entry.title)).toEqual(["Acme API"]);
+    expect(describeAutonomousPlanBoards(plan, "stop")).toBe(
+      "Also stops Acme API, started with this run.",
+    );
+  });
+
+  // A board the user started on its own is not part of this plan, so stopping
+  // this run must not reach it.
+  it("never offers a live board this plan does not reach", () => {
+    const plan = resolveAutonomousPlanBoards({
+      issues: [issue("api", { projectId: OTHER_BOARD }), issue("ui")],
+      projects: [PROJECTS[0]!, board(OTHER_BOARD, "Acme API", "2026-01-01T00:00:00.000Z")],
+      projectId: BOARD,
+      action: "stop",
+    });
+    expect(plan.boards).toEqual([]);
+    expect(plan.additionalProjectIds).toEqual([]);
+  });
+});
+
+describe("resolveStalledDependencyBoards", () => {
+  const projects = (otherStartedAt: string | null) => [
+    { id: BOARD, title: "Acme", autonomousStartedAt: null },
+    { id: OTHER_BOARD, title: "Acme API", autonomousStartedAt: otherStartedAt },
+    { id: THIRD_BOARD, title: "Acme Infra", autonomousStartedAt: null },
+  ];
+
+  it("offers the idle board holding the blocker, and its own plan with it", () => {
+    const issues = [
+      issue("infra", { projectId: THIRD_BOARD }),
+      issue("api", { projectId: OTHER_BOARD, dependsOn: ["infra"] }),
+      issue("ui", { dependsOn: ["api"], needsAttentionAt: "2026-01-02T00:00:00.000Z" }),
+    ];
+    const plan = resolveStalledDependencyBoards({
+      issue: issues[2]!,
+      issues,
+      projects: projects(null),
+    });
+    expect(plan?.boards.map((entry) => entry.title)).toEqual(["Acme API"]);
+    expect(plan?.additionalProjectIds.toSorted()).toEqual([OTHER_BOARD, THIRD_BOARD].toSorted());
+  });
+
+  it("offers nothing when the blocker's board is already running", () => {
+    const issues = [
+      issue("api", { projectId: OTHER_BOARD }),
+      issue("ui", { dependsOn: ["api"], needsAttentionAt: "2026-01-02T00:00:00.000Z" }),
+    ];
+    expect(
+      resolveStalledDependencyBoards({
+        issue: issues[1]!,
+        issues,
+        projects: projects("2026-01-01T00:00:00.000Z"),
+      }),
+    ).toBeNull();
+  });
+
+  // Every other reason an issue is flagged: a failed start, a review that left
+  // it alone, a blocker on this very board. None of them is a board to start.
+  it("offers nothing for a flag that is not about another board", () => {
+    const issues = [
+      issue("a"),
+      issue("b", { dependsOn: ["a"], needsAttentionAt: "2026-01-02T00:00:00.000Z" }),
+    ];
+    expect(
+      resolveStalledDependencyBoards({ issue: issues[1]!, issues, projects: projects(null) }),
+    ).toBeNull();
+  });
+
+  // Switching the board on is only an answer when liveness is what the blocker
+  // is missing. These blockers stay put whoever is running their board, so
+  // offering to start it would clear the flag for a run that gives up again.
+  it.each([
+    { label: "canceled", overrides: { status: "canceled" as IssueStatus } },
+    { label: "flagged", overrides: { needsAttentionAt: "2026-01-02T00:00:00.000Z" } },
+    { label: "already carried by a thread", overrides: { threadId: "thread-1" } },
+  ])("offers nothing for a blocker that is $label", ({ overrides }) => {
+    const issues = [
+      issue("api", { projectId: OTHER_BOARD, ...overrides }),
+      issue("ui", { dependsOn: ["api"], needsAttentionAt: "2026-01-02T00:00:00.000Z" }),
+    ];
+    expect(
+      resolveStalledDependencyBoards({ issue: issues[1]!, issues, projects: projects(null) }),
+    ).toBeNull();
   });
 });

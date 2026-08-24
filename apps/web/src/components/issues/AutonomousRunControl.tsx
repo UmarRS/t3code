@@ -9,7 +9,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { cn } from "~/lib/utils";
 import { useSidebarProjectPrefsStore } from "~/sidebarProjectPrefsStore";
-import { projectEnvironment } from "~/state/projects";
+import { environmentProjects, projectEnvironment } from "~/state/projects";
 import { EMPTY_SERVER_PROVIDERS, serverEnvironment } from "~/state/server";
 import { useAtomCommand } from "~/state/use-atom-command";
 import {
@@ -29,8 +29,10 @@ import {
   autonomousFinishedRunReviewKey,
   autonomousRunActionLabel,
   autonomousRunCompactActionLabel,
+  describeAutonomousPlanBoards,
   describeAutonomousRunStatus,
   hasAutonomousReviewerProvider,
+  resolveAutonomousPlanBoards,
   shouldShowFinishedRunReviewButton,
   summarizeAutonomousProgress,
   type AutonomousRunState,
@@ -77,6 +79,7 @@ export function AutonomousRunControl({
 }) {
   const providers =
     useAtomValue(serverEnvironment.providersValueAtom(environmentId)) ?? EMPTY_SERVER_PROVIDERS;
+  const projects = useAtomValue(environmentProjects.environmentProjectsAtom(environmentId));
   const enableAutonomous = useAtomCommand(projectEnvironment.enableAutonomous, {
     reportFailure: false,
   });
@@ -128,6 +131,19 @@ export function AutonomousRunControl({
   const running = runState.kind === "running";
   const reviewerAvailable = useMemo(() => hasAutonomousReviewerProvider(providers), [providers]);
   const startableCount = progress.queued;
+  // The rest of the plan: the boards this one's stories depend on. Resolved for
+  // both directions up front so the dialog can name them and the dispatch can
+  // send them, and so a board with no cross-board dependency gets neither.
+  const enablePlan = useMemo(
+    () => resolveAutonomousPlanBoards({ issues, projects, projectId, action: "enable" }),
+    [issues, projectId, projects],
+  );
+  const stopPlan = useMemo(
+    () => resolveAutonomousPlanBoards({ issues, projects, projectId, action: "stop" }),
+    [issues, projectId, projects],
+  );
+  const enablePlanSummary = describeAutonomousPlanBoards(enablePlan, "enable");
+  const stopPlanSummary = describeAutonomousPlanBoards(stopPlan, "stop");
 
   // The palette navigates here and then asks for the prompt, so starting a run
   // always goes through the same confirmation.
@@ -144,8 +160,14 @@ export function AutonomousRunControl({
       setPending(true);
       const result =
         next === "enable"
-          ? await enableAutonomous({ environmentId, input: { projectId } })
-          : await disableAutonomous({ environmentId, input: { projectId } });
+          ? await enableAutonomous({
+              environmentId,
+              input: { projectId, additionalProjectIds: enablePlan.additionalProjectIds },
+            })
+          : await disableAutonomous({
+              environmentId,
+              input: { projectId, additionalProjectIds: stopPlan.additionalProjectIds },
+            });
       setPending(false);
       setConfirming(null);
       if (result._tag === "Failure" && !isAtomCommandInterrupted(result)) {
@@ -159,7 +181,14 @@ export function AutonomousRunControl({
         );
       }
     },
-    [disableAutonomous, enableAutonomous, environmentId, projectId],
+    [
+      disableAutonomous,
+      enableAutonomous,
+      enablePlan.additionalProjectIds,
+      environmentId,
+      projectId,
+      stopPlan.additionalProjectIds,
+    ],
   );
 
   return (
@@ -235,6 +264,7 @@ export function AutonomousRunControl({
               {startableCount === 0
                 ? "Nothing is startable right now. The run stays on and picks up issues as they unblock."
                 : `${startableCount} issue${startableCount === 1 ? "" : "s"} can start immediately.`}
+              {enablePlanSummary === null ? null : <> {enablePlanSummary}</>}
             </p>
             {reviewerAvailable ? null : (
               <p className="flex items-start gap-1.5 text-warning-foreground">
@@ -271,6 +301,11 @@ export function AutonomousRunControl({
               from their own threads.
             </AlertDialogDescription>
           </AlertDialogHeader>
+          {stopPlanSummary === null ? null : (
+            <div className="-mt-2 px-6 pb-4 text-sm text-muted-foreground">
+              <p>{stopPlanSummary}</p>
+            </div>
+          )}
           <AlertDialogFooter>
             <AlertDialogClose disabled={pending} render={<Button variant="outline" />}>
               Keep running

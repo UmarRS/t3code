@@ -92,12 +92,13 @@ import {
   issueRetryRestartsWork,
   resolveAutonomousRunState,
   resolveIssueAttentionPresentation,
+  type AutonomousPlanBoards,
 } from "./autonomousRun.logic";
 import { IssueDialog, type IssueDialogTarget } from "./IssueDialog";
 import { IssuesReviewTab } from "./IssuesReviewTab";
 import { IssuesProjectMenuGroup } from "./IssuesProjectMenuGroup";
 import { useDecompositionRoutingTargets } from "./useDecompositionRoutingTargets";
-import { useIssueAttentionActions } from "./useIssueAttentionActions";
+import { useIssueAttentionActions, useStalledDependencyBoards } from "./useIssueAttentionActions";
 import {
   buildIssueBoardColumns,
   buildIssueDecompositionBoardContext,
@@ -188,6 +189,7 @@ export function IssuesBoardPage({
     () => new Set<ProjectId>(),
   );
   const attention = useIssueAttentionActions(environmentId);
+  const stalledDependencyBoards = useStalledDependencyBoards(environmentId);
   const runState = useMemo(() => resolveAutonomousRunState(project), [project]);
   const runActive = runState.kind === "running";
 
@@ -813,8 +815,12 @@ export function IssuesBoardPage({
                               onDelete={() => setIssueToDelete(issue)}
                               runActive={runActive}
                               attentionPending={attention.pendingIssueId === issue.id}
+                              stalledBoards={stalledDependencyBoards(issue)}
                               onClearAttention={() => void attention.clearFlag(issue)}
                               onRetryAttention={() => void attention.retry(issue)}
+                              onStartStalledBoards={(plan) =>
+                                void attention.startBlockingBoards(issue, plan)
+                              }
                             />
                           </li>
                         );
@@ -878,8 +884,10 @@ function IssueCard({
   onStart,
   onStatusChange,
   onDelete,
+  stalledBoards,
   onClearAttention,
   onRetryAttention,
+  onStartStalledBoards,
   delegationLinks,
   onOpenDelegationOrigin,
   onOpenDelegationTargets,
@@ -895,6 +903,11 @@ function IssueCard({
   readonly awaitingInput: boolean;
   readonly runActive: boolean;
   readonly attentionPending: boolean;
+  /**
+   * Set only when this issue is flagged because a board nobody is running holds
+   * its blocker — the one stall a card can act on rather than only explain.
+   */
+  readonly stalledBoards: AutonomousPlanBoards | null;
   readonly onEdit: () => void;
   readonly onOpenThread: () => void;
   readonly onUnlinkThread: () => void;
@@ -904,6 +917,7 @@ function IssueCard({
   readonly onDelete: () => void;
   readonly onClearAttention: () => void;
   readonly onRetryAttention: () => void;
+  readonly onStartStalledBoards: (plan: AutonomousPlanBoards) => void;
 }) {
   const openPrLink = useOpenPrLink();
   const attentionPresentation = resolveIssueAttentionPresentation(issue);
@@ -967,6 +981,16 @@ function IssueCard({
                     Clear & retry
                   </MenuItem>
                 ) : null}
+                {stalledBoards === null ? null : (
+                  <MenuItem
+                    disabled={attentionPending}
+                    onClick={() => onStartStalledBoards(stalledBoards)}
+                  >
+                    {stalledBoards.boards.length === 1
+                      ? "Start that board too"
+                      : "Start those boards too"}
+                  </MenuItem>
+                )}
               </>
             ) : null}
             <MenuItem onClick={onEdit}>Edit issue</MenuItem>

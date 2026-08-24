@@ -1,5 +1,6 @@
 import type { EnvironmentId, OrchestrationIssue, ThreadId } from "@t3tools/contracts";
 import {
+  BotIcon,
   ChevronDownIcon,
   CircleCheckIcon,
   ExternalLinkIcon,
@@ -21,11 +22,13 @@ import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from "../ui/empty";
 import { Spinner } from "../ui/spinner";
 import {
   buildReviewSections,
+  formatBoardTitles,
   issueAttentionRetryKind,
   issueRetryRestartsWork,
   resolveIssueAttentionPresentation,
+  type AutonomousPlanBoards,
 } from "./autonomousRun.logic";
-import { useIssueAttentionActions } from "./useIssueAttentionActions";
+import { useIssueAttentionActions, useStalledDependencyBoards } from "./useIssueAttentionActions";
 
 /**
  * What autonomous mode produced: work it merged, and work it parked. Reviewer
@@ -46,6 +49,7 @@ export function IssuesReviewTab({
 }) {
   const sections = useMemo(() => buildReviewSections(issues), [issues]);
   const attention = useIssueAttentionActions(environmentId);
+  const stalledDependencyBoards = useStalledDependencyBoards(environmentId);
 
   if (sections.completed.length === 0 && sections.needsAttention.length === 0) {
     return (
@@ -76,8 +80,10 @@ export function IssuesReviewTab({
                   workspaceRoot={workspaceRoot}
                   onOpenThread={onOpenThread}
                   pending={attention.pendingIssueId === issue.id}
+                  stalledBoards={stalledDependencyBoards(issue)}
                   onClearFlag={() => void attention.clearFlag(issue)}
                   onRetry={() => void attention.retry(issue)}
+                  onStartStalledBoards={(plan) => void attention.startBlockingBoards(issue, plan)}
                 />
               </li>
             ))}
@@ -115,16 +121,21 @@ function ReviewCard({
   workspaceRoot,
   onOpenThread,
   pending,
+  stalledBoards = null,
   onClearFlag,
   onRetry,
+  onStartStalledBoards,
 }: {
   readonly environmentId: EnvironmentId;
   readonly issue: OrchestrationIssue;
   readonly workspaceRoot: string | undefined;
   readonly onOpenThread: (threadId: ThreadId) => void;
   readonly pending: boolean;
+  /** The idle boards holding this issue's blocker, when that is why it is flagged. */
+  readonly stalledBoards?: AutonomousPlanBoards | null;
   readonly onClearFlag?: () => void;
   readonly onRetry?: () => void;
+  readonly onStartStalledBoards?: (plan: AutonomousPlanBoards) => void;
 }) {
   const [expanded, setExpanded] = useState(false);
   const openPrLink = useOpenPrLink();
@@ -221,9 +232,26 @@ function ReviewCard({
       </div>
 
       {attentionPresentation ? (
-        <p className="mt-2 rounded-md bg-warning/8 px-2 py-1.5 text-xs text-warning-foreground">
-          {attentionPresentation.reason}
-        </p>
+        <div className="mt-2 rounded-md bg-warning/8 px-2 py-1.5 text-xs text-warning-foreground">
+          <p>{attentionPresentation.reason}</p>
+          {/* The stall says "start a run there". This is that run: the boards
+              holding the blocker, plus whatever their own plans depend on,
+              started together with this one. */}
+          {stalledBoards === null || onStartStalledBoards === undefined ? null : (
+            <Button
+              size="sm"
+              variant="outline"
+              className="mt-1.5"
+              disabled={pending}
+              onClick={() => onStartStalledBoards(stalledBoards)}
+            >
+              {pending ? <Spinner className="size-3.5" /> : <BotIcon className="size-3.5" />}
+              {stalledBoards.boards.length <= 2
+                ? `Start ${formatBoardTitles(stalledBoards.boards)} too`
+                : `Start ${stalledBoards.boards.length} other boards too`}
+            </Button>
+          )}
+        </div>
       ) : null}
 
       <div className="mt-2">
