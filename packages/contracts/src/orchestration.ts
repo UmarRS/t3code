@@ -1205,6 +1205,21 @@ const IssueAttentionClearCommand = Schema.Struct({
   issueId: IssueId,
 });
 
+/**
+ * Throw away a recorded review so the issue can be reviewed again.
+ *
+ * The counterpart of `issue.attention.clear`, and deliberately not the same
+ * command: clearing a flag accepts the reviewer's judgement, while this
+ * discards it. A verdict is what holds an issue out of the merge queue, so
+ * work that is redone from scratch has to lose the old one or it reaches
+ * `in_review` a second time and is never picked up again.
+ */
+const IssueReviewResetCommand = Schema.Struct({
+  type: Schema.Literal("issue.review.reset"),
+  commandId: CommandId,
+  issueId: IssueId,
+});
+
 const DispatchableClientOrchestrationCommand = Schema.Union([
   ProjectCreateCommand,
   ProjectMetaUpdateCommand,
@@ -1239,6 +1254,7 @@ const DispatchableClientOrchestrationCommand = Schema.Union([
   IssueStartCommand,
   IssuePullRequestLinkCommand,
   IssueAttentionClearCommand,
+  IssueReviewResetCommand,
   ProjectAutonomousEnableCommand,
   ProjectAutonomousDisableCommand,
   ProjectAutonomousScheduleSetCommand,
@@ -1280,6 +1296,7 @@ export const ClientOrchestrationCommand = Schema.Union([
   IssueStartCommand,
   IssuePullRequestLinkCommand,
   IssueAttentionClearCommand,
+  IssueReviewResetCommand,
   ProjectAutonomousEnableCommand,
   ProjectAutonomousDisableCommand,
   ProjectAutonomousScheduleSetCommand,
@@ -1481,6 +1498,7 @@ export const OrchestrationEventType = Schema.Literals([
   "issue.attention-cleared",
   "issue.review-started",
   "issue.review-recorded",
+  "issue.review-reset",
   "project.autonomous-enabled",
   "project.autonomous-disabled",
   "project.autonomous-schedule-set",
@@ -1841,6 +1859,16 @@ export const IssueReviewRecordedPayload = Schema.Struct({
   updatedAt: IsoDateTime,
 });
 
+/**
+ * A recorded review thrown away. Carries nothing but the issue: every review
+ * field goes back to its pre-review value, so there is nothing to say beyond
+ * which issue it happened to.
+ */
+export const IssueReviewResetPayload = Schema.Struct({
+  issueId: IssueId,
+  updatedAt: IsoDateTime,
+});
+
 export const ProjectAutonomousEnabledPayload = Schema.Struct({
   projectId: ProjectId,
   autonomousStartedAt: IsoDateTime,
@@ -2093,6 +2121,11 @@ export const OrchestrationEvent = Schema.Union([
     ...EventBaseFields,
     type: Schema.Literal("issue.review-recorded"),
     payload: IssueReviewRecordedPayload,
+  }),
+  Schema.Struct({
+    ...EventBaseFields,
+    type: Schema.Literal("issue.review-reset"),
+    payload: IssueReviewResetPayload,
   }),
   Schema.Struct({
     ...EventBaseFields,

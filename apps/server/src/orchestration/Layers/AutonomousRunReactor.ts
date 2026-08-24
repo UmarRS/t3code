@@ -1158,6 +1158,7 @@ const make = Effect.gen(function* () {
       case "issue.attention-flagged":
       case "issue.attention-cleared":
       case "issue.review-recorded":
+      case "issue.review-reset":
       case "issue.pull-request-linked": {
         const issueId = event.payload.issueId;
         const issues = yield* projectionSnapshotQuery

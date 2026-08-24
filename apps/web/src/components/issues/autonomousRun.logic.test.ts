@@ -20,6 +20,7 @@ import {
   formatAutonomousProgressLabel,
   hasAutonomousReviewerProvider,
   issueAttentionRetryKind,
+  issueRetryDiscardsReview,
   issueRetryRestartsWork,
   planIssueAttentionClear,
   planIssueAttentionRetry,
@@ -711,6 +712,76 @@ describe("planIssueAttentionRetry", () => {
 
   it("clearing alone never touches the thread or the status", () => {
     expect(planIssueAttentionClear()).toEqual([{ kind: "clear-attention" }]);
+  });
+
+  // The verdict is what holds the merge queue off an issue, so work that is
+  // redone from scratch has to lose it — otherwise the fresh pull request
+  // reaches `in_review` and is never picked up again.
+  it("discards the verdict when reviewed work is redone", () => {
+    const target = issue("reviewed", {
+      status: "in_review",
+      threadId: "thread-1",
+      needsAttentionAt: "2026-08-01T00:00:00.000Z",
+      needsAttentionReason: "Reviewer left this unmerged. See the review notes.",
+      needsAttentionKind: "review_needs_attention",
+      reviewVerdict: "needs_attention",
+    });
+    // Last, so the issue is out of the review queue's reach (backlog, not
+    // `in_review`) at the moment the verdict goes away.
+    expect(planIssueAttentionRetry(target)).toEqual([
+      { kind: "clear-attention" },
+      { kind: "unlink-thread" },
+      { kind: "reset-to-backlog" },
+      { kind: "reset-review" },
+    ]);
+    expect(issueRetryDiscardsReview(target)).toBe(true);
+  });
+
+  it("still resets a verdict carried by an issue already in the backlog", () => {
+    const target = issue("reviewed-backlog", {
+      needsAttentionAt: "2026-08-01T00:00:00.000Z",
+      needsAttentionKind: "review_needs_attention",
+      reviewVerdict: "needs_attention",
+    });
+    expect(planIssueAttentionRetry(target)).toEqual([
+      { kind: "clear-attention" },
+      { kind: "reset-review" },
+    ]);
+  });
+
+  it("leaves the verdict alone on an issue nobody reviewed", () => {
+    const target = issue("parked", {
+      status: "in_progress",
+      threadId: "thread-1",
+      needsAttentionAt: "2026-08-01T00:00:00.000Z",
+      needsAttentionKind: "start_failed",
+    });
+    expect(planIssueAttentionRetry(target)).toEqual([
+      { kind: "clear-attention" },
+      { kind: "unlink-thread" },
+      { kind: "reset-to-backlog" },
+    ]);
+    expect(issueRetryDiscardsReview(target)).toBe(false);
+  });
+
+  // Clearing accepts the reviewer's judgement; only retry throws it away.
+  it("never resets a verdict when the flag is only cleared", () => {
+    expect(planIssueAttentionClear()).not.toContainEqual({ kind: "reset-review" });
+  });
+
+  // The pull-request retry re-runs the idempotent PR workflow over work that
+  // is still good. There is nothing to discard, and a verdict it happened to
+  // carry is not this affordance's business.
+  it("keeps the pull-request retry to clearing the flag, verdict or not", () => {
+    const target = issue("pr-failed", {
+      status: "in_progress",
+      threadId: "thread-1",
+      needsAttentionAt: "2026-08-01T00:00:00.000Z",
+      needsAttentionKind: "pull_request_failed",
+      reviewVerdict: "needs_attention",
+    });
+    expect(planIssueAttentionRetry(target)).toEqual([{ kind: "clear-attention" }]);
+    expect(issueRetryDiscardsReview(target)).toBe(false);
   });
 });
 

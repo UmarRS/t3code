@@ -90,6 +90,7 @@ import { AutonomousRunControl } from "./AutonomousRunControl";
 import {
   autonomousFinishedRunReviewKey,
   issueAttentionRetryKind,
+  issueRetryDiscardsReview,
   issueRetryRestartsWork,
   resolveAutonomousRunState,
   resolveIssueAttentionPresentation,
@@ -970,12 +971,30 @@ function IssueCard({
             <MenuSeparator />
             {attentionPresentation !== null ? (
               <>
-                <MenuItem disabled={attentionPending} onClick={onClearAttention}>
+                <MenuItem
+                  disabled={attentionPending}
+                  title={
+                    issueRetryDiscardsReview(issue)
+                      ? "Unflag this issue and keep the reviewer's verdict."
+                      : undefined
+                  }
+                  onClick={onClearAttention}
+                >
                   Clear flag
                 </MenuItem>
                 {issueAttentionRetryKind(issue) === "pull-request" ? (
                   <MenuItem disabled={attentionPending} onClick={onRetryAttention}>
                     Retry pull request
+                  </MenuItem>
+                ) : issueRetryDiscardsReview(issue) ? (
+                  // Retry on reviewed work throws the verdict away too, so the
+                  // item says so rather than reading like the Clear above it.
+                  <MenuItem
+                    disabled={attentionPending}
+                    title="Discard this review and start the work again from the backlog."
+                    onClick={onRetryAttention}
+                  >
+                    Discard review & retry
                   </MenuItem>
                 ) : issueRetryRestartsWork(issue) ? (
                   <MenuItem disabled={attentionPending} onClick={onRetryAttention}>

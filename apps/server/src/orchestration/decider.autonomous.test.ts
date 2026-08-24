@@ -14,6 +14,7 @@ import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 
 import { decideOrchestrationCommand } from "./decider.ts";
+import { projectEvent } from "./projector.ts";
 
 const NOW = "2026-01-01T00:00:00.000Z";
 const PROJECT_ID = ProjectId.make("project-1");
@@ -560,6 +561,119 @@ it.layer(NodeServices.layer)("autonomous mode decider", (it) => {
           ),
         );
         expect(invariantDetail(error)).toContain("needs attention");
+      }),
+    );
+  });
+
+  describe("issue.review.reset", () => {
+    it.effect("throws the verdict, the claim and the timestamp away", () =>
+      Effect.gen(function* () {
+        const readModel = makeReadModel({
+          issues: [
+            issue("issue-a", {
+              status: "in_review",
+              threadId: THREAD_ID,
+              reviewVerdict: "needs_attention",
+              reviewerThreadId: REVIEWER_THREAD_ID,
+              reviewedAt: NOW,
+            }),
+          ],
+        });
+        const events = yield* decide(
+          {
+            type: "issue.review.reset",
+            commandId: CommandId.make("cmd-review-reset"),
+            issueId: IssueId.make("issue-a"),
+          },
+          readModel,
+        );
+        expect(events.map((event) => event.type)).toEqual(["issue.review-reset"]);
+        const reset = events[0];
+        if (reset?.type !== "issue.review-reset") throw new Error("expected a reset event");
+        const next = yield* projectEvent(readModel, { ...reset, sequence: 1 }).pipe(Effect.orDie);
+        const projected = next.issues[0];
+        expect(projected?.reviewVerdict).toBeNull();
+        expect(projected?.reviewerThreadId).toBeNull();
+        expect(projected?.reviewedAt).toBeNull();
+        // Only the review is forgotten: where the work sits is the caller's
+        // business, and the retry plan moves it separately.
+        expect(projected?.status).toBe("in_review");
+        expect(projected?.threadId).toBe(THREAD_ID);
+      }),
+    );
+
+    it.effect("is a no-op on an issue nobody reviewed", () =>
+      Effect.gen(function* () {
+        const events = yield* decide(
+          {
+            type: "issue.review.reset",
+            commandId: CommandId.make("cmd-review-reset"),
+            issueId: IssueId.make("issue-a"),
+          },
+          makeReadModel({ issues: [issue("issue-a")] }),
+        );
+        if (events[0]?.type === "issue.review-reset") {
+          expect(events[0].payload.updatedAt).toBe(NOW);
+        }
+      }),
+    );
+
+    it.effect("is safe on merged work, and re-applying it changes nothing", () =>
+      Effect.gen(function* () {
+        const readModel = makeReadModel({
+          issues: [
+            issue("issue-a", {
+              status: "done",
+              reviewVerdict: "merged",
+              reviewerThreadId: REVIEWER_THREAD_ID,
+              reviewedAt: NOW,
+            }),
+          ],
+        });
+        const first = (yield* decide(
+          {
+            type: "issue.review.reset",
+            commandId: CommandId.make("cmd-review-reset"),
+            issueId: IssueId.make("issue-a"),
+          },
+          readModel,
+        ))[0];
+        if (first?.type !== "issue.review-reset") throw new Error("expected a reset event");
+        const once = yield* projectEvent(readModel, { ...first, sequence: 1 }).pipe(Effect.orDie);
+        // A merged issue keeps its status: forgetting the review does not
+        // un-ship the work.
+        expect(once.issues[0]?.status).toBe("done");
+        expect(once.issues[0]?.reviewVerdict).toBeNull();
+
+        const second = (yield* decide(
+          {
+            type: "issue.review.reset",
+            commandId: CommandId.make("cmd-review-reset-again"),
+            issueId: IssueId.make("issue-a"),
+          },
+          once,
+        ))[0];
+        if (second?.type !== "issue.review-reset") throw new Error("expected a reset event");
+        // Everything but the sequence number, which every projected event
+        // advances: a second reset leaves the issue exactly as it was.
+        const twice = yield* projectEvent(once, { ...second, sequence: 2 }).pipe(Effect.orDie);
+        expect(twice.issues).toEqual(once.issues);
+      }),
+    );
+
+    it.effect("rejects resetting a review on an unknown issue", () =>
+      Effect.gen(function* () {
+        const error = yield* Effect.flip(
+          decide(
+            {
+              type: "issue.review.reset",
+              commandId: CommandId.make("cmd-review-reset"),
+              issueId: IssueId.make("missing"),
+            },
+            makeReadModel({ issues: [] }),
+          ),
+        );
+        expect(invariantDetail(error)).toContain("missing");
       }),
     );
   });

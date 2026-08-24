@@ -30,6 +30,7 @@ import {
  */
 export function useIssueAttentionActions(environmentId: EnvironmentId) {
   const clearAttention = useAtomCommand(issueEnvironment.clearAttention, { reportFailure: false });
+  const resetReview = useAtomCommand(issueEnvironment.resetReview, { reportFailure: false });
   const enableAutonomous = useAtomCommand(projectEnvironment.enableAutonomous, {
     reportFailure: false,
   });
@@ -51,10 +52,12 @@ export function useIssueAttentionActions(environmentId: EnvironmentId) {
                   environmentId,
                   input: { issueId: issue.id, threadId: null },
                 })
-              : await setIssueStatus({
-                  environmentId,
-                  input: { issueId: issue.id, status: "backlog" },
-                });
+              : step.kind === "reset-to-backlog"
+                ? await setIssueStatus({
+                    environmentId,
+                    input: { issueId: issue.id, status: "backlog" },
+                  })
+                : await resetReview({ environmentId, input: { issueId: issue.id } });
         if (result._tag === "Failure") {
           setPendingIssueId(null);
           if (!isAtomCommandInterrupted(result)) {
@@ -73,7 +76,7 @@ export function useIssueAttentionActions(environmentId: EnvironmentId) {
       setPendingIssueId(null);
       return true;
     },
-    [clearAttention, environmentId, setIssueStatus, updateIssue],
+    [clearAttention, environmentId, resetReview, setIssueStatus, updateIssue],
   );
 
   const clearFlag = useCallback(
