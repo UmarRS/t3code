@@ -351,8 +351,8 @@ export const make = (options?: StartupOptions) =>
         Effect.gen(function* () {
           yield* orchestrationReactor.start().pipe(Scope.provide(reactorScope));
           yield* providerSessionReaper.start().pipe(Scope.provide(reactorScope));
-          // Parks immediately; the first sweep only runs minutes later so
-          // boot never waits on git.
+          // Parks immediately; merge-triggered cleanup is event-driven and the
+          // first periodic sweep only runs minutes later, so boot never waits on git.
           yield* worktreeSweeper.start().pipe(Scope.provide(reactorScope));
         }),
       );

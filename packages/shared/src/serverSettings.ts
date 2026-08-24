@@ -129,6 +129,8 @@ export function applyServerSettingsPatch(
   const {
     automaticGitFetchInterval,
     providerHealthRefreshInterval,
+    worktreeSweepMinAge,
+    worktreeSweepInterval,
     backgroundActivityProfile,
     backgroundActivity,
     ...patchForMerge
@@ -192,6 +194,8 @@ export function applyServerSettingsPatch(
       : {}),
     ...(automaticGitFetchInterval !== undefined ? { automaticGitFetchInterval } : {}),
     ...(providerHealthRefreshInterval !== undefined ? { providerHealthRefreshInterval } : {}),
+    ...(worktreeSweepMinAge !== undefined ? { worktreeSweepMinAge } : {}),
+    ...(worktreeSweepInterval !== undefined ? { worktreeSweepInterval } : {}),
   };
   const normalizedBackgroundActivity = normalizeBackgroundActivitySettings(
     nextWithReplacementsBase.backgroundActivity,

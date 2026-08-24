@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vite-plus/test";
+import * as Duration from "effect/Duration";
 import * as Schema from "effect/Schema";
 
 import { ProviderInstanceId } from "./providerInstance.ts";
@@ -124,6 +125,15 @@ describe("ServerSettings.providerInstances (slice-2 invariant)", () => {
 
   it("defaults to an empty record so legacy configs without the key still decode", () => {
     expect(DEFAULT_SERVER_SETTINGS.providerInstances).toEqual({});
+  });
+
+  it("defaults worktree cleanup to a 24-hour age and six-hour interval", () => {
+    expect(Duration.toMillis(DEFAULT_SERVER_SETTINGS.worktreeSweepMinAge)).toBe(
+      Duration.toMillis(Duration.days(1)),
+    );
+    expect(Duration.toMillis(DEFAULT_SERVER_SETTINGS.worktreeSweepInterval)).toBe(
+      Duration.toMillis(Duration.hours(6)),
+    );
   });
 
   it("decodes a fully empty config (legacy on-disk shape) without complaint", () => {
