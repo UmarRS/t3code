@@ -6,12 +6,16 @@ import {
   startableAutonomousIssues,
   type AutonomousIssueView,
   type AutonomousScope,
+  type EnvironmentId,
   type IssueId,
   type IssueReviewVerdict,
   type IssueStatus,
+  type ProjectId,
   type ServerProvider,
   type ThreadId,
 } from "@t3tools/contracts";
+
+import { sidebarProjectPrefKey } from "~/sidebarProjectPrefsStore";
 
 /**
  * Pure derivations for autonomous mode: what state a project's run is in, how
@@ -217,6 +221,36 @@ export function describeAutonomousRunStatus(input: {
     case "idle":
       return { label: "Autonomous", detail: null, tone: "idle" };
   }
+}
+
+/**
+ * The finished run's dismissal key for the "Review results" button — the same
+ * physical-project key the sidebar prefs use, extended with `finishedAt` so a
+ * dismissal only ever covers the run that earned it. Null when the run has no
+ * `finishedAt` to key on, which leaves the button un-dismissable rather than
+ * accidentally shared across runs.
+ */
+export function autonomousFinishedRunReviewKey(input: {
+  readonly environmentId: EnvironmentId;
+  readonly projectId: ProjectId;
+  readonly finishedAt: string | null;
+}): string | null {
+  if (input.finishedAt === null) return null;
+  return `${sidebarProjectPrefKey(input)}:${input.finishedAt}`;
+}
+
+/**
+ * Whether the "Review results" button should render. Additive to the rule
+ * that keeps it on the raw run state rather than the badge tone: dismissal
+ * only ever hides a run the user has already acknowledged, never a fresh one.
+ */
+export function shouldShowFinishedRunReviewButton(input: {
+  readonly runState: AutonomousRunState;
+  readonly reviewKey: string | null;
+  readonly dismissedKeys: ReadonlySet<string>;
+}): boolean {
+  if (input.runState.kind !== "finished") return false;
+  return input.reviewKey === null || !input.dismissedKeys.has(input.reviewKey);
 }
 
 export interface ReviewIssueView {

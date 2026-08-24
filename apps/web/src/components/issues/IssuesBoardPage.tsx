@@ -44,6 +44,7 @@ import {
   resolveDefaultProviderModelSelection,
   resolvePlanningModelSelection,
 } from "~/providerInstances";
+import { useSidebarProjectPrefsStore } from "~/sidebarProjectPrefsStore";
 import { useProject, useProjects, useThreadShells } from "~/state/entities";
 import { issueEnvironment, useEnvironmentIssues, useProjectIssues } from "~/state/issues";
 import { useEnvironmentQuery } from "~/state/query";
@@ -81,6 +82,7 @@ import { stackedThreadToast, toastManager } from "../ui/toast";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { AutonomousRunControl } from "./AutonomousRunControl";
 import {
+  autonomousFinishedRunReviewKey,
   issueAttentionRetryKind,
   issueRetryRestartsWork,
   resolveAutonomousRunState,
@@ -182,6 +184,19 @@ export function IssuesBoardPage({
   const attention = useIssueAttentionActions(environmentId);
   const runState = useMemo(() => resolveAutonomousRunState(project), [project]);
   const runActive = runState.kind === "running";
+
+  // Landing on the Review tab reads as acknowledging the run, same as
+  // clicking the "Review results" button itself.
+  const dismissFinishedRun = useSidebarProjectPrefsStore((state) => state.dismissFinishedRun);
+  useEffect(() => {
+    if (tab !== "review" || runState.kind !== "finished") return;
+    const reviewKey = autonomousFinishedRunReviewKey({
+      environmentId,
+      projectId,
+      finishedAt: runState.finishedAt,
+    });
+    if (reviewKey !== null) dismissFinishedRun(reviewKey);
+  }, [dismissFinishedRun, environmentId, projectId, runState, tab]);
 
   // The worktree forks from whatever the project has checked out. Reading the
   // ref name (rather than leaving the server on "HEAD") is what makes the
