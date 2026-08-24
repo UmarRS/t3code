@@ -743,4 +743,21 @@ describe("resolveStalledDependencyBoards", () => {
       resolveStalledDependencyBoards({ issue: issues[1]!, issues, projects: projects(null) }),
     ).toBeNull();
   });
+
+  // Switching the board on is only an answer when liveness is what the blocker
+  // is missing. These blockers stay put whoever is running their board, so
+  // offering to start it would clear the flag for a run that gives up again.
+  it.each([
+    { label: "canceled", overrides: { status: "canceled" as IssueStatus } },
+    { label: "flagged", overrides: { needsAttentionAt: "2026-01-02T00:00:00.000Z" } },
+    { label: "already carried by a thread", overrides: { threadId: "thread-1" } },
+  ])("offers nothing for a blocker that is $label", ({ overrides }) => {
+    const issues = [
+      issue("api", { projectId: OTHER_BOARD, ...overrides }),
+      issue("ui", { dependsOn: ["api"], needsAttentionAt: "2026-01-02T00:00:00.000Z" }),
+    ];
+    expect(
+      resolveStalledDependencyBoards({ issue: issues[1]!, issues, projects: projects(null) }),
+    ).toBeNull();
+  });
 });

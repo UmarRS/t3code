@@ -487,6 +487,24 @@ export function describeAutonomousPlanBoards(
 }
 
 /**
+ * Whether switching a blocker's board on is what would move it.
+ *
+ * Mirrors the one branch of the run's own `canAdvance` that turns on board
+ * liveness: unstarted backlog work with nobody already on it. A blocker that is
+ * canceled, flagged, or already carried by a thread is stuck for a reason a run
+ * cannot fix, so offering to start its board would clear this issue's flag and
+ * restart boards only for the run to give up again on the next tick.
+ */
+function blockerWaitsOnItsBoard(blocker: AutonomousIssueView): boolean {
+  return (
+    blocker.status === "backlog" &&
+    !issueNeedsAttention(blocker) &&
+    blocker.threadId == null &&
+    blocker.delegatedFromThreadId == null
+  );
+}
+
+/**
  * The boards to start from a flagged issue's card: the ones holding what it is
  * blocked on, that nobody is running. This is the dead end `describeStall`
  * names on the server — a blocker sitting in a backlog with no run — offered
@@ -506,6 +524,7 @@ export function resolveStalledDependencyBoards(input: {
   const blocking = new Set<ProjectId>();
   for (const blocker of unfinishedIssueDependencies(input.issue, input.issues)) {
     if (blocker.projectId === input.issue.projectId) continue;
+    if (!blockerWaitsOnItsBoard(blocker)) continue;
     const board = byId.get(blocker.projectId);
     if (board === undefined || board.autonomousStartedAt != null) continue;
     blocking.add(blocker.projectId);
