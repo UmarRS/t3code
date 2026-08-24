@@ -94,6 +94,37 @@ export const AutonomousReviewStartedReceipt = Schema.Struct({
 });
 export type AutonomousReviewStartedReceipt = typeof AutonomousReviewStartedReceipt.Type;
 
+/**
+ * A reviewer turn the provider killed, waiting out a backoff before it runs
+ * again. Published before the wait starts, so a test names the moment instead
+ * of racing it, and a run's history says the reviewer stumbled rather than
+ * going quiet for four minutes.
+ */
+export const AutonomousReviewRetryScheduledReceipt = Schema.Struct({
+  type: Schema.Literal("autonomous.review.retry-scheduled"),
+  issueId: IssueId,
+  reviewerThreadId: ThreadId,
+  /** The attempt this wait leads to. The first review is attempt 1. */
+  attempt: NonNegativeInt,
+  /** How long the wait is. */
+  delayMs: NonNegativeInt,
+  /** The provider error the previous attempt died on. */
+  detail: Schema.String,
+  createdAt: IsoDateTime,
+});
+export type AutonomousReviewRetryScheduledReceipt =
+  typeof AutonomousReviewRetryScheduledReceipt.Type;
+
+/** A reviewer thread asked to finish the review its provider interrupted. */
+export const AutonomousReviewResumedReceipt = Schema.Struct({
+  type: Schema.Literal("autonomous.review.resumed"),
+  issueId: IssueId,
+  reviewerThreadId: ThreadId,
+  attempt: NonNegativeInt,
+  createdAt: IsoDateTime,
+});
+export type AutonomousReviewResumedReceipt = typeof AutonomousReviewResumedReceipt.Type;
+
 export const AutonomousIssueFlaggedReceipt = Schema.Struct({
   type: Schema.Literal("autonomous.issue.flagged"),
   issueId: IssueId,
@@ -144,6 +175,8 @@ export const OrchestrationRuntimeReceipt = Schema.Union([
   AutonomousIssueStartedReceipt,
   AutonomousPullRequestOpenedReceipt,
   AutonomousReviewStartedReceipt,
+  AutonomousReviewRetryScheduledReceipt,
+  AutonomousReviewResumedReceipt,
   AutonomousIssueFlaggedReceipt,
   AutonomousIssueCompletedWithoutChangesReceipt,
   AutonomousRunCompletedReceipt,

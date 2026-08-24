@@ -35,6 +35,7 @@ import { ProviderService } from "../../provider/Services/ProviderService.ts";
 import { ProjectionTurnRepository } from "../../persistence/Services/ProjectionTurns.ts";
 import { ProjectionTurnRepositoryLive } from "../../persistence/Layers/ProjectionTurns.ts";
 import { isGitRepository } from "../../git/Utils.ts";
+import { isTransientProviderFailure } from "../../provider/providerTransientFailure.ts";
 import { parseIssueReview } from "../issueReview.ts";
 import { ModelFailoverService } from "../Services/ModelFailover.ts";
 import { OrchestrationEngineService } from "../Services/OrchestrationEngine.ts";
@@ -1447,6 +1448,41 @@ const make = Effect.gen(function* () {
   });
 
   /**
+   * A reviewer turn the provider killed. The turn said nothing about the code,
+   * so the session says so too: `error` is what the run reactor watches to
+   * retry a reviewer, and it is also the honest thing to show a human.
+   *
+   * Needed because a CLI can report a provider outage as the agent's own final
+   * message and still call the turn a success — which is exactly how one 529
+   * became a permanent verdict.
+   */
+  const markReviewerTurnProviderFailed = Effect.fn("markReviewerTurnProviderFailed")(function* (
+    event: ProviderRuntimeEvent,
+    thread: OrchestrationThread,
+    detail: string,
+  ) {
+    yield* orchestrationEngine.dispatch({
+      type: "thread.session.set",
+      commandId: yield* providerCommandId(event, "reviewer-provider-failure-session-set"),
+      threadId: thread.id,
+      session: {
+        threadId: thread.id,
+        status: "error",
+        providerName: event.provider,
+        ...(event.providerInstanceId !== undefined
+          ? { providerInstanceId: event.providerInstanceId }
+          : {}),
+        runtimeMode: thread.session?.runtimeMode ?? thread.runtimeMode,
+        activeTurnId: null,
+        lastError: detail,
+        resumeAt: resumeAtForSessionStatus(thread.session, "error"),
+        updatedAt: event.createdAt,
+      },
+      createdAt: event.createdAt,
+    });
+  });
+
+  /**
    * Reviewer verdicts. A reviewer thread closes with a ```t3-review block; when
    * its turn completes we turn that into `issue.review.record`, which both
    * lands the notes on the issue and releases the merge queue for the next one.
@@ -1455,6 +1491,12 @@ const make = Effect.gen(function* () {
    * missing or malformed block becomes a provisional needs-attention verdict.
    * A later structured verdict is still accepted because some providers emit
    * an interim completion before the reviewer's actual final turn.
+   *
+   * A turn that never ran is the exception to all of that. A verdict is
+   * written once and nothing resets it, so recording one for a provider
+   * failure is a judgement on code nobody read *and* the issue's last word —
+   * the review can never be re-queued. Those turns record nothing and are
+   * handed to the run reactor's retry instead.
    */
   const ingestIssueReview = Effect.fn("ingestIssueReview")(function* (
     event: ProviderRuntimeEvent,
@@ -1466,6 +1508,22 @@ const make = Effect.gen(function* () {
       .pipe(Effect.map(Option.getOrUndefined));
     if (!issue || issue.reviewVerdict === "merged") return;
 
+    // The session is already `error` for a failed turn, which is the signal
+    // the run reactor retries on; there is nothing to correct and nothing to
+    // record.
+    if (
+      event.type === "turn.completed" &&
+      normalizeRuntimeTurnState(event.payload.state) === "failed"
+    ) {
+      yield* Effect.logInfo("reviewer turn failed before reporting a verdict", {
+        issueId: issue.id,
+        threadId,
+        turnId,
+        detail: event.payload.errorMessage ?? null,
+      });
+      return;
+    }
+
     const thread = yield* resolveThreadDetail(threadId);
     const finalAssistantText =
       thread?.messages.findLast(
@@ -1473,6 +1531,12 @@ const make = Effect.gen(function* () {
       )?.text ?? "";
 
     const parsed = yield* parseIssueReview(finalAssistantText);
+    // Only ever consulted for a turn that produced no verdict, so a review
+    // that quotes an error in its notes is read as the review it is.
+    if (parsed.kind !== "parsed" && thread && isTransientProviderFailure(finalAssistantText)) {
+      yield* markReviewerTurnProviderFailed(event, thread, finalAssistantText.trim());
+      return;
+    }
     const verdict: IssueReviewVerdict =
       parsed.kind === "parsed" ? parsed.verdict : "needs_attention";
     const notes = parsed.kind === "parsed" ? parsed.notes : parsed.detail;

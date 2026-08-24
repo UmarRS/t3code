@@ -101,7 +101,14 @@ a serial merge queue so each reviewer rebases onto a base branch that already co
 siblings. Reviewers run in the worker's worktree on a model sized to the work — a cheap classifier
 pass tiers each review as trivial, standard, or complex, and anything unclassifiable reviews on the
 strongest model — and report a `t3-review` verdict; anything
-that fails along the way flags the issue needs-attention and the run continues without it. Every
+that fails along the way flags the issue needs-attention and the run continues without it. A
+reviewer turn the _provider_ killed is deliberately not one of those failures: a verdict is written
+once and nothing resets it, and both the merge queue and the run's enqueue skip an issue that has
+one, so recording a provisional verdict for a 529 would strand the issue forever. Those turns record
+nothing, and the same reviewer thread is asked again after a backoff (1m, then 4m) taken out of the
+merge queue so one stalled review cannot hold up the rest; after
+`REVIEW_PROVIDER_FAILURE_ATTEMPTS` the issue is flagged with an infrastructure reason and a still-null
+verdict, which is what leaves it eligible for a later review. Every
 decision is derived from projected state, so a restart resumes rather than double-starting, and a
 run with nothing left to advance disables itself. See
 [Glossary](./glossary.md#autonomous-mode).

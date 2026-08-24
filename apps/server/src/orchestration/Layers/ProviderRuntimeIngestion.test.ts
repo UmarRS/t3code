@@ -1161,6 +1161,165 @@ describe("ProviderRuntimeIngestion", () => {
     });
   });
 
+  // The 24 Aug 2026 incident: three reviewer turns died on `API Error: 529
+  // Overloaded` and each one was recorded as a `needs_attention` verdict — a
+  // judgement on code nobody read, and permanent, because nothing resets a
+  // verdict and both the merge queue and the run's enqueue skip an issue that
+  // has one.
+  it("records no verdict when the provider failed the reviewer's turn", async () => {
+    const harness = await createHarness();
+    const issueId = IssueId.make("issue-review-turn-failed");
+    const reviewerThreadId = asThreadId("thread-1");
+    const now = "2026-01-01T00:00:00.000Z";
+
+    await harness.dispatch({
+      type: "issue.create",
+      commandId: CommandId.make("cmd-review-turn-failed-issue"),
+      issueId,
+      projectId: asProjectId("project-1"),
+      title: "Reviewer turn failure",
+      createdAt: now,
+    });
+    await harness.dispatch({
+      type: "issue.review.start",
+      commandId: CommandId.make("cmd-review-turn-failed-start"),
+      issueId,
+      reviewerThreadId,
+    });
+
+    harness.emit({
+      type: "turn.completed",
+      eventId: asEventId("evt-review-turn-failed"),
+      provider: ProviderDriverKind.make("codex"),
+      createdAt: now,
+      threadId: reviewerThreadId,
+      turnId: asTurnId("turn-review-failed"),
+      payload: { state: "failed", errorMessage: "API Error: 529 Overloaded" },
+    });
+
+    await harness.drain();
+    const issue = (await harness.readModel()).issues.find((entry) => entry.id === issueId);
+    // Null, so the issue stays eligible for a review that actually happens.
+    expect(issue?.reviewVerdict ?? null).toBeNull();
+    expect(issue?.needsAttentionAt ?? null).toBeNull();
+  });
+
+  it("records no verdict when the reviewer's final message is only a provider error", async () => {
+    const harness = await createHarness();
+    const issueId = IssueId.make("issue-review-provider-error-text");
+    const reviewerThreadId = asThreadId("thread-1");
+    const now = "2026-01-01T00:00:00.000Z";
+
+    await harness.dispatch({
+      type: "issue.create",
+      commandId: CommandId.make("cmd-review-provider-error-issue"),
+      issueId,
+      projectId: asProjectId("project-1"),
+      title: "Reviewer provider error text",
+      createdAt: now,
+    });
+    await harness.dispatch({
+      type: "issue.review.start",
+      commandId: CommandId.make("cmd-review-provider-error-start"),
+      issueId,
+      reviewerThreadId,
+    });
+
+    // The CLI reported the outage as the agent's own final message and still
+    // called the turn a success.
+    harness.emit({
+      type: "item.completed",
+      eventId: asEventId("evt-review-provider-error-message"),
+      provider: ProviderDriverKind.make("codex"),
+      createdAt: now,
+      threadId: reviewerThreadId,
+      turnId: asTurnId("turn-review-provider-error"),
+      itemId: asItemId("item-review-provider-error"),
+      payload: {
+        itemType: "assistant_message",
+        status: "completed",
+        detail: "API Error: 529 Overloaded",
+      },
+    });
+    harness.emit({
+      type: "turn.completed",
+      eventId: asEventId("evt-review-provider-error-completed"),
+      provider: ProviderDriverKind.make("codex"),
+      createdAt: now,
+      threadId: reviewerThreadId,
+      turnId: asTurnId("turn-review-provider-error"),
+      payload: { state: "completed" },
+    });
+
+    await harness.drain();
+    const snapshot = await harness.readModel();
+    const issue = snapshot.issues.find((entry) => entry.id === issueId);
+    expect(issue?.reviewVerdict ?? null).toBeNull();
+    expect(issue?.needsAttentionAt ?? null).toBeNull();
+    // Corrected rather than believed: the turn did fail, and an errored session
+    // is what the run reactor retries a reviewer on.
+    const thread = snapshot.threads.find((entry) => entry.id === reviewerThreadId);
+    expect(thread?.session?.status).toBe("error");
+    expect(thread?.session?.lastError).toBe("API Error: 529 Overloaded");
+  });
+
+  it("still records a provisional verdict when a reviewer finishes with real prose", async () => {
+    const harness = await createHarness();
+    const issueId = IssueId.make("issue-review-prose-without-block");
+    const reviewerThreadId = asThreadId("thread-1");
+    const now = "2026-01-01T00:00:00.000Z";
+
+    await harness.dispatch({
+      type: "issue.create",
+      commandId: CommandId.make("cmd-review-prose-issue"),
+      issueId,
+      projectId: asProjectId("project-1"),
+      title: "Reviewer prose without a block",
+      createdAt: now,
+    });
+    await harness.dispatch({
+      type: "issue.review.start",
+      commandId: CommandId.make("cmd-review-prose-start"),
+      issueId,
+      reviewerThreadId,
+    });
+
+    // Quoting an error is not failing on one: this reviewer said something, so
+    // its silence about a verdict is a real signal and still parks the issue.
+    harness.emit({
+      type: "item.completed",
+      eventId: asEventId("evt-review-prose-message"),
+      provider: ProviderDriverKind.make("codex"),
+      createdAt: now,
+      threadId: reviewerThreadId,
+      turnId: asTurnId("turn-review-prose"),
+      itemId: asItemId("item-review-prose"),
+      payload: {
+        itemType: "assistant_message",
+        status: "completed",
+        detail:
+          "The retry handler swallows `API Error: 529 Overloaded` instead of retrying it. I fixed that and pushed.",
+      },
+    });
+    harness.emit({
+      type: "turn.completed",
+      eventId: asEventId("evt-review-prose-completed"),
+      provider: ProviderDriverKind.make("codex"),
+      createdAt: now,
+      threadId: reviewerThreadId,
+      turnId: asTurnId("turn-review-prose"),
+      payload: { state: "completed" },
+    });
+
+    await harness.drain();
+    const snapshot = await harness.readModel();
+    const issue = snapshot.issues.find((entry) => entry.id === issueId);
+    expect(issue?.reviewVerdict).toBe("needs_attention");
+    expect(issue?.needsAttentionAt).not.toBeNull();
+    const thread = snapshot.threads.find((entry) => entry.id === reviewerThreadId);
+    expect(thread?.session?.status).not.toBe("error");
+  });
+
   it("preserves completed tool metadata on projected tool activities", async () => {
     const harness = await createHarness();
     const now = "2026-01-01T00:00:00.000Z";

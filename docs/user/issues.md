@@ -178,6 +178,14 @@ they are not moved backwards, so you can see how far the work got — and they c
 badge on the board with the reason. If a later reviewer turn reports a valid merged verdict, Atlas
 replaces that provisional flag and completes the issue.
 
+A reviewer that never got to run is a different thing from one that read the code and had concerns,
+and Atlas does not read a verdict into that silence. When the provider itself fails mid-review — an
+overloaded model, a server error — the same reviewer is asked to pick the review back up a minute
+later, and again four minutes after that, while every other issue on the board carries on being
+reviewed in the meantime. Only if all three attempts die does the issue get flagged, and the reason
+says plainly that the reviewer could not run and the code has not been reviewed. Clearing that flag
+puts the issue back in line for a real review.
+
 The **Review** tab collects them, newest first, alongside everything the run merged. Each entry links
 to its pull request, its worker thread, and its reviewer thread, and expands to show the reviewer's
 notes.
