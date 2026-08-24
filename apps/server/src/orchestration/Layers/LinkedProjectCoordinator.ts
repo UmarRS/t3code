@@ -454,6 +454,10 @@ const make = Effect.gen(function* () {
             type: "issue.attention.flag",
             commandId: yield* serverCommandId(`linked-project-issue-flag:${issueId}`),
             issueId,
+            // Nothing ever ran here, so this is the same park as a worker that
+            // could not be bootstrapped — not a call on code that does not
+            // exist yet.
+            kind: "start_failed",
             reason:
               `Delegated from another project, but the work could not be started: ${failure.value}`.slice(
                 0,

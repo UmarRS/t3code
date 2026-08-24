@@ -340,6 +340,7 @@ function inferAttentionKindFromReason(issue: AttentionKindView): IssueAttentionK
   if (reason.includes("blocked by")) return "blocked";
   if (
     reason.includes("could not start work") ||
+    reason.includes("the work could not be started") ||
     reason.includes("no provider is configured to do this work")
   ) {
     return "start_failed";

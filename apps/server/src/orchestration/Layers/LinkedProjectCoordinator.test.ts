@@ -419,6 +419,8 @@ describe("LinkedProjectCoordinator", () => {
       const flagged = dispatched.find((command) => command.type === "issue.attention.flag");
       expect(flagged?.issueId).toBe(result.issueId);
       expect(String(flagged?.reason)).toContain("the worktree is wedged");
+      // Nothing ran, so the board must not present this as a call on the code.
+      expect(flagged?.kind).toBe("start_failed");
     }),
   );
 

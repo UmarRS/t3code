@@ -964,3 +964,54 @@ it("reads whether a session is parked for resume", () => {
   assert.isFalse(isSessionParkedForResume(null));
   assert.isFalse(isSessionParkedForResume(undefined));
 });
+
+// Kinds arrived long after issues started being parked, so the historical
+// payload — reason and nothing else — has to keep replaying.
+it.effect("decodes an attention-flagged event written before kinds existed", () =>
+  Effect.gen(function* () {
+    const base = {
+      sequence: 1,
+      eventId: "event-flag-1",
+      aggregateKind: "issue",
+      aggregateId: "issue-1",
+      type: "issue.attention-flagged",
+      occurredAt: "2026-01-01T00:00:00.000Z",
+      commandId: "cmd-flag-1",
+      causationEventId: null,
+      correlationId: "cmd-flag-1",
+      metadata: {},
+    };
+    const legacy = yield* decodeOrchestrationEvent({
+      ...base,
+      payload: {
+        issueId: "issue-1",
+        reason: "Could not open a pull request: gh exited 1.",
+        needsAttentionAt: "2026-01-01T00:00:00.000Z",
+        updatedAt: "2026-01-01T00:00:00.000Z",
+      },
+    });
+    const classified = yield* decodeOrchestrationEvent({
+      ...base,
+      eventId: "event-flag-2",
+      sequence: 2,
+      payload: {
+        issueId: "issue-1",
+        reason: "The reviewer could not run. The code has not been reviewed.",
+        kind: "review_unavailable",
+        needsAttentionAt: "2026-01-01T00:00:00.000Z",
+        updatedAt: "2026-01-01T00:00:00.000Z",
+      },
+    });
+
+    if (legacy.type !== "issue.attention-flagged") {
+      assert.fail(`Expected issue.attention-flagged event, received ${legacy.type}.`);
+    }
+    // Absent, not `other`: an unclassified park is what licenses the UI's
+    // fallback to the reason text.
+    assert.isUndefined(legacy.payload.kind);
+    if (classified.type !== "issue.attention-flagged") {
+      assert.fail(`Expected issue.attention-flagged event, received ${classified.type}.`);
+    }
+    assert.strictEqual(classified.payload.kind, "review_unavailable");
+  }),
+);

@@ -605,6 +605,10 @@ describe("resolveIssueAttentionKind", () => {
     ],
     ["Could not start work: worktree bootstrap failed.", "start_failed"],
     ["No provider is configured to do this work.", "start_failed"],
+    [
+      "Delegated from another project, but the work could not be started: the worktree is wedged.",
+      "start_failed",
+    ],
     ["Blocked by 'Groundwork' on the Acme API board, which nothing is working.", "blocked"],
     // A missing worktree is deliberately not `pull_request_failed`: retrying
     // the pull request over a worktree that is gone can only re-fail.
