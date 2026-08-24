@@ -20,8 +20,7 @@
  */
 import {
   CommandId,
-  DEFAULT_WORKTREE_SWEEP_INTERVAL,
-  DEFAULT_WORKTREE_SWEEP_MIN_AGE,
+  DEFAULT_SERVER_SETTINGS,
   type OrchestrationEvent,
   type ProjectId,
   type ServerSettings,
@@ -50,12 +49,6 @@ import { ProjectionSnapshotQuery } from "../orchestration/Services/ProjectionSna
 import { forkParked } from "../serverActivation.ts";
 import { ServerSettingsService } from "../serverSettings.ts";
 import * as GitVcsDriver from "./GitVcsDriver.ts";
-
-/** A worktree is only swept once every thread on it has been parked this long. */
-export const WORKTREE_SWEEP_MIN_AGE = DEFAULT_WORKTREE_SWEEP_MIN_AGE;
-
-/** Cadence of the periodic sweep after the first startup run. */
-export const WORKTREE_SWEEP_INTERVAL = DEFAULT_WORKTREE_SWEEP_INTERVAL;
 
 /**
  * Delay before the first sweep. Long enough to stay out of the way of boot
@@ -852,7 +845,15 @@ const makeWorktreeSweeper = (options?: WorktreeSweeperLiveOptions) =>
     const serverSettings = yield* ServerSettingsService;
     const crypto = yield* Crypto.Crypto;
 
-    const startupSettings = yield* serverSettings.getSettings;
+    // Read once, at startup. A settings file we cannot read must not take the
+    // server down with it: fall back to the shipped defaults and say so.
+    const startupSettings = yield* serverSettings.getSettings.pipe(
+      Effect.catchCause((cause) =>
+        Effect.logWarning("worktree.sweep.schedule-settings-unavailable", {
+          cause: Cause.pretty(cause),
+        }).pipe(Effect.as(DEFAULT_SERVER_SETTINGS)),
+      ),
+    );
     const { minAgeMs, intervalMs, startupDelayMs } = resolveWorktreeSweepSchedule(
       startupSettings,
       options,

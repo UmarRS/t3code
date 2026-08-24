@@ -596,6 +596,27 @@ describe("sweepWorktrees", () => {
     }),
   );
 
+  it.effect("immediate removal never touches a pinned thread's worktree", () =>
+    Effect.gen(function* () {
+      yield* TestClock.setTime(NOW_MS);
+      const worktreePath = `${WORKTREES_DIR}/t3code/pinned-merged`;
+      const fake = makeFakeSweep({
+        threads: [thread("pinned-merged", { worktreePath, pinnedAt: iso(NOW_MS - DAY_MS) })],
+        worktrees: { [worktreePath]: { merged: true } },
+      });
+
+      const summary = yield* sweepWorktrees(fake.deps, {
+        targetThreadId: ThreadId.make("pinned-merged"),
+      });
+
+      assert.deepStrictEqual(fake.removed, []);
+      assert.deepStrictEqual(fake.clearedThreads, []);
+      assert.deepStrictEqual(summary.projects[0]?.skipped, [
+        { worktreePath, reason: "thread-pinned" },
+      ]);
+    }),
+  );
+
   it.effect("immediate removal keeps a shared worktree while its reviewer is live", () =>
     Effect.gen(function* () {
       yield* TestClock.setTime(NOW_MS);
