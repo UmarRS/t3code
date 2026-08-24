@@ -22,6 +22,7 @@ import {
   TurnId,
 } from "./baseSchemas.ts";
 import {
+  IssueAttentionKind,
   IssueAttentionReason,
   IssueDependsOn,
   IssueDescription,
@@ -1382,6 +1383,11 @@ const IssueAttentionFlagCommand = Schema.Struct({
   commandId: CommandId,
   issueId: IssueId,
   reason: IssueAttentionReason,
+  /**
+   * What sort of park this is, for the UI to branch on. Optional so a caller
+   * that has nothing better to say can leave it off; absent means `other`.
+   */
+  kind: Schema.optional(IssueAttentionKind),
 });
 
 /**
@@ -1801,6 +1807,12 @@ export const IssuePullRequestLinkedPayload = Schema.Struct({
 export const IssueAttentionFlaggedPayload = Schema.Struct({
   issueId: IssueId,
   reason: IssueAttentionReason,
+  /**
+   * Optional so every event written before kinds existed still decodes. Absent
+   * means `other`, and is projected as null rather than as `other` — an
+   * unclassified park is what licenses the reason-text fallback in the UI.
+   */
+  kind: Schema.optional(IssueAttentionKind),
   needsAttentionAt: IsoDateTime,
   updatedAt: IsoDateTime,
 });

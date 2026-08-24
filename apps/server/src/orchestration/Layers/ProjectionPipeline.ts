@@ -673,6 +673,7 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
               pullRequestUrl: null,
               needsAttentionAt: null,
               needsAttentionReason: null,
+              needsAttentionKind: null,
               reviewVerdict: null,
               reviewerThreadId: null,
               reviewedAt: null,
@@ -744,6 +745,9 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
             yield* patchIssueRow(event.payload.issueId, {
               needsAttentionAt: event.payload.needsAttentionAt,
               needsAttentionReason: event.payload.reason,
+              // Null, not `other`, when the event predates kinds — see the
+              // projector: unclassified is what the UI fallback keys on.
+              needsAttentionKind: event.payload.kind ?? null,
               updatedAt: event.payload.updatedAt,
             });
             return;
@@ -752,6 +756,7 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
             yield* patchIssueRow(event.payload.issueId, {
               needsAttentionAt: null,
               needsAttentionReason: null,
+              needsAttentionKind: null,
               updatedAt: event.payload.updatedAt,
             });
             return;

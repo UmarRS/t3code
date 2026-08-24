@@ -174,9 +174,18 @@ merge, the issue is flagged and set aside. So is a story waiting on work nothing
 finish — a blocker that is itself flagged, or one sitting on a board with no run — and the reason
 names the story and the board it is stuck behind. That is the run's dead end: it flags what it
 cannot reach and finishes, rather than staying on forever. Flagged issues keep whatever status they had reached —
-they are not moved backwards, so you can see how far the work got — and they carry a **Needs you**
-badge on the board with the reason. If a later reviewer turn reports a valid merged verdict, Atlas
-replaces that provisional flag and completes the issue.
+they are not moved backwards, so you can see how far the work got — and they carry a badge on the
+board with the reason. If a later reviewer turn reports a valid merged verdict, Atlas replaces that
+provisional flag and completes the issue.
+
+The badge says which kind of dead end it was, because they do not mean the same thing:
+**Review needs attention** is a reviewer that read the change and would not merge it, **Not
+reviewed** is a review that never happened at all, **No pull request** is finished work nobody could
+open a pull request for, **Blocked** is a story waiting on work nothing is doing, and **Could not
+start** is work that never began. Only the first is a call on the code; the rest are the machinery
+failing, and they are drawn with a different icon to say so. Hovering the badge, or opening the
+**Review** tab, spells out what happened above the reason itself. Issues flagged by older versions
+of Atlas have no kind recorded and read as best Atlas can tell from their reason.
 
 A reviewer that never got to run is a different thing from one that read the code and had concerns,
 and Atlas does not read a verdict into that silence. When the provider itself fails mid-review — an

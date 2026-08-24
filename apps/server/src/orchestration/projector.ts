@@ -998,6 +998,10 @@ export function projectEvent(
           issues: updateIssue(nextBase.issues, payload.issueId, {
             needsAttentionAt: payload.needsAttentionAt,
             needsAttentionReason: payload.reason,
+            // Absent stays null rather than becoming `other`: replaying a
+            // pre-kind event must leave the issue unclassified, which is what
+            // keeps the UI's reason-text fallback in play for it.
+            needsAttentionKind: payload.kind ?? null,
             updatedAt: payload.updatedAt,
           }),
         })),
@@ -1015,6 +1019,7 @@ export function projectEvent(
           issues: updateIssue(nextBase.issues, payload.issueId, {
             needsAttentionAt: null,
             needsAttentionReason: null,
+            needsAttentionKind: null,
             updatedAt: payload.updatedAt,
           }),
         })),

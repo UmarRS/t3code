@@ -655,6 +655,7 @@ describe("AutonomousRunReactor", () => {
       const stuck = yield* run.findIssue("issue-ui");
       expect(stuck?.needsAttentionAt).not.toBeNull();
       expect(stuck?.needsAttentionReason).toContain("Acme Web");
+      expect(stuck?.needsAttentionKind).toBe("blocked");
       const project = yield* run.snapshotQuery.getProjectShellById(PROJECT_ID);
       expect(Option.getOrThrow(project).autonomousStartedAt).toBeNull();
       expect(Option.getOrThrow(project).autonomousFinishedReason).toBe("completed");
@@ -677,6 +678,11 @@ describe("AutonomousRunReactor", () => {
       yield* run.reactor.drain;
 
       expect(harness.started).toEqual([]);
+      // The command carried no kind, exactly as every event written before
+      // kinds existed did. It stays unclassified rather than being recorded as
+      // a deliberate `other`, which is what keeps the UI's reason-text
+      // fallback in play for history.
+      expect((yield* run.findIssue("issue-a"))?.needsAttentionKind ?? null).toBeNull();
       const project = yield* run.snapshotQuery.getProjectShellById(PROJECT_ID);
       const shell = Option.getOrNull(project);
       // The run turned itself off, and said it finished rather than was stopped.
@@ -994,6 +1000,8 @@ describe("AutonomousRunReactor", () => {
       expect(harness.reviews).toEqual([]);
       const issue = yield* run.findIssue("issue-a");
       expect(issue?.needsAttentionReason).toContain("No Claude provider is available");
+      // Infrastructure, not a verdict: nobody read this code.
+      expect(issue?.needsAttentionKind).toBe("review_unavailable");
     }).pipe(Effect.scoped, Effect.provide(harness.layer));
   });
 
@@ -1017,6 +1025,7 @@ describe("AutonomousRunReactor", () => {
       const issue = yield* run.findIssue("issue-a");
       expect(issue?.needsAttentionAt).not.toBeNull();
       expect(issue?.needsAttentionReason).toContain("without producing a pull request");
+      expect(issue?.needsAttentionKind).toBe("pull_request_failed");
       // Parked, not merged: the run must not claim this landed.
       expect(issue?.status).toBe("in_progress");
       expect(harness.reviews).toEqual([]);
@@ -1173,6 +1182,7 @@ describe("AutonomousRunReactor", () => {
       expect(harness.stackedActions).toEqual([]);
       const issue = yield* run.findIssue("issue-a");
       expect(issue?.needsAttentionReason).toContain("ended in an error");
+      expect(issue?.needsAttentionKind).toBe("other");
     }).pipe(Effect.scoped, Effect.provide(harness.layer));
   });
 
@@ -1287,6 +1297,10 @@ describe("AutonomousRunReactor", () => {
           notes: "The interim turn did not include a t3-review block.",
         });
         expect((yield* run.findIssue("issue-a"))?.reviewVerdict).toBe("needs_attention");
+        // A refusal is the one park that is a judgement on the code.
+        expect((yield* run.findIssue("issue-a"))?.needsAttentionKind).toBe(
+          "review_needs_attention",
+        );
 
         harness.markPullRequestMerged();
 
@@ -1542,6 +1556,8 @@ describe("AutonomousRunReactor", () => {
         expect(parked?.needsAttentionAt).not.toBeNull();
         expect(parked?.needsAttentionReason).toContain("The reviewer could not run");
         expect(parked?.needsAttentionReason).toContain("The code has not been reviewed.");
+        // The kind is what stops the UI presenting an outage as a verdict.
+        expect(parked?.needsAttentionKind).toBe("review_unavailable");
         // The whole point: no verdict was ever written, so clearing the flag
         // leaves an issue that can still be reviewed.
         expect(parked?.reviewVerdict ?? null).toBeNull();

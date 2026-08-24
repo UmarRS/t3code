@@ -1917,9 +1917,16 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         command,
         issueId: command.issueId,
       });
-      // Re-flagging keeps the original timestamp and reason: the first failure
-      // is the one worth showing, and a retry loop must not churn ordering.
+      // Re-flagging keeps the original timestamp, reason and kind: the first
+      // failure is the one worth showing, and a retry loop must not churn
+      // ordering. The reason and the kind move together — keeping the first
+      // reason beside a second failure's kind would have the badge and the
+      // text describe different failures — so an already-flagged issue whose
+      // kind is null keeps it null. Re-flagging is not the moment to classify
+      // history.
       const alreadyFlagged = issue.needsAttentionAt != null;
+      const keepsFirstFlag = alreadyFlagged && issue.needsAttentionReason != null;
+      const kind = keepsFirstFlag ? (issue.needsAttentionKind ?? null) : (command.kind ?? null);
       const occurredAt = yield* nowIso;
       return {
         ...(yield* withEventBase({
@@ -1931,7 +1938,8 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         type: "issue.attention-flagged",
         payload: {
           issueId: command.issueId,
-          reason: alreadyFlagged ? (issue.needsAttentionReason ?? command.reason) : command.reason,
+          reason: keepsFirstFlag ? issue.needsAttentionReason : command.reason,
+          ...(kind === null ? {} : { kind }),
           needsAttentionAt: alreadyFlagged ? issue.needsAttentionAt : occurredAt,
           updatedAt: alreadyFlagged ? issue.updatedAt : occurredAt,
         },
@@ -2047,6 +2055,9 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           payload: {
             issueId: command.issueId,
             reason: `Reviewer left this unmerged. See the review notes on issue '${command.issueId}'.`,
+            // A reviewer that read the change and refused it — the one park
+            // that is a judgement on the code rather than on the machinery.
+            kind: "review_needs_attention" as const,
             needsAttentionAt: issue.needsAttentionAt ?? occurredAt,
             updatedAt: occurredAt,
           },

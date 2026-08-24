@@ -211,6 +211,20 @@ worker session errors, a pull request cannot be opened, or a reviewer refuses to
 merge. Cleared by the user with `issue.attention.clear`, which makes a backlog
 issue startable again — the way out of every automatic park.
 
+The flag has two halves. `needsAttentionReason` is free text for a human;
+`needsAttentionKind` is an `IssueAttentionKind`
+(`packages/contracts/src/issues.ts`) the UI branches on, so nothing has to
+reverse-engineer intent from a sentence. The distinction it exists for is
+`review_needs_attention` (a reviewer read the change and would not merge it)
+against `review_unavailable` (no reviewer ran at all) — presenting the second as
+a verdict would be a lie about work nobody looked at. Both halves are frozen at
+the first flag: re-flagging keeps the original reason, kind and timestamp so a
+retry loop cannot churn the board. The kind is optional on the wire and nullable
+in the read model, because every issue parked before it existed has none; those
+rows are unclassified rather than deliberately `other`, which is what licenses
+`resolveIssueAttentionKind`'s fallback to reading the reason text
+(`apps/web/src/components/issues/autonomousRun.logic.ts`).
+
 #### Review notes
 
 The reviewer's markdown record of what it checked, fixed, and decided, carried

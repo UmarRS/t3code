@@ -30,6 +30,7 @@ import {
   PlusIcon,
   SparklesIcon,
   TriangleAlertIcon,
+  UnplugIcon,
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
@@ -1043,13 +1044,22 @@ function IssueCard({
           <Tooltip>
             <TooltipTrigger
               render={
+                // A park the machinery caused reads differently from a
+                // reviewer's refusal, badge and icon both: "Not reviewed" must
+                // never be mistaken for a call on the code.
                 <Badge variant="warning" size="sm" className="gap-1">
-                  <TriangleAlertIcon className="size-3" />
-                  Needs you
+                  {attentionPresentation.infrastructure ? (
+                    <UnplugIcon className="size-3" />
+                  ) : (
+                    <TriangleAlertIcon className="size-3" />
+                  )}
+                  {attentionPresentation.label}
                 </Badge>
               }
             />
-            <TooltipPopup side="bottom">{attentionPresentation.reason}</TooltipPopup>
+            <TooltipPopup side="bottom" className="max-w-72">
+              {attentionPresentation.headline} {attentionPresentation.reason}
+            </TooltipPopup>
           </Tooltip>
         ) : null}
 

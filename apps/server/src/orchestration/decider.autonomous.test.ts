@@ -432,6 +432,82 @@ it.layer(NodeServices.layer)("autonomous mode decider", (it) => {
       }),
     );
 
+    // The reason and the kind describe one failure, so they are kept or
+    // replaced together. A row parked before kinds existed stays unclassified
+    // rather than wearing a second failure's badge over the first's text.
+    it.effect("does not classify an already-flagged issue from a later failure", () =>
+      Effect.gen(function* () {
+        const events = yield* decide(
+          {
+            type: "issue.attention.flag",
+            commandId: CommandId.make("cmd-flag"),
+            issueId: IssueId.make("issue-a"),
+            reason: "Blocked by 'Groundwork'.",
+            kind: "blocked",
+          },
+          makeReadModel({
+            issues: [
+              issue("issue-a", {
+                needsAttentionAt: NOW,
+                needsAttentionReason: "Could not open a pull request: gh exited 1.",
+              }),
+            ],
+          }),
+        );
+        expect(events[0]?.type).toBe("issue.attention-flagged");
+        if (events[0]?.type === "issue.attention-flagged") {
+          expect(events[0].payload.reason).toBe("Could not open a pull request: gh exited 1.");
+          expect(events[0].payload).not.toHaveProperty("kind");
+        }
+      }),
+    );
+
+    it.effect("keeps the kind the first failure was flagged with", () =>
+      Effect.gen(function* () {
+        const events = yield* decide(
+          {
+            type: "issue.attention.flag",
+            commandId: CommandId.make("cmd-flag"),
+            issueId: IssueId.make("issue-a"),
+            reason: "Second failure.",
+            kind: "blocked",
+          },
+          makeReadModel({
+            issues: [
+              issue("issue-a", {
+                needsAttentionAt: NOW,
+                needsAttentionReason: "The reviewer could not run.",
+                needsAttentionKind: "review_unavailable",
+              }),
+            ],
+          }),
+        );
+        expect(events[0]?.type).toBe("issue.attention-flagged");
+        if (events[0]?.type === "issue.attention-flagged") {
+          expect(events[0].payload.kind).toBe("review_unavailable");
+        }
+      }),
+    );
+
+    it.effect("records the kind the command carried on a fresh flag", () =>
+      Effect.gen(function* () {
+        const events = yield* decide(
+          {
+            type: "issue.attention.flag",
+            commandId: CommandId.make("cmd-flag"),
+            issueId: IssueId.make("issue-a"),
+            reason: "The reviewer could not run.",
+            kind: "review_unavailable",
+          },
+          makeReadModel({ issues: [issue("issue-a", { status: "in_review" })] }),
+        );
+        expect(events[0]?.type).toBe("issue.attention-flagged");
+        if (events[0]?.type === "issue.attention-flagged") {
+          expect(events[0].payload.kind).toBe("review_unavailable");
+        }
+      }),
+    );
+
     it.effect("clears the flag so the issue can run again", () =>
       Effect.gen(function* () {
         const events = yield* decide(
