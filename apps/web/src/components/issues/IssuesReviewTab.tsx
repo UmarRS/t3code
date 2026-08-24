@@ -7,6 +7,7 @@ import {
   MessageSquareIcon,
   RotateCcwIcon,
   TriangleAlertIcon,
+  UnplugIcon,
 } from "lucide-react";
 import { useMemo, useState } from "react";
 
@@ -161,9 +162,15 @@ function ReviewCard({
           <p className="text-sm text-foreground">{issue.title}</p>
           <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
             {flagged ? (
+              // An outage and a verdict are drawn apart on purpose: a plug is
+              // the machinery failing, a triangle is a call on the code.
               <Badge variant="warning" size="sm" className="gap-1">
-                <TriangleAlertIcon className="size-3" />
-                {attentionPresentation.fromReview ? "Review needs attention" : "Needs you"}
+                {attentionPresentation.infrastructure ? (
+                  <UnplugIcon className="size-3" />
+                ) : (
+                  <TriangleAlertIcon className="size-3" />
+                )}
+                {attentionPresentation.label}
               </Badge>
             ) : (
               <Badge variant="success" size="sm" className="gap-1">
@@ -233,7 +240,10 @@ function ReviewCard({
 
       {attentionPresentation ? (
         <div className="mt-2 rounded-md bg-warning/8 px-2 py-1.5 text-xs text-warning-foreground">
-          <p>{attentionPresentation.reason}</p>
+          {/* The headline names what happened; the reactor's own reason stays
+              underneath it, because that is the part with the detail in it. */}
+          <p className="font-medium">{attentionPresentation.headline}</p>
+          <p className="mt-0.5 opacity-90">{attentionPresentation.reason}</p>
           {/* The stall says "start a run there". This is that run: the boards
               holding the blocker, plus whatever their own plans depend on,
               started together with this one. */}

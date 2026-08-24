@@ -9,6 +9,7 @@
  */
 import {
   IsoDateTime,
+  IssueAttentionKind,
   IssueAttentionReason,
   IssueId,
   IssuePriority,
@@ -38,6 +39,8 @@ export const ProjectionIssue = Schema.Struct({
   pullRequestUrl: Schema.NullOr(Schema.String),
   needsAttentionAt: Schema.NullOr(IsoDateTime),
   needsAttentionReason: Schema.NullOr(IssueAttentionReason),
+  /** Null for issues parked before kinds existed; never backfilled. */
+  needsAttentionKind: Schema.NullOr(IssueAttentionKind),
   reviewVerdict: Schema.NullOr(IssueReviewVerdict),
   reviewerThreadId: Schema.NullOr(ThreadId),
   reviewedAt: Schema.NullOr(IsoDateTime),

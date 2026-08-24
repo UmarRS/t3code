@@ -3,6 +3,7 @@ import {
   IssueId,
   ProjectId,
   ThreadId,
+  type IssueAttentionKind,
   type IssueReviewVerdict,
   type IssueStatus,
   type ServerProvider,
@@ -18,11 +19,13 @@ import {
   describeAutonomousRunStatus,
   formatAutonomousProgressLabel,
   hasAutonomousReviewerProvider,
+  issueAttentionRetryKind,
   issueRetryRestartsWork,
   planIssueAttentionClear,
   planIssueAttentionRetry,
   resolveAutonomousPlanBoards,
   resolveAutonomousRunState,
+  resolveIssueAttentionKind,
   resolveIssueAttentionPresentation,
   resolveStalledDependencyBoards,
   shouldShowFinishedRunReviewButton,
@@ -174,6 +177,7 @@ function issue(
     threadId?: string | null;
     needsAttentionAt?: string | null;
     needsAttentionReason?: string | null;
+    needsAttentionKind?: IssueAttentionKind | null;
     reviewVerdict?: IssueReviewVerdict | null;
     reviewedAt?: string | null;
     updatedAt?: string;
@@ -192,6 +196,7 @@ function issue(
     pullRequestUrl: null,
     needsAttentionAt: overrides.needsAttentionAt ?? null,
     needsAttentionReason: overrides.needsAttentionReason ?? null,
+    needsAttentionKind: overrides.needsAttentionKind ?? null,
     reviewVerdict: overrides.reviewVerdict ?? null,
     reviewerThreadId: null,
     reviewedAt: overrides.reviewedAt ?? null,
@@ -518,10 +523,52 @@ describe("resolveIssueAttentionPresentation", () => {
         issue("parked", {
           needsAttentionAt: "2026-08-01T00:00:00.000Z",
           needsAttentionReason: "The tests fail on main.",
+          needsAttentionKind: "review_needs_attention",
           reviewVerdict: "needs_attention",
         }),
       ),
-    ).toEqual({ reason: "The tests fail on main.", fromReview: true });
+    ).toEqual({
+      reason: "The tests fail on main.",
+      kind: "review_needs_attention",
+      label: "Review needs attention",
+      headline: "The reviewer read this change and left it unmerged.",
+      infrastructure: false,
+    });
+  });
+
+  // The whole point of the kind: a reviewer that never ran must not read as a
+  // reviewer that read the code and said no.
+  it("says outright that an unreviewable issue was never reviewed", () => {
+    const presentation = resolveIssueAttentionPresentation(
+      issue("parked", {
+        needsAttentionAt: "2026-08-01T00:00:00.000Z",
+        needsAttentionReason: "The reviewer could not run: the provider failed 3 times.",
+        needsAttentionKind: "review_unavailable",
+      }),
+    );
+    expect(presentation?.kind).toBe("review_unavailable");
+    expect(presentation?.infrastructure).toBe(true);
+    expect(presentation?.headline).toMatch(/never reviewed/);
+    expect(presentation?.label).not.toBe("Review needs attention");
+  });
+
+  it("gives a refusal and an outage different wording and iconography", () => {
+    const refused = resolveIssueAttentionPresentation(
+      issue("refused", {
+        needsAttentionAt: "2026-08-01T00:00:00.000Z",
+        needsAttentionKind: "review_needs_attention",
+      }),
+    );
+    const unavailable = resolveIssueAttentionPresentation(
+      issue("unavailable", {
+        needsAttentionAt: "2026-08-01T00:00:00.000Z",
+        needsAttentionKind: "review_unavailable",
+      }),
+    );
+    expect(refused?.label).not.toBe(unavailable?.label);
+    expect(refused?.headline).not.toBe(unavailable?.headline);
+    expect(refused?.infrastructure).toBe(false);
+    expect(unavailable?.infrastructure).toBe(true);
   });
 
   it("falls back to a generic reason when none was recorded", () => {
@@ -529,7 +576,61 @@ describe("resolveIssueAttentionPresentation", () => {
       issue("parked", { needsAttentionAt: "2026-08-01T00:00:00.000Z" }),
     );
     expect(presentation?.reason).toMatch(/could not finish/);
-    expect(presentation?.fromReview).toBe(false);
+    expect(presentation?.kind).toBe("other");
+  });
+});
+
+describe("resolveIssueAttentionKind", () => {
+  it("prefers the recorded kind over anything the reason says", () => {
+    expect(
+      resolveIssueAttentionKind(
+        issue("parked", {
+          needsAttentionAt: "2026-08-01T00:00:00.000Z",
+          needsAttentionReason: "Could not open a pull request: GitHub CLI command failed.",
+          needsAttentionKind: "other",
+        }),
+      ),
+    ).toBe("other");
+  });
+
+  // Rows flagged before kinds existed carry null, and the reason text is the
+  // only evidence left. These are the exact sentences the reactor wrote.
+  it.each([
+    ["Could not open a pull request: GitHub CLI command failed.", "pull_request_failed"],
+    ["The commit/push/PR run finished without producing a pull request.", "pull_request_failed"],
+    ["No Claude provider is available to review this issue.", "review_unavailable"],
+    [
+      "The reviewer could not run: the provider failed 3 times (last error: boom). The code has not been reviewed.",
+      "review_unavailable",
+    ],
+    ["Could not start work: worktree bootstrap failed.", "start_failed"],
+    ["No provider is configured to do this work.", "start_failed"],
+    ["Blocked by 'Groundwork' on the Acme API board, which nothing is working.", "blocked"],
+    // A missing worktree is deliberately not `pull_request_failed`: retrying
+    // the pull request over a worktree that is gone can only re-fail.
+    ["The worker thread has no worktree, so no pull request could be opened.", "other"],
+    ["Something nobody ever wrote a branch for.", "other"],
+  ])("infers %s from an unclassified row", (reason, expected) => {
+    expect(
+      resolveIssueAttentionKind(
+        issue("legacy", {
+          needsAttentionAt: "2026-08-01T00:00:00.000Z",
+          needsAttentionReason: reason,
+        }),
+      ),
+    ).toBe(expected);
+  });
+
+  it("reads a recorded verdict as a refusal when the row has no kind", () => {
+    expect(
+      resolveIssueAttentionKind(
+        issue("legacy", {
+          needsAttentionAt: "2026-08-01T00:00:00.000Z",
+          needsAttentionReason: "Reviewer left this unmerged. See the review notes.",
+          reviewVerdict: "needs_attention",
+        }),
+      ),
+    ).toBe("review_needs_attention");
   });
 });
 
@@ -560,8 +661,47 @@ describe("planIssueAttentionRetry", () => {
       threadId: "thread-1",
       needsAttentionAt: "2026-08-01T00:00:00.000Z",
       needsAttentionReason: "Could not open a pull request: GitHub CLI command failed.",
+      needsAttentionKind: "pull_request_failed",
     });
+    expect(issueAttentionRetryKind(target)).toBe("pull-request");
     expect(planIssueAttentionRetry(target)).toEqual([{ kind: "clear-attention" }]);
+    expect(issueRetryRestartsWork(target)).toBe(false);
+  });
+
+  // The kind decides, so a reason that happens to mention pull requests no
+  // longer buys the pull-request affordance on a row that was classified.
+  it("ignores pull-request wording once a row carries a different kind", () => {
+    const target = issue("parked", {
+      status: "in_progress",
+      threadId: "thread-1",
+      needsAttentionAt: "2026-08-01T00:00:00.000Z",
+      needsAttentionReason:
+        "The reviewer could not run, so nobody looked at the pull request. The code has not been reviewed.",
+      needsAttentionKind: "review_unavailable",
+    });
+    expect(issueAttentionRetryKind(target)).toBe("restart-work");
+    expect(issueRetryRestartsWork(target)).toBe(true);
+  });
+
+  // A row flagged before kinds existed still has to behave exactly as it did.
+  it("keeps the pull-request affordance for an unclassified legacy row", () => {
+    const target = issue("legacy", {
+      status: "in_progress",
+      threadId: "thread-1",
+      needsAttentionAt: "2026-08-01T00:00:00.000Z",
+      needsAttentionReason: "Could not open a pull request: GitHub CLI command failed.",
+    });
+    expect(issueAttentionRetryKind(target)).toBe("pull-request");
+    expect(planIssueAttentionRetry(target)).toEqual([{ kind: "clear-attention" }]);
+    expect(issueRetryRestartsWork(target)).toBe(false);
+  });
+
+  it("still offers Clear on an unclassified legacy backlog row", () => {
+    const target = issue("legacy", {
+      needsAttentionAt: "2026-08-01T00:00:00.000Z",
+      needsAttentionReason: "Blocked by 'Groundwork', which is not going to finish on its own.",
+    });
+    expect(issueAttentionRetryKind(target)).toBe("clear");
     expect(issueRetryRestartsWork(target)).toBe(false);
   });
 

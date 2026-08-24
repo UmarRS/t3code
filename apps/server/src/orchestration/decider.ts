@@ -1917,9 +1917,14 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         command,
         issueId: command.issueId,
       });
-      // Re-flagging keeps the original timestamp and reason: the first failure
-      // is the one worth showing, and a retry loop must not churn ordering.
+      // Re-flagging keeps the original timestamp, reason and kind: the first
+      // failure is the one worth showing, and a retry loop must not churn
+      // ordering. An already-flagged issue whose kind is null keeps it null —
+      // re-flagging is not the moment to classify history.
       const alreadyFlagged = issue.needsAttentionAt != null;
+      const kind = alreadyFlagged
+        ? (issue.needsAttentionKind ?? command.kind ?? null)
+        : (command.kind ?? null);
       const occurredAt = yield* nowIso;
       return {
         ...(yield* withEventBase({
@@ -1932,6 +1937,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         payload: {
           issueId: command.issueId,
           reason: alreadyFlagged ? (issue.needsAttentionReason ?? command.reason) : command.reason,
+          ...(kind === null ? {} : { kind }),
           needsAttentionAt: alreadyFlagged ? issue.needsAttentionAt : occurredAt,
           updatedAt: alreadyFlagged ? issue.updatedAt : occurredAt,
         },
@@ -2047,6 +2053,9 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           payload: {
             issueId: command.issueId,
             reason: `Reviewer left this unmerged. See the review notes on issue '${command.issueId}'.`,
+            // A reviewer that read the change and refused it — the one park
+            // that is a judgement on the code rather than on the machinery.
+            kind: "review_needs_attention" as const,
             needsAttentionAt: issue.needsAttentionAt ?? occurredAt,
             updatedAt: occurredAt,
           },

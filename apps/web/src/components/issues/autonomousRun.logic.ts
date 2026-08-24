@@ -9,6 +9,7 @@ import {
   type AutonomousIssueView,
   type AutonomousScope,
   type EnvironmentId,
+  type IssueAttentionKind,
   type IssueId,
   type IssueReviewVerdict,
   type IssueStatus,
@@ -263,6 +264,8 @@ export interface ReviewIssueView {
   readonly pullRequestUrl?: string | null | undefined;
   readonly needsAttentionAt?: string | null | undefined;
   readonly needsAttentionReason?: string | null | undefined;
+  /** Null on issues parked before kinds existed; see `resolveIssueAttentionKind`. */
+  readonly needsAttentionKind?: IssueAttentionKind | null | undefined;
   readonly reviewVerdict?: IssueReviewVerdict | null | undefined;
   readonly reviewerThreadId?: ThreadId | null | undefined;
   readonly reviewedAt?: string | null | undefined;
@@ -304,21 +307,123 @@ export function buildReviewSections<TIssue extends ReviewIssueView>(
 
 const DEFAULT_ATTENTION_REASON = "Autonomous mode could not finish this issue.";
 
+/** Both halves of the flag, which is all classifying one takes. */
+type AttentionKindView = Pick<
+  ReviewIssueView,
+  "needsAttentionReason" | "needsAttentionKind" | "reviewVerdict"
+>;
+
+/**
+ * The kind an issue was parked with, for rows that predate the structured
+ * kind. Everything the server writes now carries one; a null kind is history,
+ * and the only honest thing left to read is the reason text the reactor wrote.
+ * The substrings below are exactly the phrases the reactor used at the time,
+ * so this is a fallback for old rows and not a second classifier.
+ */
+function inferAttentionKindFromReason(issue: AttentionKindView): IssueAttentionKind {
+  const reason = issue.needsAttentionReason?.toLowerCase() ?? "";
+  if (
+    reason.includes("could not open a pull request") ||
+    reason.includes("without producing a pull request")
+  ) {
+    return "pull_request_failed";
+  }
+  if (
+    reason.includes("the code has not been reviewed") ||
+    reason.includes("no claude provider is available to review") ||
+    reason.includes("no worktree to review") ||
+    reason.includes("could not start the review") ||
+    reason.includes("could not restart the review")
+  ) {
+    return "review_unavailable";
+  }
+  if (reason.includes("blocked by")) return "blocked";
+  if (
+    reason.includes("could not start work") ||
+    reason.includes("no provider is configured to do this work")
+  ) {
+    return "start_failed";
+  }
+  // A recorded refusal is the one kind the read model can still prove without
+  // the reason text: the reviewer wrote a verdict.
+  if (issue.reviewVerdict === "needs_attention") return "review_needs_attention";
+  return "other";
+}
+
+/**
+ * The kind to branch on. Structured when the server recorded one, inferred
+ * from the reason text only for rows flagged before kinds existed.
+ */
+export function resolveIssueAttentionKind(issue: AttentionKindView): IssueAttentionKind {
+  return issue.needsAttentionKind ?? inferAttentionKindFromReason(issue);
+}
+
 export interface IssueAttentionPresentation {
   readonly reason: string;
-  /** True when the attention state came from the review pipeline. */
-  readonly fromReview: boolean;
+  /** What sort of park this is, so the UI can word an outage unlike a verdict. */
+  readonly kind: IssueAttentionKind;
+  /** The badge text. Short enough for a board card. */
+  readonly label: string;
+  /**
+   * One line naming what actually happened, in front of the reactor's own
+   * reason text. `review_unavailable` says outright that nobody read the code,
+   * because the reason alone reads like a complaint about the change.
+   */
+  readonly headline: string;
+  /**
+   * Whether this park is a statement about the machinery rather than about the
+   * code. The UI uses it to pick an icon that does not look like a judgement.
+   */
+  readonly infrastructure: boolean;
 }
 
 export function resolveIssueAttentionPresentation(
   issue: ReviewIssueView,
 ): IssueAttentionPresentation | null {
   if (!issueNeedsAttention(issue)) return null;
+  const kind = resolveIssueAttentionKind(issue);
   return {
     reason: issue.needsAttentionReason?.trim() || DEFAULT_ATTENTION_REASON,
-    fromReview: issue.reviewVerdict === "needs_attention",
+    kind,
+    label: ATTENTION_LABEL[kind],
+    headline: ATTENTION_HEADLINE[kind],
+    infrastructure: INFRASTRUCTURE_ATTENTION_KINDS.has(kind),
   };
 }
+
+const ATTENTION_LABEL: Record<IssueAttentionKind, string> = {
+  review_needs_attention: "Review needs attention",
+  review_unavailable: "Not reviewed",
+  pull_request_failed: "No pull request",
+  blocked: "Blocked",
+  start_failed: "Could not start",
+  other: "Needs you",
+};
+
+const ATTENTION_HEADLINE: Record<IssueAttentionKind, string> = {
+  review_needs_attention: "The reviewer read this change and left it unmerged.",
+  review_unavailable: "This code was never reviewed — no reviewer could run.",
+  pull_request_failed: "The work is done, but no pull request could be opened.",
+  blocked: "This is waiting on work nothing is doing.",
+  start_failed: "This issue never got started.",
+  other: "Autonomous mode stopped short of finishing this issue.",
+};
+
+/**
+ * The parks that say nothing about the change itself. Grouping them is what
+ * keeps an outage from being drawn with the same warning triangle a reviewer's
+ * refusal earns.
+ */
+const INFRASTRUCTURE_ATTENTION_KINDS: ReadonlySet<IssueAttentionKind> = new Set<IssueAttentionKind>(
+  ["review_unavailable", "pull_request_failed", "start_failed"],
+);
+
+/**
+ * What deciding a flagged issue's affordance needs to read: its position, and
+ * both halves of the flag — the kind when there is one, the reason text as the
+ * fallback for rows that predate it.
+ */
+type AttentionRetryView = AttentionKindView & Pick<ReviewIssueView, "status" | "threadId">;
 
 /**
  * Clearing the flag is all a backlog issue needs; anything further along keeps
@@ -335,9 +440,7 @@ export function planIssueAttentionClear(): ReadonlyArray<IssueRetryStep> {
   return [{ kind: "clear-attention" }];
 }
 
-export function planIssueAttentionRetry(
-  issue: Pick<ReviewIssueView, "status" | "threadId" | "needsAttentionReason">,
-): ReadonlyArray<IssueRetryStep> {
+export function planIssueAttentionRetry(issue: AttentionRetryView): ReadonlyArray<IssueRetryStep> {
   const steps: IssueRetryStep[] = [{ kind: "clear-attention" }];
   if (issueAttentionRetryKind(issue) === "pull-request") {
     return steps;
@@ -352,21 +455,26 @@ export function planIssueAttentionRetry(
 }
 
 /** Whether "retry" would do more than clear the flag. */
-export function issueRetryRestartsWork(
-  issue: Pick<ReviewIssueView, "status" | "threadId" | "needsAttentionReason">,
-): boolean {
+export function issueRetryRestartsWork(issue: AttentionRetryView): boolean {
   return planIssueAttentionRetry(issue).length > 1;
 }
 
+/**
+ * What the affordance on a flagged issue actually is.
+ *
+ * A pull request that failed to open is the one park where the worker's own
+ * output is still good: retrying it must keep the thread and the branch, not
+ * throw the work away. That decision now reads the kind; the reason text is
+ * only consulted for rows flagged before kinds existed, which is what keeps
+ * history behaving.
+ */
 export function issueAttentionRetryKind(
-  issue: Pick<ReviewIssueView, "status" | "threadId" | "needsAttentionReason">,
+  issue: AttentionRetryView,
 ): "clear" | "pull-request" | "restart-work" {
-  const reason = issue.needsAttentionReason?.toLowerCase() ?? "";
   if (
     issue.status === "in_progress" &&
     issue.threadId != null &&
-    (reason.includes("could not open a pull request") ||
-      reason.includes("without producing a pull request"))
+    resolveIssueAttentionKind(issue) === "pull_request_failed"
   ) {
     return "pull-request";
   }

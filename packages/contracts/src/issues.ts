@@ -69,6 +69,39 @@ export const IssueAttentionReason = TrimmedNonEmptyString.check(
 export type IssueAttentionReason = typeof IssueAttentionReason.Type;
 
 /**
+ * Why an issue was parked, as a value rather than as prose.
+ *
+ * The free-text `IssueAttentionReason` is what a human reads; this is what the
+ * UI branches on, so nothing has to reverse-engineer intent out of a sentence.
+ * The distinction that matters most is `review_needs_attention` against
+ * `review_unavailable`: the first is a reviewer that read the change and
+ * deliberately left it unmerged, the second is infrastructure — no reviewer
+ * could run at all — and presenting the second as a verdict on the code is a
+ * lie about work nobody looked at.
+ *
+ * `other` is the catch-all, and is also what an absent kind means on the wire:
+ * every payload written before this existed decodes to no kind at all, and a
+ * row with no kind is unclassified rather than deliberately `other`.
+ */
+export const IssueAttentionKind = Schema.Literals([
+  /** A reviewer read the change and refused to merge it. A verdict on the code. */
+  "review_needs_attention",
+  /** No reviewer ran: no provider, no worktree, or the provider kept failing. */
+  "review_unavailable",
+  /** The change exists but no pull request could be opened for it. */
+  "pull_request_failed",
+  /** A dependency nothing is working, so this issue is never going to start. */
+  "blocked",
+  /** Work could not be started at all: no worker model, or the bootstrap failed. */
+  "start_failed",
+  "other",
+]);
+export type IssueAttentionKind = typeof IssueAttentionKind.Type;
+
+/** What an absent kind means, on the wire and in the read model. */
+export const DEFAULT_ISSUE_ATTENTION_KIND: IssueAttentionKind = "other";
+
+/**
  * The reviewer's call. `merged` means the branch landed on main — possibly
  * after the reviewer fixed things itself, which is the intended path.
  * `needs_attention` is reserved for work that is fundamentally broken and is
@@ -127,6 +160,12 @@ export const OrchestrationIssue = Schema.Struct({
    */
   needsAttentionAt: Schema.optional(Schema.NullOr(IsoDateTime)),
   needsAttentionReason: Schema.optional(Schema.NullOr(IssueAttentionReason)),
+  /**
+   * The structured half of the flag. Null on every issue parked before kinds
+   * existed, which is what lets the UI fall back to reading the reason rather
+   * than mistaking unclassified history for a deliberate `other`.
+   */
+  needsAttentionKind: Schema.optional(Schema.NullOr(IssueAttentionKind)),
   /** Reviewer outcome. The notes themselves ride the detail read. */
   reviewVerdict: Schema.optional(Schema.NullOr(IssueReviewVerdict)),
   reviewerThreadId: Schema.optional(Schema.NullOr(ThreadId)),

@@ -7,6 +7,7 @@ import {
   MessageId,
   NonNegativeInt,
   reachableAutonomousProjectIds,
+  type IssueAttentionKind,
   type OrchestrationEvent,
   type OrchestrationIssue,
   type OrchestrationSession,
@@ -163,8 +164,15 @@ const make = Effect.gen(function* () {
    */
   let enqueueMergeItem: (item: MergeItem) => Effect.Effect<void> = () => Effect.void;
 
+  /**
+   * Park an issue for a human. The kind is required rather than optional on
+   * purpose: it is what the board card and the Review tab branch on, and the
+   * one thing a caller must not leave to a substring match on `reason` is
+   * whether a reviewer judged this code or never got to read it at all.
+   */
   const flagNeedsAttention = Effect.fn("flagNeedsAttention")(function* (
     issueId: IssueId,
+    kind: IssueAttentionKind,
     reason: string,
   ) {
     yield* orchestrationEngine
@@ -173,6 +181,7 @@ const make = Effect.gen(function* () {
         commandId: yield* serverCommandId("attention-flag"),
         issueId,
         reason: reason.slice(0, 2_000),
+        kind,
       })
       .pipe(Effect.ignoreCause({ log: true }));
     yield* receipts.publish({
@@ -217,7 +226,11 @@ const make = Effect.gen(function* () {
     const modelSelection =
       issue.modelSelection ?? (yield* resolveWorkerModelSelection(issue.projectId));
     if (modelSelection === null) {
-      yield* flagNeedsAttention(issue.id, "No provider is configured to do this work.");
+      yield* flagNeedsAttention(
+        issue.id,
+        "start_failed",
+        "No provider is configured to do this work.",
+      );
       return;
     }
     const threadId = ThreadId.make(yield* crypto.randomUUIDv4);
@@ -245,9 +258,11 @@ const make = Effect.gen(function* () {
         // A start that fails after the gate is a real problem and parks the
         // issue so the run does not spin on it.
         Effect.catch((error) =>
-          flagNeedsAttention(issue.id, `Could not start work: ${error.message}`).pipe(
-            Effect.as(false),
-          ),
+          flagNeedsAttention(
+            issue.id,
+            "start_failed",
+            `Could not start work: ${error.message}`,
+          ).pipe(Effect.as(false)),
         ),
       );
     if (!started) return;
@@ -411,6 +426,7 @@ const make = Effect.gen(function* () {
         for (const stalled of evaluation.stalled) {
           yield* flagNeedsAttention(
             stalled.issue.id,
+            "blocked",
             yield* describeStall(stalled.issue, stalled.blocker),
           );
         }
@@ -489,6 +505,7 @@ const make = Effect.gen(function* () {
     if (sessionStatus === "error") {
       yield* flagNeedsAttention(
         issue.id,
+        "other",
         "The worker session ended in an error before the work could be reviewed.",
       );
       return;
@@ -525,8 +542,14 @@ const make = Effect.gen(function* () {
     const thread = yield* projectionSnapshotQuery.getThreadShellById(threadId);
     const cwd = Option.isSome(thread) ? thread.value.worktreePath : null;
     if (cwd === null) {
+      // Not `pull_request_failed`: that kind promises the worker's output is
+      // still there and only the pull request has to be retried. With the
+      // worktree gone there is nothing to open a pull request over, and the
+      // only recovery is starting the work again — which is what the
+      // catch-all's Clear & retry does.
       yield* flagNeedsAttention(
         issue.id,
+        "other",
         "The worker thread has no worktree, so no pull request could be opened.",
       );
       return;
@@ -606,7 +629,11 @@ const make = Effect.gen(function* () {
       );
 
     if (!result.ok) {
-      yield* flagNeedsAttention(issue.id, `Could not open a pull request: ${result.message}`);
+      yield* flagNeedsAttention(
+        issue.id,
+        "pull_request_failed",
+        `Could not open a pull request: ${result.message}`,
+      );
       return;
     }
 
@@ -614,6 +641,7 @@ const make = Effect.gen(function* () {
     if (result.value.pr.status === "skipped_not_requested" || pullRequestUrl === null) {
       yield* flagNeedsAttention(
         issue.id,
+        "pull_request_failed",
         "The commit/push/PR run finished without producing a pull request.",
       );
       return;
@@ -771,6 +799,7 @@ const make = Effect.gen(function* () {
     if (Option.isNone(workerThread) || workerThread.value.worktreePath === null) {
       yield* flagNeedsAttention(
         issue.id,
+        "review_unavailable",
         "The issue has no worktree to review, so it cannot be merged automatically.",
       );
       return null;
@@ -794,7 +823,11 @@ const make = Effect.gen(function* () {
       complexityTier,
     );
     if (modelSelection === null) {
-      yield* flagNeedsAttention(issue.id, "No Claude provider is available to review this issue.");
+      yield* flagNeedsAttention(
+        issue.id,
+        "review_unavailable",
+        "No Claude provider is available to review this issue.",
+      );
       return null;
     }
 
@@ -830,9 +863,11 @@ const make = Effect.gen(function* () {
       .pipe(
         Effect.as(true),
         Effect.catch((error) =>
-          flagNeedsAttention(issue.id, `Could not start the review: ${error.message}`).pipe(
-            Effect.as(false),
-          ),
+          flagNeedsAttention(
+            issue.id,
+            "review_unavailable",
+            `Could not start the review: ${error.message}`,
+          ).pipe(Effect.as(false)),
         ),
       );
     if (!started) return null;
@@ -886,9 +921,11 @@ const make = Effect.gen(function* () {
       .pipe(
         Effect.as(true),
         Effect.catch((error) =>
-          flagNeedsAttention(issue.id, `Could not restart the review: ${error.message}`).pipe(
-            Effect.as(false),
-          ),
+          flagNeedsAttention(
+            issue.id,
+            "review_unavailable",
+            `Could not restart the review: ${error.message}`,
+          ).pipe(Effect.as(false)),
         ),
       );
     if (!resumed) return null;
@@ -987,6 +1024,7 @@ const make = Effect.gen(function* () {
     if (attempt >= REVIEW_PROVIDER_FAILURE_ATTEMPTS) {
       yield* flagNeedsAttention(
         issueId,
+        "review_unavailable",
         `The reviewer could not run: the provider failed ${attempt} times (last error: ${detail}). The code has not been reviewed.`,
       );
       return;
