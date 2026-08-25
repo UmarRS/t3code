@@ -69,6 +69,39 @@ export const IssueAttentionReason = TrimmedNonEmptyString.check(
 export type IssueAttentionReason = typeof IssueAttentionReason.Type;
 
 /**
+ * Why an issue was parked, as a value rather than as prose.
+ *
+ * The free-text `IssueAttentionReason` is what a human reads; this is what the
+ * UI branches on, so nothing has to reverse-engineer intent out of a sentence.
+ * The distinction that matters most is `review_needs_attention` against
+ * `review_unavailable`: the first is a reviewer that read the change and
+ * deliberately left it unmerged, the second is infrastructure — no reviewer
+ * could run at all — and presenting the second as a verdict on the code is a
+ * lie about work nobody looked at.
+ *
+ * `other` is the catch-all, and is also what an absent kind means on the wire:
+ * every payload written before this existed decodes to no kind at all, and a
+ * row with no kind is unclassified rather than deliberately `other`.
+ */
+export const IssueAttentionKind = Schema.Literals([
+  /** A reviewer read the change and refused to merge it. A verdict on the code. */
+  "review_needs_attention",
+  /** No reviewer ran: no provider, no worktree, or the provider kept failing. */
+  "review_unavailable",
+  /** The change exists but no pull request could be opened for it. */
+  "pull_request_failed",
+  /** A dependency nothing is working, so this issue is never going to start. */
+  "blocked",
+  /** Work could not be started at all: no worker model, or the bootstrap failed. */
+  "start_failed",
+  "other",
+]);
+export type IssueAttentionKind = typeof IssueAttentionKind.Type;
+
+/** What an absent kind means, on the wire and in the read model. */
+export const DEFAULT_ISSUE_ATTENTION_KIND: IssueAttentionKind = "other";
+
+/**
  * The reviewer's call. `merged` means the branch landed on main — possibly
  * after the reviewer fixed things itself, which is the intended path.
  * `needs_attention` is reserved for work that is fundamentally broken and is
@@ -127,6 +160,12 @@ export const OrchestrationIssue = Schema.Struct({
    */
   needsAttentionAt: Schema.optional(Schema.NullOr(IsoDateTime)),
   needsAttentionReason: Schema.optional(Schema.NullOr(IssueAttentionReason)),
+  /**
+   * The structured half of the flag. Null on every issue parked before kinds
+   * existed, which is what lets the UI fall back to reading the reason rather
+   * than mistaking unclassified history for a deliberate `other`.
+   */
+  needsAttentionKind: Schema.optional(Schema.NullOr(IssueAttentionKind)),
   /** Reviewer outcome. The notes themselves ride the detail read. */
   reviewVerdict: Schema.optional(Schema.NullOr(IssueReviewVerdict)),
   reviewerThreadId: Schema.optional(Schema.NullOr(ThreadId)),
@@ -173,6 +212,24 @@ export function issueNeedsAttention(issue: {
  */
 export function isIssueDependencySatisfied(status: IssueStatus): boolean {
   return status === "done" || status === "archived";
+}
+
+/**
+ * Whether a decomposition may rewrite or replace this issue.
+ *
+ * Only work nobody has picked up is fair game. An issue that has started, is
+ * being reviewed, is finished, or has been flagged for a human is a decision
+ * that has already cost something — a worktree, a pull request, a person's
+ * attention — and a later plan must not quietly erase it. Such an issue is
+ * still read as context and may still be depended on; it simply cannot be
+ * edited or canceled from a block.
+ */
+export function isIssueOpenToRevision(issue: {
+  readonly status: IssueStatus;
+  readonly threadId?: string | null | undefined;
+  readonly needsAttentionAt?: string | null | undefined;
+}): boolean {
+  return issue.status === "backlog" && issue.threadId == null && !issueNeedsAttention(issue);
 }
 
 /**
@@ -230,6 +287,20 @@ const IssueDecompositionKey = TrimmedNonEmptyString.check(
 );
 export type IssueDecompositionKey = typeof IssueDecompositionKey.Type;
 
+const ISSUE_ID_PATTERN =
+  /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
+
+/**
+ * Whether a `dependsOn` name means an issue that already exists rather than a
+ * story defined in the same block. The two are told apart by shape: a key is a
+ * short slug the agent invents, while every issue id this app mints is a UUID.
+ * Callers check the block first, so this only ever decides what a name the
+ * block does not define was meant to be.
+ */
+export function isExistingIssueReference(value: string): boolean {
+  return ISSUE_ID_PATTERN.test(value);
+}
+
 /**
  * One story inside a `t3-issues` block. `key` is block-local: dependencies name
  * other keys in the same block, and the server swaps them for real issue ids
@@ -240,6 +311,10 @@ export type IssueDecompositionKey = typeof IssueDecompositionKey.Type;
  * board. It names a linked project by workspace root — the same handle
  * `list_linked_projects` reports and the agent can see on disk, rather than a
  * project id it has no way to learn.
+ *
+ * `updates` and `supersedes` are how a second decomposition revises a board
+ * instead of duplicating it. Both name issues that already exist, by id, and
+ * both are limited to work nobody has started (see `isIssueOpenToRevision`).
  */
 export const IssueDecompositionEntry = Schema.Struct({
   key: IssueDecompositionKey,
@@ -254,6 +329,20 @@ export const IssueDecompositionEntry = Schema.Struct({
   project: Schema.optional(ProjectLinkPath),
   dependsOn: Schema.optional(
     Schema.Array(IssueDecompositionKey).check(Schema.isMaxLength(ISSUE_MAX_DEPENDENCIES)),
+  ),
+  /**
+   * An issue already on the board that this entry rewrites rather than adds to
+   * it. Title, description, priority, `modelSelection` and `dependsOn` land on
+   * that issue instead of creating a new one.
+   */
+  updates: Schema.optional(IssueId),
+  /**
+   * Issues already on the board this entry replaces. They are canceled when
+   * the plan is applied, so a revised plan retires what it made obsolete
+   * instead of leaving two versions of the same work on the board.
+   */
+  supersedes: Schema.optional(
+    Schema.Array(IssueId).check(Schema.isMaxLength(ISSUE_MAX_DEPENDENCIES)),
   ),
 });
 export type IssueDecompositionEntry = typeof IssueDecompositionEntry.Type;
@@ -284,7 +373,11 @@ End your final message with a single fenced code block tagged \`${ISSUE_DECOMPOS
 - \`priority\` (optional): one of "low", "medium", "high", "urgent".
 - \`modelSelection\` (optional only when no configured worker list was supplied): the worker to use, as \`{ "instanceId": "...", "model": "..." }\`. When configured workers were included earlier in the prompt, choose one for every story. Otherwise omit it to inherit the project's default.
 - \`project\` (optional, and only ever one of the linked projects listed earlier in this prompt): the workspace root of the repository the story's work belongs in, copied exactly as it was listed. Omit it for work in the project you were asked about — that is the default and the common case. Set it only when the story's changes genuinely land in the other repository, so each story is created on the board of the project that owns the code.
-- \`dependsOn\` (optional): keys of other stories in this same block that must be finished first. Order does not matter — you may reference a key defined later in the array. Never create a dependency cycle, and never depend on yourself. A dependency may name a story on another \`project\`: when the frontend story genuinely cannot be built until the backend story has landed, say so with \`dependsOn\` rather than in prose, and the boards hold that story until its blocker is merged. Use it only for ordering that is real — a story blocked across repositories waits for a whole other pull request to land, so parallel work with an agreed interface is usually the better plan, and the description is the place to state that interface.
+- \`dependsOn\` (optional): keys of other stories in this same block that must be finished first, and the ids of stories already on a board when the new work genuinely waits on one of them. Order does not matter — you may reference a key defined later in the array. Never create a dependency cycle, and never depend on yourself. A dependency may name a story on another \`project\`: when the frontend story genuinely cannot be built until the backend story has landed, say so with \`dependsOn\` rather than in prose, and the boards hold that story until its blocker is merged. Use it only for ordering that is real — a story blocked across repositories waits for a whole other pull request to land, so parallel work with an agreed interface is usually the better plan, and the description is the place to state that interface.
+- \`updates\` (optional): the id of a story already on the board that this entry rewrites. Its title, description, priority, worker and dependencies become the ones you give here, and no new story is created. Use it when the plan changes something the board already decided, rather than filing a near-duplicate beside it.
+- \`supersedes\` (optional): ids of stories already on the board that this entry replaces. They are canceled when the plan is applied. Use it when one new story covers work that several existing ones were going to do, or when the approach they describe is no longer the plan.
+
+Only a story that has not started may be updated or superseded: it must still be in the backlog, have no thread, and not be flagged for a human. Anything in progress, in review, done or flagged is context you may read and depend on, and nothing else — naming one in \`updates\` or \`supersedes\` makes the whole block unusable. An id you name must belong to the same board the story routes to.
 
 Emit at most ${ISSUE_DECOMPOSITION_MAX_ENTRIES} stories, emit the block only once, and put nothing but JSON inside it. Example:
 
@@ -410,6 +503,61 @@ function unfinishedDependencies<Issue extends AutonomousIssueView>(
     if (dependency === undefined || isIssueDependencySatisfied(dependency.status)) return [];
     return [dependency];
   });
+}
+
+/**
+ * Dependencies of `issue` that are neither finished nor gone, resolved across
+ * every board in `issues`. The flagged-issue rule the run derivations apply
+ * elsewhere deliberately does not apply here: a stuck issue's blockers are
+ * exactly what a human needs named.
+ */
+export function unfinishedIssueDependencies<Issue extends AutonomousIssueView>(
+  issue: AutonomousIssueView,
+  issues: ReadonlyArray<Issue>,
+): ReadonlyArray<Issue> {
+  return unfinishedDependencies(issue, new Map(issues.map((entry) => [entry.id, entry] as const)));
+}
+
+/**
+ * Every board a plan rooted on `projectId` reaches, that board included.
+ *
+ * A run only advances the board it is switched on for, but a plan does not
+ * stop at a repository boundary: a story here may wait on a story there.
+ * These are the boards that have to be live for this one's plan to finish, so
+ * they are the boards the run switch starts and stops as one action, and the
+ * boards the run loop asks about liveness before deciding a story is stuck
+ * rather than merely waiting.
+ *
+ * Only unfinished dependencies are followed — a blocker that is already done
+ * needs nobody running its board — and the walk is transitive, so a board
+ * reached only through another board comes back too. `visited` is what makes a
+ * cycle in the issue graph terminate instead of recursing forever; the graph is
+ * kept acyclic, so that is belt and braces.
+ */
+export function reachableAutonomousProjectIds<Issue extends AutonomousIssueView>(
+  issues: ReadonlyArray<Issue>,
+  projectId: ProjectId,
+): ReadonlySet<ProjectId> {
+  const byId = new Map(issues.map((issue) => [issue.id, issue] as const));
+  const projectIds = new Set<ProjectId>([projectId]);
+  const visited = new Set<IssueId>();
+  const walk = (issue: Issue) => {
+    for (const dependency of unfinishedDependencies(issue, byId)) {
+      if (visited.has(dependency.id)) continue;
+      visited.add(dependency.id);
+      projectIds.add(dependency.projectId);
+      walk(dependency);
+    }
+  };
+  for (const issue of issues) {
+    // Seeded from the work this board might still do. Finished and canceled
+    // issues are nobody's plan any more, so a dependency hanging off one of
+    // them is not a reason to start another board.
+    if (issue.projectId !== projectId) continue;
+    if (isIssueDependencySatisfied(issue.status) || issue.status === "canceled") continue;
+    walk(issue);
+  }
+  return projectIds;
 }
 
 /**

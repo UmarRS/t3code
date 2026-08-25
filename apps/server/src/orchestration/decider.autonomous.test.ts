@@ -14,9 +14,12 @@ import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 
 import { decideOrchestrationCommand } from "./decider.ts";
+import { projectEvent } from "./projector.ts";
 
 const NOW = "2026-01-01T00:00:00.000Z";
 const PROJECT_ID = ProjectId.make("project-1");
+/** The other half of a plan that spans repositories. */
+const OTHER_PROJECT_ID = ProjectId.make("project-2");
 const THREAD_ID = ThreadId.make("thread-1");
 const REVIEWER_THREAD_ID = ThreadId.make("reviewer-1");
 
@@ -180,6 +183,106 @@ it.layer(NodeServices.layer)("autonomous mode decider", (it) => {
       }),
     );
 
+    // One command, one transaction: every board a plan reaches is live before
+    // any of them can tick and give up on work the others still owe it.
+    it.effect("starts the other boards a plan reaches in the same command", () =>
+      Effect.gen(function* () {
+        const events = yield* decide(
+          {
+            type: "project.autonomous.enable",
+            commandId: CommandId.make("cmd-enable"),
+            projectId: PROJECT_ID,
+            // Repeated on purpose: a graph can reach one board by several paths.
+            additionalProjectIds: [OTHER_PROJECT_ID, OTHER_PROJECT_ID, PROJECT_ID],
+            createdAt: NOW,
+          },
+          makeReadModel({
+            projects: [project(), project({ id: OTHER_PROJECT_ID, title: "Acme Web" })],
+          }),
+        );
+        expect(events.map((event) => event.type)).toEqual([
+          "project.autonomous-enabled",
+          "project.autonomous-enabled",
+        ]);
+        expect(events.map((event) => event.aggregateId)).toEqual([PROJECT_ID, OTHER_PROJECT_ID]);
+      }),
+    );
+
+    it.effect("leaves a board that is already running out of a multi-board start", () =>
+      Effect.gen(function* () {
+        const events = yield* decide(
+          {
+            type: "project.autonomous.enable",
+            commandId: CommandId.make("cmd-enable"),
+            projectId: PROJECT_ID,
+            additionalProjectIds: [OTHER_PROJECT_ID, ProjectId.make("project-gone")],
+            createdAt: NOW,
+          },
+          makeReadModel({
+            projects: [
+              project(),
+              project({ id: OTHER_PROJECT_ID, title: "Acme Web", autonomousStartedAt: NOW }),
+            ],
+          }),
+        );
+        expect(events.map((event) => event.aggregateId)).toEqual([PROJECT_ID]);
+      }),
+    );
+
+    it.effect("stops the boards started with this one", () =>
+      Effect.gen(function* () {
+        const events = yield* decide(
+          {
+            type: "project.autonomous.disable",
+            commandId: CommandId.make("cmd-disable"),
+            projectId: PROJECT_ID,
+            additionalProjectIds: [OTHER_PROJECT_ID],
+            reason: "user",
+          },
+          makeReadModel({
+            projects: [
+              project({ autonomousStartedAt: NOW }),
+              project({ id: OTHER_PROJECT_ID, title: "Acme Web", autonomousStartedAt: NOW }),
+            ],
+          }),
+        );
+        expect(events.map((event) => event.aggregateId)).toEqual([PROJECT_ID, OTHER_PROJECT_ID]);
+        expect(
+          events.every(
+            (event) =>
+              event.type === "project.autonomous-disabled" && event.payload.reason === "disabled",
+          ),
+        ).toBe(true);
+      }),
+    );
+
+    // A board that already finished keeps saying so: relabelling it as
+    // hand-stopped would lose the one signal that tells the two apart.
+    it.effect("leaves a board that is already stopped out of a multi-board stop", () =>
+      Effect.gen(function* () {
+        const events = yield* decide(
+          {
+            type: "project.autonomous.disable",
+            commandId: CommandId.make("cmd-disable"),
+            projectId: PROJECT_ID,
+            additionalProjectIds: [OTHER_PROJECT_ID],
+            reason: "user",
+          },
+          makeReadModel({
+            projects: [
+              project({ autonomousStartedAt: NOW }),
+              project({
+                id: OTHER_PROJECT_ID,
+                title: "Acme Web",
+                autonomousFinishedReason: "completed",
+              }),
+            ],
+          }),
+        );
+        expect(events.map((event) => event.aggregateId)).toEqual([PROJECT_ID]);
+      }),
+    );
+
     it.effect("rejects enabling a deleted project", () =>
       Effect.gen(function* () {
         const error = yield* Effect.flip(
@@ -330,6 +433,82 @@ it.layer(NodeServices.layer)("autonomous mode decider", (it) => {
       }),
     );
 
+    // The reason and the kind describe one failure, so they are kept or
+    // replaced together. A row parked before kinds existed stays unclassified
+    // rather than wearing a second failure's badge over the first's text.
+    it.effect("does not classify an already-flagged issue from a later failure", () =>
+      Effect.gen(function* () {
+        const events = yield* decide(
+          {
+            type: "issue.attention.flag",
+            commandId: CommandId.make("cmd-flag"),
+            issueId: IssueId.make("issue-a"),
+            reason: "Blocked by 'Groundwork'.",
+            kind: "blocked",
+          },
+          makeReadModel({
+            issues: [
+              issue("issue-a", {
+                needsAttentionAt: NOW,
+                needsAttentionReason: "Could not open a pull request: gh exited 1.",
+              }),
+            ],
+          }),
+        );
+        expect(events[0]?.type).toBe("issue.attention-flagged");
+        if (events[0]?.type === "issue.attention-flagged") {
+          expect(events[0].payload.reason).toBe("Could not open a pull request: gh exited 1.");
+          expect(events[0].payload).not.toHaveProperty("kind");
+        }
+      }),
+    );
+
+    it.effect("keeps the kind the first failure was flagged with", () =>
+      Effect.gen(function* () {
+        const events = yield* decide(
+          {
+            type: "issue.attention.flag",
+            commandId: CommandId.make("cmd-flag"),
+            issueId: IssueId.make("issue-a"),
+            reason: "Second failure.",
+            kind: "blocked",
+          },
+          makeReadModel({
+            issues: [
+              issue("issue-a", {
+                needsAttentionAt: NOW,
+                needsAttentionReason: "The reviewer could not run.",
+                needsAttentionKind: "review_unavailable",
+              }),
+            ],
+          }),
+        );
+        expect(events[0]?.type).toBe("issue.attention-flagged");
+        if (events[0]?.type === "issue.attention-flagged") {
+          expect(events[0].payload.kind).toBe("review_unavailable");
+        }
+      }),
+    );
+
+    it.effect("records the kind the command carried on a fresh flag", () =>
+      Effect.gen(function* () {
+        const events = yield* decide(
+          {
+            type: "issue.attention.flag",
+            commandId: CommandId.make("cmd-flag"),
+            issueId: IssueId.make("issue-a"),
+            reason: "The reviewer could not run.",
+            kind: "review_unavailable",
+          },
+          makeReadModel({ issues: [issue("issue-a", { status: "in_review" })] }),
+        );
+        expect(events[0]?.type).toBe("issue.attention-flagged");
+        if (events[0]?.type === "issue.attention-flagged") {
+          expect(events[0].payload.kind).toBe("review_unavailable");
+        }
+      }),
+    );
+
     it.effect("clears the flag so the issue can run again", () =>
       Effect.gen(function* () {
         const events = yield* decide(
@@ -382,6 +561,124 @@ it.layer(NodeServices.layer)("autonomous mode decider", (it) => {
           ),
         );
         expect(invariantDetail(error)).toContain("needs attention");
+      }),
+    );
+  });
+
+  describe("issue.review.reset", () => {
+    it.effect("throws the verdict, the claim and the timestamp away", () =>
+      Effect.gen(function* () {
+        const readModel = makeReadModel({
+          issues: [
+            issue("issue-a", {
+              status: "in_review",
+              threadId: THREAD_ID,
+              reviewVerdict: "needs_attention",
+              reviewerThreadId: REVIEWER_THREAD_ID,
+              reviewedAt: NOW,
+            }),
+          ],
+        });
+        const events = yield* decide(
+          {
+            type: "issue.review.reset",
+            commandId: CommandId.make("cmd-review-reset"),
+            issueId: IssueId.make("issue-a"),
+          },
+          readModel,
+        );
+        expect(events.map((event) => event.type)).toEqual(["issue.review-reset"]);
+        const reset = events[0];
+        if (reset?.type !== "issue.review-reset") throw new Error("expected a reset event");
+        const next = yield* projectEvent(readModel, { ...reset, sequence: 1 }).pipe(Effect.orDie);
+        const projected = next.issues[0];
+        expect(projected?.reviewVerdict).toBeNull();
+        expect(projected?.reviewerThreadId).toBeNull();
+        expect(projected?.reviewedAt).toBeNull();
+        // Only the review is forgotten: where the work sits is the caller's
+        // business, and the retry plan moves it separately.
+        expect(projected?.status).toBe("in_review");
+        expect(projected?.threadId).toBe(THREAD_ID);
+      }),
+    );
+
+    it.effect("is a no-op on an issue nobody reviewed", () =>
+      Effect.gen(function* () {
+        const readModel = makeReadModel({ issues: [issue("issue-a")] });
+        const events = yield* decide(
+          {
+            type: "issue.review.reset",
+            commandId: CommandId.make("cmd-review-reset"),
+            issueId: IssueId.make("issue-a"),
+          },
+          readModel,
+        );
+        const reset = events[0];
+        if (reset?.type !== "issue.review-reset") throw new Error("expected a reset event");
+        // `occurredAt` is the real clock, so an `updatedAt` still on the row's
+        // own timestamp is the whole proof: nothing about the issue moved.
+        expect(reset.payload.updatedAt).toBe(NOW);
+        const next = yield* projectEvent(readModel, { ...reset, sequence: 1 }).pipe(Effect.orDie);
+        expect(next.issues).toEqual(readModel.issues);
+      }),
+    );
+
+    it.effect("is safe on merged work, and re-applying it changes nothing", () =>
+      Effect.gen(function* () {
+        const readModel = makeReadModel({
+          issues: [
+            issue("issue-a", {
+              status: "done",
+              reviewVerdict: "merged",
+              reviewerThreadId: REVIEWER_THREAD_ID,
+              reviewedAt: NOW,
+            }),
+          ],
+        });
+        const first = (yield* decide(
+          {
+            type: "issue.review.reset",
+            commandId: CommandId.make("cmd-review-reset"),
+            issueId: IssueId.make("issue-a"),
+          },
+          readModel,
+        ))[0];
+        if (first?.type !== "issue.review-reset") throw new Error("expected a reset event");
+        const once = yield* projectEvent(readModel, { ...first, sequence: 1 }).pipe(Effect.orDie);
+        // A merged issue keeps its status: forgetting the review does not
+        // un-ship the work.
+        expect(once.issues[0]?.status).toBe("done");
+        expect(once.issues[0]?.reviewVerdict).toBeNull();
+
+        const second = (yield* decide(
+          {
+            type: "issue.review.reset",
+            commandId: CommandId.make("cmd-review-reset-again"),
+            issueId: IssueId.make("issue-a"),
+          },
+          once,
+        ))[0];
+        if (second?.type !== "issue.review-reset") throw new Error("expected a reset event");
+        // Everything but the sequence number, which every projected event
+        // advances: a second reset leaves the issue exactly as it was.
+        const twice = yield* projectEvent(once, { ...second, sequence: 2 }).pipe(Effect.orDie);
+        expect(twice.issues).toEqual(once.issues);
+      }),
+    );
+
+    it.effect("rejects resetting a review on an unknown issue", () =>
+      Effect.gen(function* () {
+        const error = yield* Effect.flip(
+          decide(
+            {
+              type: "issue.review.reset",
+              commandId: CommandId.make("cmd-review-reset"),
+              issueId: IssueId.make("missing"),
+            },
+            makeReadModel({ issues: [] }),
+          ),
+        );
+        expect(invariantDetail(error)).toContain("missing");
       }),
     );
   });

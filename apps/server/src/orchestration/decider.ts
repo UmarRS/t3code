@@ -7,6 +7,7 @@ import {
   type OrchestrationCommand,
   type OrchestrationEvent,
   type OrchestrationReadModel,
+  type ProjectId,
 } from "@t3tools/contracts";
 import { normalizeProjectPathForComparison } from "@t3tools/shared/path";
 import { projectsAreLinked } from "@t3tools/shared/projectLinks";
@@ -18,6 +19,7 @@ import type * as PlatformError from "effect/PlatformError";
 import { OrchestrationCommandInvariantError } from "./Errors.ts";
 import {
   findActiveIssueByThreadId,
+  findProjectById,
   findProjectLinkOwner,
   listActiveIssues,
   listActiveIssuesByProjectId,
@@ -38,6 +40,27 @@ import {
 import { projectEvent } from "./projector.ts";
 
 const nowIso = Effect.map(DateTime.now, DateTime.formatIso);
+
+/**
+ * The other boards a run switch names, without the board it is switched on and
+ * without repeats. A client resolves the set from the plan's dependency graph
+ * (`reachableAutonomousProjectIds`), and the graph can reach the same board by
+ * more than one path, so deduplicating here is what keeps one command from
+ * emitting two events for one project.
+ */
+function dedupeAdditionalProjectIds(command: {
+  readonly projectId: ProjectId;
+  readonly additionalProjectIds?: ReadonlyArray<ProjectId> | undefined;
+}): ReadonlyArray<ProjectId> {
+  const seen = new Set<ProjectId>([command.projectId]);
+  const ordered: ProjectId[] = [];
+  for (const projectId of command.additionalProjectIds ?? []) {
+    if (seen.has(projectId)) continue;
+    seen.add(projectId);
+    ordered.push(projectId);
+  }
+  return ordered;
+}
 
 // Session adoption takes seconds; a user message still unadopted after this
 // window is a failed/stale start, not pending work. Mirrors the client's
@@ -1933,9 +1956,16 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         command,
         issueId: command.issueId,
       });
-      // Re-flagging keeps the original timestamp and reason: the first failure
-      // is the one worth showing, and a retry loop must not churn ordering.
+      // Re-flagging keeps the original timestamp, reason and kind: the first
+      // failure is the one worth showing, and a retry loop must not churn
+      // ordering. The reason and the kind move together — keeping the first
+      // reason beside a second failure's kind would have the badge and the
+      // text describe different failures — so an already-flagged issue whose
+      // kind is null keeps it null. Re-flagging is not the moment to classify
+      // history.
       const alreadyFlagged = issue.needsAttentionAt != null;
+      const keepsFirstFlag = alreadyFlagged && issue.needsAttentionReason != null;
+      const kind = keepsFirstFlag ? (issue.needsAttentionKind ?? null) : (command.kind ?? null);
       const occurredAt = yield* nowIso;
       return {
         ...(yield* withEventBase({
@@ -1947,7 +1977,8 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         type: "issue.attention-flagged",
         payload: {
           issueId: command.issueId,
-          reason: alreadyFlagged ? (issue.needsAttentionReason ?? command.reason) : command.reason,
+          reason: keepsFirstFlag ? issue.needsAttentionReason : command.reason,
+          ...(kind === null ? {} : { kind }),
           needsAttentionAt: alreadyFlagged ? issue.needsAttentionAt : occurredAt,
           updatedAt: alreadyFlagged ? issue.updatedAt : occurredAt,
         },
@@ -1975,6 +2006,38 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         payload: {
           issueId: command.issueId,
           updatedAt: alreadyClear ? issue.updatedAt : occurredAt,
+        },
+      };
+    }
+
+    case "issue.review.reset": {
+      const issue = yield* requireIssue({
+        readModel,
+        command,
+        issueId: command.issueId,
+      });
+      // Idempotent by re-emission, like `issue.attention.clear`: resetting an
+      // issue nobody has reviewed lands on the same state without churning
+      // updatedAt. A reviewer claim with no verdict still counts as something
+      // to reset — it is what a retried review would otherwise be matched
+      // against — so the timestamp only holds when every review field is
+      // already clear.
+      const alreadyReset =
+        (issue.reviewVerdict ?? null) === null &&
+        (issue.reviewerThreadId ?? null) === null &&
+        (issue.reviewedAt ?? null) === null;
+      const occurredAt = yield* nowIso;
+      return {
+        ...(yield* withEventBase({
+          aggregateKind: "issue",
+          aggregateId: command.issueId,
+          occurredAt,
+          commandId: command.commandId,
+        })),
+        type: "issue.review-reset",
+        payload: {
+          issueId: command.issueId,
+          updatedAt: alreadyReset ? issue.updatedAt : occurredAt,
         },
       };
     }
@@ -2063,6 +2126,9 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           payload: {
             issueId: command.issueId,
             reason: `Reviewer left this unmerged. See the review notes on issue '${command.issueId}'.`,
+            // A reviewer that read the change and refused it — the one park
+            // that is a judgement on the code rather than on the machinery.
+            kind: "review_needs_attention" as const,
             needsAttentionAt: issue.needsAttentionAt ?? occurredAt,
             updatedAt: occurredAt,
           },
@@ -2086,20 +2152,52 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
       // does not jump when a raced client double-enables.
       const alreadyRunning = project.autonomousStartedAt != null;
       const occurredAt = yield* nowIso;
-      return {
-        ...(yield* withEventBase({
-          aggregateKind: "project",
-          aggregateId: command.projectId,
-          occurredAt,
-          commandId: command.commandId,
-        })),
-        type: "project.autonomous-enabled",
-        payload: {
-          projectId: command.projectId,
-          autonomousStartedAt: alreadyRunning ? project.autonomousStartedAt : occurredAt,
-          updatedAt: alreadyRunning ? project.updatedAt : occurredAt,
+      const enabled: PlannedOrchestrationEvent[] = [
+        {
+          ...(yield* withEventBase({
+            aggregateKind: "project",
+            aggregateId: command.projectId,
+            occurredAt,
+            commandId: command.commandId,
+          })),
+          type: "project.autonomous-enabled",
+          payload: {
+            projectId: command.projectId,
+            autonomousStartedAt: alreadyRunning ? project.autonomousStartedAt : occurredAt,
+            updatedAt: alreadyRunning ? project.updatedAt : occurredAt,
+          },
         },
-      };
+      ];
+      // The rest of the plan's boards, started in this same command so none of
+      // them can tick — and give up on work blocked by a sibling — while a
+      // board it depends on is still off. A board that is already running, was
+      // deleted, or no longer exists contributes no event: the first would only
+      // churn its start time, and the others cannot run at all.
+      for (const additionalProjectId of dedupeAdditionalProjectIds(command)) {
+        const additional = findProjectById(readModel, additionalProjectId);
+        if (
+          additional === undefined ||
+          additional.deletedAt !== null ||
+          additional.autonomousStartedAt != null
+        ) {
+          continue;
+        }
+        enabled.push({
+          ...(yield* withEventBase({
+            aggregateKind: "project",
+            aggregateId: additionalProjectId,
+            occurredAt,
+            commandId: command.commandId,
+          })),
+          type: "project.autonomous-enabled",
+          payload: {
+            projectId: additionalProjectId,
+            autonomousStartedAt: occurredAt,
+            updatedAt: occurredAt,
+          },
+        });
+      }
+      return enabled;
     }
 
     case "project.autonomous.disable": {
@@ -2112,23 +2210,50 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
       // finishes after a user already stopped it does not relabel itself.
       const alreadyStopped = project.autonomousStartedAt == null;
       const occurredAt = yield* nowIso;
-      return {
-        ...(yield* withEventBase({
-          aggregateKind: "project",
-          aggregateId: command.projectId,
-          occurredAt,
-          commandId: command.commandId,
-        })),
-        type: "project.autonomous-disabled",
-        payload: {
-          projectId: command.projectId,
-          reason: command.reason === "completed" ? "completed" : "disabled",
-          autonomousFinishedAt: alreadyStopped
-            ? (project.autonomousFinishedAt ?? occurredAt)
-            : occurredAt,
-          updatedAt: alreadyStopped ? project.updatedAt : occurredAt,
+      const reason = command.reason === "completed" ? "completed" : "disabled";
+      const disabled: PlannedOrchestrationEvent[] = [
+        {
+          ...(yield* withEventBase({
+            aggregateKind: "project",
+            aggregateId: command.projectId,
+            occurredAt,
+            commandId: command.commandId,
+          })),
+          type: "project.autonomous-disabled",
+          payload: {
+            projectId: command.projectId,
+            reason,
+            autonomousFinishedAt: alreadyStopped
+              ? (project.autonomousFinishedAt ?? occurredAt)
+              : occurredAt,
+            updatedAt: alreadyStopped ? project.updatedAt : occurredAt,
+          },
         },
-      };
+      ];
+      // Stopping is symmetric with enabling: the boards started alongside this
+      // one stop with it. Only boards that are still live are touched, so a
+      // board that already finished on its own keeps its `completed` reason
+      // instead of being relabelled as stopped by hand.
+      for (const additionalProjectId of dedupeAdditionalProjectIds(command)) {
+        const additional = findProjectById(readModel, additionalProjectId);
+        if (additional === undefined || additional.autonomousStartedAt == null) continue;
+        disabled.push({
+          ...(yield* withEventBase({
+            aggregateKind: "project",
+            aggregateId: additionalProjectId,
+            occurredAt,
+            commandId: command.commandId,
+          })),
+          type: "project.autonomous-disabled",
+          payload: {
+            projectId: additionalProjectId,
+            reason,
+            autonomousFinishedAt: occurredAt,
+            updatedAt: occurredAt,
+          },
+        });
+      }
+      return disabled;
     }
 
     case "project.autonomous.schedule.set": {

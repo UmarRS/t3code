@@ -578,6 +578,8 @@ it.layer(NodeServices.layer)("server settings", (it) => {
           },
         },
         automaticGitFetchInterval: Duration.seconds(10),
+        worktreeSweepMinAge: Duration.days(14),
+        worktreeSweepInterval: Duration.days(1),
       });
 
       assert.equal(next.providers.codex.binaryPath, "/opt/homebrew/bin/codex");
@@ -604,6 +606,8 @@ it.layer(NodeServices.layer)("server settings", (it) => {
           },
         },
         automaticGitFetchInterval: 10_000,
+        worktreeSweepMinAge: 14 * 24 * 60 * 60 * 1000,
+        worktreeSweepInterval: 24 * 60 * 60 * 1000,
       });
     }).pipe(Effect.provide(makeServerSettingsLayer())),
   );

@@ -30,6 +30,7 @@ import {
   PlusIcon,
   SparklesIcon,
   TriangleAlertIcon,
+  UnplugIcon,
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
@@ -44,8 +45,14 @@ import {
   resolveDefaultProviderModelSelection,
   resolvePlanningModelSelection,
 } from "~/providerInstances";
+import { useSidebarProjectPrefsStore } from "~/sidebarProjectPrefsStore";
 import { useProject, useProjects, useThreadShells } from "~/state/entities";
-import { issueEnvironment, useEnvironmentIssues, useProjectIssues } from "~/state/issues";
+import {
+  issueEnvironment,
+  readEnvironmentIssues,
+  useEnvironmentIssues,
+  useProjectIssues,
+} from "~/state/issues";
 import { useEnvironmentQuery } from "~/state/query";
 import { primaryServerProvidersAtom, primaryServerSettingsAtom } from "~/state/server";
 import { threadEnvironment } from "~/state/threads";
@@ -81,18 +88,22 @@ import { stackedThreadToast, toastManager } from "../ui/toast";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { AutonomousRunControl } from "./AutonomousRunControl";
 import {
+  autonomousFinishedRunReviewKey,
   issueAttentionRetryKind,
+  issueRetryDiscardsReview,
   issueRetryRestartsWork,
   resolveAutonomousRunState,
   resolveIssueAttentionPresentation,
+  type AutonomousPlanBoards,
 } from "./autonomousRun.logic";
 import { IssueDialog, type IssueDialogTarget } from "./IssueDialog";
 import { IssuesReviewTab } from "./IssuesReviewTab";
 import { IssuesProjectMenuGroup } from "./IssuesProjectMenuGroup";
 import { useDecompositionRoutingTargets } from "./useDecompositionRoutingTargets";
-import { useIssueAttentionActions } from "./useIssueAttentionActions";
+import { useIssueAttentionActions, useStalledDependencyBoards } from "./useIssueAttentionActions";
 import {
   buildIssueBoardColumns,
+  buildIssueDecompositionBoardContext,
   buildIssueDecompositionPrompt,
   countDelegationTargetProjects,
   describeDelegationTargetProjects,
@@ -180,8 +191,22 @@ export function IssuesBoardPage({
     () => new Set<ProjectId>(),
   );
   const attention = useIssueAttentionActions(environmentId);
+  const stalledDependencyBoards = useStalledDependencyBoards(environmentId);
   const runState = useMemo(() => resolveAutonomousRunState(project), [project]);
   const runActive = runState.kind === "running";
+
+  // Landing on the Review tab reads as acknowledging the run, same as
+  // clicking the "Review results" button itself.
+  const dismissFinishedRun = useSidebarProjectPrefsStore((state) => state.dismissFinishedRun);
+  useEffect(() => {
+    if (tab !== "review" || runState.kind !== "finished") return;
+    const reviewKey = autonomousFinishedRunReviewKey({
+      environmentId,
+      projectId,
+      finishedAt: runState.finishedAt,
+    });
+    if (reviewKey !== null) dismissFinishedRun(reviewKey);
+  }, [dismissFinishedRun, environmentId, projectId, runState, tab]);
 
   // The worktree forks from whatever the project has checked out. Reading the
   // ref name (rather than leaving the server on "HEAD") is what makes the
@@ -410,10 +435,26 @@ export function IssuesBoardPage({
               }))
             : [],
         ),
-        linkedProjects: routingTargets.filter((target) => scopedProjectIds.has(target.id)),
+        // Read rather than subscribed: what the boards hold matters at the
+        // moment the prompt is written, and nothing here should re-render
+        // every time an issue moves.
+        ...buildIssueDecompositionBoardContext({
+          issues: readEnvironmentIssues(environmentId),
+          projectId,
+          linkedProjects: routingTargets.filter((target) => scopedProjectIds.has(target.id)),
+        }),
       }),
     );
-  }, [handleNewThread, project, projectRef, providers, routingTargets, scopedProjectIds]);
+  }, [
+    environmentId,
+    handleNewThread,
+    project,
+    projectId,
+    projectRef,
+    providers,
+    routingTargets,
+    scopedProjectIds,
+  ]);
 
   const openThreadById = useCallback(
     async (threadId: ThreadId) => {
@@ -776,8 +817,12 @@ export function IssuesBoardPage({
                               onDelete={() => setIssueToDelete(issue)}
                               runActive={runActive}
                               attentionPending={attention.pendingIssueId === issue.id}
+                              stalledBoards={stalledDependencyBoards(issue)}
                               onClearAttention={() => void attention.clearFlag(issue)}
                               onRetryAttention={() => void attention.retry(issue)}
+                              onStartStalledBoards={(plan) =>
+                                void attention.startBlockingBoards(issue, plan)
+                              }
                             />
                           </li>
                         );
@@ -841,8 +886,10 @@ function IssueCard({
   onStart,
   onStatusChange,
   onDelete,
+  stalledBoards,
   onClearAttention,
   onRetryAttention,
+  onStartStalledBoards,
   delegationLinks,
   onOpenDelegationOrigin,
   onOpenDelegationTargets,
@@ -858,6 +905,11 @@ function IssueCard({
   readonly awaitingInput: boolean;
   readonly runActive: boolean;
   readonly attentionPending: boolean;
+  /**
+   * Set only when this issue is flagged because a board nobody is running holds
+   * its blocker — the one stall a card can act on rather than only explain.
+   */
+  readonly stalledBoards: AutonomousPlanBoards | null;
   readonly onEdit: () => void;
   readonly onOpenThread: () => void;
   readonly onUnlinkThread: () => void;
@@ -867,6 +919,7 @@ function IssueCard({
   readonly onDelete: () => void;
   readonly onClearAttention: () => void;
   readonly onRetryAttention: () => void;
+  readonly onStartStalledBoards: (plan: AutonomousPlanBoards) => void;
 }) {
   const openPrLink = useOpenPrLink();
   const attentionPresentation = resolveIssueAttentionPresentation(issue);
@@ -918,18 +971,46 @@ function IssueCard({
             <MenuSeparator />
             {attentionPresentation !== null ? (
               <>
-                <MenuItem disabled={attentionPending} onClick={onClearAttention}>
+                <MenuItem
+                  disabled={attentionPending}
+                  title={
+                    issueRetryDiscardsReview(issue)
+                      ? "Unflag this issue and keep the reviewer's verdict."
+                      : undefined
+                  }
+                  onClick={onClearAttention}
+                >
                   Clear flag
                 </MenuItem>
                 {issueAttentionRetryKind(issue) === "pull-request" ? (
                   <MenuItem disabled={attentionPending} onClick={onRetryAttention}>
                     Retry pull request
                   </MenuItem>
+                ) : issueRetryDiscardsReview(issue) ? (
+                  // Retry on reviewed work throws the verdict away too, so the
+                  // item says so rather than reading like the Clear above it.
+                  <MenuItem
+                    disabled={attentionPending}
+                    title="Discard this review and start the work again from the backlog."
+                    onClick={onRetryAttention}
+                  >
+                    Discard review & retry
+                  </MenuItem>
                 ) : issueRetryRestartsWork(issue) ? (
                   <MenuItem disabled={attentionPending} onClick={onRetryAttention}>
                     Clear & retry
                   </MenuItem>
                 ) : null}
+                {stalledBoards === null ? null : (
+                  <MenuItem
+                    disabled={attentionPending}
+                    onClick={() => onStartStalledBoards(stalledBoards)}
+                  >
+                    {stalledBoards.boards.length === 1
+                      ? "Start that board too"
+                      : "Start those boards too"}
+                  </MenuItem>
+                )}
               </>
             ) : null}
             <MenuItem onClick={onEdit}>Edit issue</MenuItem>
@@ -982,13 +1063,22 @@ function IssueCard({
           <Tooltip>
             <TooltipTrigger
               render={
+                // A park the machinery caused reads differently from a
+                // reviewer's refusal, badge and icon both: "Not reviewed" must
+                // never be mistaken for a call on the code.
                 <Badge variant="warning" size="sm" className="gap-1">
-                  <TriangleAlertIcon className="size-3" />
-                  Needs you
+                  {attentionPresentation.infrastructure ? (
+                    <UnplugIcon className="size-3" />
+                  ) : (
+                    <TriangleAlertIcon className="size-3" />
+                  )}
+                  {attentionPresentation.label}
                 </Badge>
               }
             />
-            <TooltipPopup side="bottom">{attentionPresentation.reason}</TooltipPopup>
+            <TooltipPopup side="bottom" className="max-w-72">
+              {attentionPresentation.headline} {attentionPresentation.reason}
+            </TooltipPopup>
           </Tooltip>
         ) : null}
 

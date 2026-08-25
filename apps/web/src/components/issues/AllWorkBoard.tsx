@@ -2,7 +2,7 @@ import { scopeThreadRef } from "@t3tools/client-runtime/environment";
 import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/models";
 import { issueNeedsAttention } from "@t3tools/contracts";
 import { useNavigate } from "@tanstack/react-router";
-import { ListChecksIcon, SearchIcon, TriangleAlertIcon } from "lucide-react";
+import { ListChecksIcon, SearchIcon, TriangleAlertIcon, UnplugIcon } from "lucide-react";
 import { memo, useMemo, useState } from "react";
 
 import { useNowMinute } from "~/hooks/useNowMinute";
@@ -28,6 +28,7 @@ import {
   ALL_WORK_COLUMN_INITIAL_COUNT,
   ALL_WORK_COLUMN_PAGE_COUNT,
 } from "./AllWorkBoard.logic";
+import { resolveIssueAttentionPresentation } from "./autonomousRun.logic";
 import { ISSUE_PRIORITY_LABEL, type IssueBoardColumn } from "./IssuesBoard.logic";
 import { projectAccent } from "./IssuesOverviewPage.logic";
 import {
@@ -212,6 +213,7 @@ function AllWorkCard({ entry, nowMs }: { readonly entry: AllWorkEntry; readonly 
   const navigate = useNavigate();
   const { project, thread } = entry;
   const needsAttention = issueNeedsAttention(entry);
+  const attention = resolveIssueAttentionPresentation(entry);
   const statusPill = thread === null ? null : resolveThreadStatusPill({ thread });
   const reference = allWorkIssueReference({
     branch: thread?.branch,
@@ -304,21 +306,25 @@ function AllWorkCard({ entry, nowMs }: { readonly entry: AllWorkEntry; readonly 
           </span>
         )}
 
-        {needsAttention ? (
+        {attention === null ? null : (
           <Tooltip>
             <TooltipTrigger
               render={
                 <span className="inline-flex items-center gap-1 rounded-md bg-warning-surface px-1.5 py-0.5 text-[10.5px] font-medium text-warning">
-                  <TriangleAlertIcon aria-hidden className="size-3" />
-                  Needs you
+                  {attention.infrastructure ? (
+                    <UnplugIcon aria-hidden className="size-3" />
+                  ) : (
+                    <TriangleAlertIcon aria-hidden className="size-3" />
+                  )}
+                  {attention.label}
                 </span>
               }
             />
-            <TooltipPopup side="bottom">
-              {entry.needsAttentionReason ?? "This issue is waiting on a person."}
+            <TooltipPopup side="bottom" className="max-w-72">
+              {attention.headline} {attention.reason}
             </TooltipPopup>
           </Tooltip>
-        ) : null}
+        )}
 
         {entry.priority === null ? null : (
           <span className="inline-flex items-center gap-1 text-[10.5px] text-muted-foreground">

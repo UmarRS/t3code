@@ -41,6 +41,7 @@ import {
   IssueAttentionClearedPayload as ContractsIssueAttentionClearedPayloadSchema,
   IssueReviewStartedPayload as ContractsIssueReviewStartedPayloadSchema,
   IssueReviewRecordedPayload as ContractsIssueReviewRecordedPayloadSchema,
+  IssueReviewResetPayload as ContractsIssueReviewResetPayloadSchema,
   ProjectAutonomousEnabledPayload as ContractsProjectAutonomousEnabledPayloadSchema,
   ProjectAutonomousDisabledPayload as ContractsProjectAutonomousDisabledPayloadSchema,
   ProjectAutonomousScheduleSetPayload as ContractsProjectAutonomousScheduleSetPayloadSchema,
@@ -96,6 +97,7 @@ export const IssueAttentionFlaggedPayload = ContractsIssueAttentionFlaggedPayloa
 export const IssueAttentionClearedPayload = ContractsIssueAttentionClearedPayloadSchema;
 export const IssueReviewStartedPayload = ContractsIssueReviewStartedPayloadSchema;
 export const IssueReviewRecordedPayload = ContractsIssueReviewRecordedPayloadSchema;
+export const IssueReviewResetPayload = ContractsIssueReviewResetPayloadSchema;
 export const ProjectAutonomousEnabledPayload = ContractsProjectAutonomousEnabledPayloadSchema;
 export const ProjectAutonomousDisabledPayload = ContractsProjectAutonomousDisabledPayloadSchema;
 export const ProjectAutonomousScheduleSetPayload =

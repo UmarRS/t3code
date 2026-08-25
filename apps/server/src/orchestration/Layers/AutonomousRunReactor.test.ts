@@ -13,11 +13,13 @@ import {
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { describe, expect, it } from "@effect/vitest";
 import * as Deferred from "effect/Deferred";
+import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Stream from "effect/Stream";
+import * as TestClock from "effect/testing/TestClock";
 
 import { ServerConfig } from "../../config.ts";
 import { ServerActivation } from "../../serverActivation.ts";
@@ -38,6 +40,7 @@ import { ProjectionSnapshotQuery } from "../Services/ProjectionSnapshotQuery.ts"
 import { RuntimeReceiptBus } from "../Services/RuntimeReceiptBus.ts";
 import {
   IssueStartCoordinator,
+  type IssueReviewResumeInput,
   type IssueReviewStartInput,
   type IssueStartCommand,
   type IssueStartOptions,
@@ -103,9 +106,12 @@ function makeHarness(options?: {
   readonly providers?: ReadonlyArray<unknown>;
   /** Existing provider PR state for the worker branch, when one already exists. */
   readonly existingPullRequestState?: "open" | "closed" | "merged";
+  /** Install a `TestClock` so a scenario can drive a retry backoff forward. */
+  readonly testClock?: boolean;
 }) {
   const started: StartedIssue[] = [];
   const reviews: IssueReviewStartInput[] = [];
+  const resumedReviews: IssueReviewResumeInput[] = [];
   const stackedActions: Array<{ readonly cwd: string; readonly action: string }> = [];
   const shippableChecks: Array<{ readonly cwd: string; readonly baseBranch: string }> = [];
   const resolvedPullRequests: Array<{ readonly cwd: string; readonly reference: string }> = [];
@@ -135,20 +141,49 @@ function makeHarness(options?: {
     IssueStartCoordinator,
     Effect.gen(function* () {
       const engine = yield* OrchestrationEngineService;
+      const snapshotQuery = yield* ProjectionSnapshotQuery;
+      let reviewThreadSeq = 0;
       return {
         startIssue: (command: IssueStartCommand, startOptions?: IssueStartOptions) =>
           Effect.gen(function* () {
             started.push({ command, options: startOptions });
             return yield* engine.dispatch(command).pipe(Effect.orDie);
           }),
+        // Creates the reviewer thread the real coordinator creates: a retry
+        // resumes that thread, so a stub that never made one would silently
+        // test the fresh-review path instead.
         startIssueReview: (input: IssueReviewStartInput) =>
-          Effect.sync(() => {
+          Effect.gen(function* () {
             reviews.push(input);
+            const issue = yield* snapshotQuery
+              .getIssueSummaryById(input.issueId)
+              .pipe(Effect.orDie);
+            reviewThreadSeq += 1;
+            yield* engine
+              .dispatch({
+                type: "thread.create",
+                commandId: CommandId.make(`cmd-review-thread-${reviewThreadSeq}`),
+                threadId: input.threadId,
+                projectId: Option.getOrThrow(issue).projectId,
+                title: "Reviewer",
+                modelSelection: input.modelSelection,
+                runtimeMode: input.runtimeMode,
+                interactionMode: input.interactionMode,
+                branch: input.branch,
+                worktreePath: input.worktreePath,
+                createdAt: input.createdAt,
+              })
+              .pipe(Effect.orDie);
+            return { sequence: 0 };
+          }),
+        resumeIssueReview: (input: IssueReviewResumeInput) =>
+          Effect.sync(() => {
+            resumedReviews.push(input);
             return { sequence: 0 };
           }),
       };
     }),
-  ).pipe(Layer.provide(orchestrationLayer));
+  ).pipe(Layer.provide(orchestrationLayer), Layer.provide(projectionSnapshotLayer));
 
   const gitLayer = Layer.mock(GitWorkflowService.GitWorkflowService)({
     invalidateStatus: () => Effect.void,
@@ -224,7 +259,7 @@ function makeHarness(options?: {
       }),
   });
 
-  const layer = AutonomousRunReactorLive.pipe(
+  const reactorLayer = AutonomousRunReactorLive.pipe(
     Layer.provide(classifierLayer),
     Layer.provideMerge(coordinatorLayer),
     Layer.provideMerge(orchestrationLayer),
@@ -237,11 +272,18 @@ function makeHarness(options?: {
     Layer.provideMerge(ServerConfig.layerTest(process.cwd(), process.cwd())),
     Layer.provideMerge(NodeServices.layer),
   );
+  // Retry backoffs are minutes long. Scenarios that wait one out drive the
+  // clock instead, so the wait is named rather than slept through.
+  const layer =
+    options?.testClock === true
+      ? Layer.provideMerge(reactorLayer, TestClock.layer())
+      : reactorLayer;
 
   return {
     layer,
     started,
     reviews,
+    resumedReviews,
     stackedActions,
     shippableChecks,
     resolvedPullRequests,
@@ -355,11 +397,15 @@ const bootRun = Effect.fn("bootRun")(function* () {
       createdAt: NOW,
     });
 
-  const enableAutonomousFor = (projectId: ProjectId) =>
+  const enableAutonomousFor = (
+    projectId: ProjectId,
+    additionalProjectIds: ReadonlyArray<ProjectId> = [],
+  ) =>
     dispatch({
       type: "project.autonomous.enable",
       commandId: nextCommandId("enable"),
       projectId,
+      additionalProjectIds,
       createdAt: NOW,
     });
 
@@ -383,7 +429,7 @@ const bootRun = Effect.fn("bootRun")(function* () {
   const endTurn = (
     threadId: ThreadId,
     status: "idle" | "error",
-    options?: { readonly resumeAt?: string },
+    options?: { readonly resumeAt?: string; readonly lastError?: string },
   ) =>
     dispatch({
       type: "thread.session.set",
@@ -395,7 +441,7 @@ const bootRun = Effect.fn("bootRun")(function* () {
         providerName: "claude",
         runtimeMode: "full-access",
         activeTurnId: null,
-        lastError: status === "error" ? "provider exploded" : null,
+        lastError: options?.lastError ?? (status === "error" ? "API Error: 529 Overloaded" : null),
         resumeAt: options?.resumeAt ?? null,
         updatedAt: NOW,
       },
@@ -534,6 +580,64 @@ describe("AutonomousRunReactor", () => {
     }).pipe(Effect.scoped, Effect.provide(harness.layer));
   });
 
+  // The race the multi-board start exists to close: enabling the two boards as
+  // two commands lets this one tick first, find its only story blocked by a
+  // board that is still off, flag it and switch itself off — all before the
+  // other board goes live.
+  it.effect("starts the boards its plan reaches as one action, flagging nothing", () => {
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      const run = yield* bootRun();
+      yield* run.createProject();
+      yield* run.createOtherProject();
+      yield* run.createIssueIn(OTHER_PROJECT_ID, "issue-api");
+      yield* run.createIssue("issue-ui", ["issue-api"]);
+      yield* run.enableAutonomousFor(PROJECT_ID, [OTHER_PROJECT_ID]);
+      yield* run.reactor.drain;
+
+      // The blocker is worked on the board this action switched on with it.
+      expect(harness.started.map((entry) => entry.command.issueId)).toEqual([
+        IssueId.make("issue-api"),
+      ]);
+      // And the story waiting on it is waiting, not stuck: no flag, and its
+      // board is still live to pick the work up when the blocker lands.
+      const waiting = yield* run.findIssue("issue-ui");
+      expect(waiting?.needsAttentionAt ?? null).toBeNull();
+      const project = yield* run.snapshotQuery.getProjectShellById(PROJECT_ID);
+      expect(Option.getOrThrow(project).autonomousStartedAt).not.toBeNull();
+      const other = yield* run.snapshotQuery.getProjectShellById(OTHER_PROJECT_ID);
+      expect(Option.getOrThrow(other).autonomousStartedAt).not.toBeNull();
+    }).pipe(Effect.scoped, Effect.provide(harness.layer));
+  });
+
+  it.effect("stops every board the action started, together", () => {
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      const run = yield* bootRun();
+      yield* run.createProject();
+      yield* run.createOtherProject();
+      yield* run.createIssueIn(OTHER_PROJECT_ID, "issue-api");
+      yield* run.createIssue("issue-ui", ["issue-api"]);
+      yield* run.enableAutonomousFor(PROJECT_ID, [OTHER_PROJECT_ID]);
+      yield* run.reactor.drain;
+
+      yield* run.dispatch({
+        type: "project.autonomous.disable",
+        commandId: run.nextCommandId("disable"),
+        projectId: PROJECT_ID,
+        additionalProjectIds: [OTHER_PROJECT_ID],
+        reason: "user",
+      });
+      yield* run.reactor.drain;
+
+      for (const projectId of [PROJECT_ID, OTHER_PROJECT_ID]) {
+        const project = yield* run.snapshotQuery.getProjectShellById(projectId);
+        expect(Option.getOrThrow(project).autonomousStartedAt).toBeNull();
+        expect(Option.getOrThrow(project).autonomousFinishedReason).toBe("disabled");
+      }
+    }).pipe(Effect.scoped, Effect.provide(harness.layer));
+  });
+
   // The dead end: nothing is running the board that owns the blocker, so no
   // amount of waiting releases the work. Say so and finish.
   it.effect("flags a story stuck behind a board nobody is running, then finishes", () => {
@@ -551,6 +655,7 @@ describe("AutonomousRunReactor", () => {
       const stuck = yield* run.findIssue("issue-ui");
       expect(stuck?.needsAttentionAt).not.toBeNull();
       expect(stuck?.needsAttentionReason).toContain("Acme Web");
+      expect(stuck?.needsAttentionKind).toBe("blocked");
       const project = yield* run.snapshotQuery.getProjectShellById(PROJECT_ID);
       expect(Option.getOrThrow(project).autonomousStartedAt).toBeNull();
       expect(Option.getOrThrow(project).autonomousFinishedReason).toBe("completed");
@@ -573,6 +678,11 @@ describe("AutonomousRunReactor", () => {
       yield* run.reactor.drain;
 
       expect(harness.started).toEqual([]);
+      // The command carried no kind, exactly as every event written before
+      // kinds existed did. It stays unclassified rather than being recorded as
+      // a deliberate `other`, which is what keeps the UI's reason-text
+      // fallback in play for history.
+      expect((yield* run.findIssue("issue-a"))?.needsAttentionKind ?? null).toBeNull();
       const project = yield* run.snapshotQuery.getProjectShellById(PROJECT_ID);
       const shell = Option.getOrNull(project);
       // The run turned itself off, and said it finished rather than was stopped.
@@ -894,6 +1004,8 @@ describe("AutonomousRunReactor", () => {
       expect(harness.reviews).toEqual([]);
       const issue = yield* run.findIssue("issue-a");
       expect(issue?.needsAttentionReason).toContain("No Claude provider is available");
+      // Infrastructure, not a verdict: nobody read this code.
+      expect(issue?.needsAttentionKind).toBe("review_unavailable");
     }).pipe(Effect.scoped, Effect.provide(harness.layer));
   });
 
@@ -917,6 +1029,7 @@ describe("AutonomousRunReactor", () => {
       const issue = yield* run.findIssue("issue-a");
       expect(issue?.needsAttentionAt).not.toBeNull();
       expect(issue?.needsAttentionReason).toContain("without producing a pull request");
+      expect(issue?.needsAttentionKind).toBe("pull_request_failed");
       // Parked, not merged: the run must not claim this landed.
       expect(issue?.status).toBe("in_progress");
       expect(harness.reviews).toEqual([]);
@@ -1073,6 +1186,7 @@ describe("AutonomousRunReactor", () => {
       expect(harness.stackedActions).toEqual([]);
       const issue = yield* run.findIssue("issue-a");
       expect(issue?.needsAttentionReason).toContain("ended in an error");
+      expect(issue?.needsAttentionKind).toBe("other");
     }).pipe(Effect.scoped, Effect.provide(harness.layer));
   });
 
@@ -1159,6 +1273,110 @@ describe("AutonomousRunReactor", () => {
     }).pipe(Effect.scoped, Effect.provide(harness.layer));
   });
 
+  it.effect("releases the merge queue when a claimed review is thrown away", () => {
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      const run = yield* bootRun();
+      yield* run.createProject();
+      yield* run.createIssue("issue-a");
+      yield* run.enableAutonomous();
+      yield* run.reactor.drain;
+
+      const threadId = harness.started[0]?.command.threadId;
+      if (!threadId) throw new Error("expected the issue to have started");
+      yield* run.createWorkerThread(threadId, "/tmp/acme-worktrees/issue-a", "issue/issue-a");
+      yield* run.receiptsWhile(2, run.endTurn(threadId, "idle"));
+      expect(harness.reviews).toHaveLength(1);
+
+      // The reviewer has claimed the issue but recorded nothing, and the merge
+      // queue is serialized on that review settling. A reset is allowed here —
+      // the decider counts an unrecorded claim as something to throw away — so
+      // it has to release the queue too, or no issue on the board is ever
+      // reviewed again.
+      const seen = yield* run.receiptsWhile(
+        1,
+        run.dispatch({
+          type: "issue.review.reset",
+          commandId: run.nextCommandId("review-reset"),
+          issueId: IssueId.make("issue-a"),
+        }),
+      );
+      expect(seen).toEqual(["autonomous.review.started"]);
+      expect(harness.reviews).toHaveLength(2);
+      expect(harness.reviews[1]?.issueId).toBe(IssueId.make("issue-a"));
+    }).pipe(Effect.scoped, Effect.provide(harness.layer));
+  });
+
+  it.effect("re-reviews an issue whose verdict was thrown away", () => {
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      const run = yield* bootRun();
+      yield* run.createProject();
+      yield* run.createIssue("issue-a");
+      yield* run.enableAutonomous();
+      yield* run.reactor.drain;
+
+      const threadId = harness.started[0]?.command.threadId;
+      if (!threadId) throw new Error("expected the issue to have started");
+      yield* run.createWorkerThread(threadId, "/tmp/acme-worktrees/issue-a", "issue/issue-a");
+      yield* run.receiptsWhile(2, run.endTurn(threadId, "idle"));
+      expect(harness.reviews).toHaveLength(1);
+
+      // The reviewer reads the change and refuses it, which parks the issue
+      // and takes the board's last piece of work out of play, so the run
+      // finishes.
+      const reviewerThreadId = harness.reviews[0]?.threadId;
+      if (!reviewerThreadId) throw new Error("expected a reviewer thread");
+      yield* run.receiptsWhile(
+        1,
+        run.dispatch({
+          type: "issue.review.record",
+          commandId: run.nextCommandId("review-a"),
+          issueId: IssueId.make("issue-a"),
+          reviewerThreadId,
+          verdict: "needs_attention",
+          notes: "The migration drops a column that is still read.",
+        }),
+      );
+      expect((yield* run.findIssue("issue-a"))?.reviewVerdict).toBe("needs_attention");
+      const reviewed = yield* run.snapshotQuery.getIssueDetailById(IssueId.make("issue-a"));
+      expect(Option.isSome(reviewed) ? reviewed.value.reviewNotes : "").toContain("drops a column");
+
+      // Unflagging alone leaves the verdict, and a verdict is what holds the
+      // merge queue off: the issue sits in review, doing nothing, forever.
+      yield* run.dispatch({
+        type: "issue.attention.clear",
+        commandId: run.nextCommandId("clear"),
+        issueId: IssueId.make("issue-a"),
+      });
+      yield* run.enableAutonomous();
+      yield* run.reactor.drain;
+      expect(harness.reviews).toHaveLength(1);
+
+      // Throwing the verdict away is what makes it reviewable again, and the
+      // reactor picks it up on the event rather than on the next sweep.
+      const seen = yield* run.receiptsWhile(
+        1,
+        run.dispatch({
+          type: "issue.review.reset",
+          commandId: run.nextCommandId("review-reset"),
+          issueId: IssueId.make("issue-a"),
+        }),
+      );
+      expect(seen).toEqual(["autonomous.review.started"]);
+      expect(harness.reviews).toHaveLength(2);
+      expect(harness.reviews[1]?.issueId).toBe(IssueId.make("issue-a"));
+
+      const issue = yield* run.findIssue("issue-a");
+      expect(issue?.reviewVerdict).toBeNull();
+      expect(issue?.status).toBe("in_review");
+      // The old reviewer's write-up goes with the verdict, so the card cannot
+      // show notes about a review that no longer applies.
+      const detail = yield* run.snapshotQuery.getIssueDetailById(IssueId.make("issue-a"));
+      expect(Option.isSome(detail) ? detail.value.reviewNotes : "unread").toBe("");
+    }).pipe(Effect.scoped, Effect.provide(harness.layer));
+  });
+
   it.effect("settles the worker and reviewer threads once the work is merged", () => {
     const harness = makeHarness();
     return Effect.gen(function* () {
@@ -1175,14 +1393,6 @@ describe("AutonomousRunReactor", () => {
 
       const reviewerThreadId = harness.reviews[0]?.threadId;
       if (!reviewerThreadId) throw new Error("expected a reviewer thread");
-      // The coordinator is stubbed here, so the reviewer thread it would have
-      // created has to be stood up by the scenario.
-      yield* run.createWorkerThread(
-        reviewerThreadId,
-        "/tmp/acme-worktrees/issue-a",
-        "issue/issue-a",
-      );
-
       // The run completing is what proves the merged verdict has been through
       // the reactor's event loop, and the settles run ahead of it.
       const seen = yield* run.receiptsWhile(
@@ -1224,12 +1434,6 @@ describe("AutonomousRunReactor", () => {
 
       const reviewerThreadId = harness.reviews[0]?.threadId;
       if (!reviewerThreadId) throw new Error("expected a reviewer thread");
-      yield* run.createWorkerThread(
-        reviewerThreadId,
-        "/tmp/acme-worktrees/issue-a",
-        "issue/issue-a",
-      );
-
       yield* run.receiptsWhile(
         1,
         run.dispatch({
@@ -1277,6 +1481,10 @@ describe("AutonomousRunReactor", () => {
           notes: "The interim turn did not include a t3-review block.",
         });
         expect((yield* run.findIssue("issue-a"))?.reviewVerdict).toBe("needs_attention");
+        // A refusal is the one park that is a judgement on the code.
+        expect((yield* run.findIssue("issue-a"))?.needsAttentionKind).toBe(
+          "review_needs_attention",
+        );
 
         harness.markPullRequestMerged();
 
@@ -1438,6 +1646,212 @@ describe("AutonomousRunReactor", () => {
       expect(harness.started.map((entry) => entry.command.issueId)).toEqual([
         IssueId.make("issue-a"),
       ]);
+    }).pipe(Effect.scoped, Effect.provide(harness.layer));
+  });
+
+  // A provider outage is not a review. The regression these three cover: one
+  // 529 used to become a permanent `needs_attention` verdict, and because
+  // nothing ever resets a verdict, the issue could never be reviewed again.
+  it.effect("retries a reviewer the provider killed instead of recording a verdict", () => {
+    const harness = makeHarness({ testClock: true });
+    return Effect.gen(function* () {
+      const run = yield* bootRun();
+      yield* run.createProject();
+      yield* run.createIssue("issue-a");
+      yield* run.enableAutonomous();
+      yield* run.reactor.drain;
+
+      const threadId = harness.started[0]?.command.threadId;
+      if (!threadId) throw new Error("expected the issue to have started");
+      yield* run.createWorkerThread(threadId, "/tmp/acme-worktrees/issue-a", "issue/issue-a");
+      yield* run.receiptsWhile(2, run.endTurn(threadId, "idle"));
+      const reviewerThreadId = harness.reviews[0]?.threadId;
+      if (!reviewerThreadId) throw new Error("expected a reviewer thread");
+
+      const scheduled = yield* run.collectReceiptsWhile(1, run.endTurn(reviewerThreadId, "error"));
+      expect(scheduled[0]).toMatchObject({
+        type: "autonomous.review.retry-scheduled",
+        issueId: IssueId.make("issue-a"),
+        reviewerThreadId,
+        attempt: 2,
+        delayMs: 60_000,
+      });
+
+      // Nothing was decided about the code, so nothing is recorded about it.
+      const waiting = yield* run.findIssue("issue-a");
+      expect(waiting?.reviewVerdict ?? null).toBeNull();
+      expect(waiting?.needsAttentionAt ?? null).toBeNull();
+      expect(waiting?.status).toBe("in_review");
+
+      // A minute later the same reviewer is asked to finish. Not a new one:
+      // starting over would throw away everything it already fixed and pushed.
+      const resumed = yield* run.collectReceiptsWhile(1, TestClock.adjust(Duration.minutes(1)));
+      expect(resumed[0]).toMatchObject({
+        type: "autonomous.review.resumed",
+        issueId: IssueId.make("issue-a"),
+        reviewerThreadId,
+        attempt: 2,
+      });
+      expect(harness.reviews).toHaveLength(1);
+      expect(harness.resumedReviews).toHaveLength(1);
+      expect(harness.resumedReviews[0]?.threadId).toBe(reviewerThreadId);
+      expect(harness.resumedReviews[0]?.detail).toBe("API Error: 529 Overloaded");
+      expect((yield* run.findIssue("issue-a"))?.reviewerThreadId).toBe(reviewerThreadId);
+    }).pipe(Effect.scoped, Effect.provide(harness.layer));
+  });
+
+  it.effect(
+    "parks the issue on infrastructure once the attempts run out, verdict still null",
+    () => {
+      const harness = makeHarness({ testClock: true });
+      return Effect.gen(function* () {
+        const run = yield* bootRun();
+        yield* run.createProject();
+        yield* run.createIssue("issue-a");
+        yield* run.enableAutonomous();
+        yield* run.reactor.drain;
+
+        const threadId = harness.started[0]?.command.threadId;
+        if (!threadId) throw new Error("expected the issue to have started");
+        yield* run.createWorkerThread(threadId, "/tmp/acme-worktrees/issue-a", "issue/issue-a");
+        yield* run.receiptsWhile(2, run.endTurn(threadId, "idle"));
+        const reviewerThreadId = harness.reviews[0]?.threadId;
+        if (!reviewerThreadId) throw new Error("expected a reviewer thread");
+
+        // Attempt 1 dies, attempt 2 waits a minute and dies, attempt 3 waits
+        // four and dies too.
+        yield* run.receiptsWhile(1, run.endTurn(reviewerThreadId, "error"));
+        yield* run.receiptsWhile(1, TestClock.adjust(Duration.minutes(1)));
+        const rescheduled = yield* run.collectReceiptsWhile(
+          1,
+          run.endTurn(reviewerThreadId, "error"),
+        );
+        expect(rescheduled[0]).toMatchObject({ attempt: 3, delayMs: 240_000 });
+        yield* run.receiptsWhile(1, TestClock.adjust(Duration.minutes(4)));
+        expect(harness.resumedReviews).toHaveLength(2);
+
+        const flagged = yield* run.collectReceiptsWhile(1, run.endTurn(reviewerThreadId, "error"));
+        expect(flagged[0]).toMatchObject({
+          type: "autonomous.issue.flagged",
+          issueId: IssueId.make("issue-a"),
+        });
+
+        const parked = yield* run.findIssue("issue-a");
+        expect(parked?.needsAttentionAt).not.toBeNull();
+        expect(parked?.needsAttentionReason).toContain("The reviewer could not run");
+        expect(parked?.needsAttentionReason).toContain("The code has not been reviewed.");
+        // The kind is what stops the UI presenting an outage as a verdict.
+        expect(parked?.needsAttentionKind).toBe("review_unavailable");
+        // The whole point: no verdict was ever written, so clearing the flag
+        // leaves an issue that can still be reviewed.
+        expect(parked?.reviewVerdict ?? null).toBeNull();
+      }).pipe(Effect.scoped, Effect.provide(harness.layer));
+    },
+  );
+
+  it.effect("reviews the next issue while a provider-killed review waits out its backoff", () => {
+    const harness = makeHarness({ testClock: true });
+    return Effect.gen(function* () {
+      const run = yield* bootRun();
+      yield* run.createProject();
+      yield* run.createIssue("issue-a");
+      yield* run.createIssue("issue-b");
+      yield* run.enableAutonomous();
+      yield* run.reactor.drain;
+
+      const finishWorker = Effect.fn("finishWorker")(function* (
+        issueId: string,
+        receiptCount: number,
+      ) {
+        const startedIssue = harness.started.find(
+          (entry) => entry.command.issueId === IssueId.make(issueId),
+        );
+        if (!startedIssue) throw new Error(`expected ${issueId} to have started`);
+        yield* run.createWorkerThread(
+          startedIssue.command.threadId,
+          `/tmp/acme-worktrees/${issueId}`,
+          `issue/${issueId}`,
+        );
+        yield* run.receiptsWhile(receiptCount, run.endTurn(startedIssue.command.threadId, "idle"));
+      });
+
+      yield* finishWorker("issue-a", 2);
+      yield* finishWorker("issue-b", 1);
+      expect(harness.reviews).toHaveLength(1);
+      const reviewerThreadId = harness.reviews[0]?.threadId;
+      if (!reviewerThreadId) throw new Error("expected a reviewer thread");
+
+      // The first reviewer dies on the provider. Its retry is parked out of the
+      // queue, so the queue takes the next issue rather than waiting a minute
+      // for a review that is not running.
+      const seen = yield* run.receiptsWhile(2, run.endTurn(reviewerThreadId, "error"));
+      expect(seen.toSorted()).toEqual([
+        "autonomous.review.retry-scheduled",
+        "autonomous.review.started",
+      ]);
+      expect(harness.reviews).toHaveLength(2);
+      expect(harness.reviews[1]?.issueId).toBe(IssueId.make("issue-b"));
+    }).pipe(Effect.scoped, Effect.provide(harness.layer));
+  });
+
+  it.effect("leaves a reviewer parked on a usage limit to its own recovery", () => {
+    const harness = makeHarness({ testClock: true });
+    return Effect.gen(function* () {
+      const run = yield* bootRun();
+      yield* run.createProject();
+      yield* run.createIssue("issue-a");
+      yield* run.createIssue("issue-b");
+      yield* run.enableAutonomous();
+      yield* run.reactor.drain;
+
+      const finishWorker = Effect.fn("finishWorker")(function* (
+        issueId: string,
+        receiptCount: number,
+      ) {
+        const startedIssue = harness.started.find(
+          (entry) => entry.command.issueId === IssueId.make(issueId),
+        );
+        if (!startedIssue) throw new Error(`expected ${issueId} to have started`);
+        yield* run.createWorkerThread(
+          startedIssue.command.threadId,
+          `/tmp/acme-worktrees/${issueId}`,
+          `issue/${issueId}`,
+        );
+        yield* run.receiptsWhile(receiptCount, run.endTurn(startedIssue.command.threadId, "idle"));
+      });
+
+      yield* finishWorker("issue-a", 2);
+      yield* finishWorker("issue-b", 1);
+      const reviewerThreadId = harness.reviews[0]?.threadId;
+      if (!reviewerThreadId) throw new Error("expected a reviewer thread");
+
+      // An exhausted account is `ModelFailover`'s to recover: it restarts the
+      // turn when the limit lifts, so spending a retry budget on it here would
+      // park the issue over a wait that was always going to end by itself.
+      yield* run.endTurn(reviewerThreadId, "error", {
+        lastError: "Claude AI usage limit reached|1755100800",
+      });
+      yield* TestClock.adjust(Duration.minutes(5));
+      expect(harness.resumedReviews).toEqual([]);
+
+      // The review is untouched and still holds the queue, so the verdict it
+      // eventually reports is what releases the next issue — exactly as if the
+      // limit had never happened.
+      const seen = yield* run.receiptsWhile(
+        1,
+        run.dispatch({
+          type: "issue.review.record",
+          commandId: run.nextCommandId("review-after-limit"),
+          issueId: IssueId.make("issue-a"),
+          reviewerThreadId,
+          verdict: "merged",
+          notes: "Recovered on the backup model, rebased and merged.",
+        }),
+      );
+      expect(seen).toEqual(["autonomous.review.started"]);
+      expect(harness.resumedReviews).toEqual([]);
+      expect(harness.reviews).toHaveLength(2);
+      expect(harness.reviews[1]?.issueId).toBe(IssueId.make("issue-b"));
     }).pipe(Effect.scoped, Effect.provide(harness.layer));
   });
 });

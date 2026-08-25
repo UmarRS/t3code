@@ -108,7 +108,11 @@ import { buildExpandedImagePreview, type ExpandedImagePreview } from "./Expanded
 import { basenameOfPath } from "../../pierre-icons";
 import { cn, randomUUID } from "~/lib/utils";
 import { useProject } from "~/state/entities";
-import { prepareIssueDecompositionPrompt } from "../issues/IssuesBoard.logic";
+import { readEnvironmentIssues } from "~/state/issues";
+import {
+  buildIssueDecompositionBoardContext,
+  prepareIssueDecompositionPrompt,
+} from "../issues/IssuesBoard.logic";
 import { useDecompositionRoutingTargets } from "../issues/useDecompositionRoutingTargets";
 import { Separator } from "../ui/separator";
 
@@ -1332,18 +1336,26 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
   );
 
   const prepareGenerateStoriesPrompt = useCallback(() => {
-    if (!generateStoriesProject) return;
+    if (!generateStoriesProject || generateStoriesProjectRef === null) return;
     setPromptFromTraits(
       prepareIssueDecompositionPrompt({
         promptText: promptRef.current,
         projectTitle: generateStoriesProject.title,
         availableModels: generateStoriesAvailableModels,
-        linkedProjects: generateStoriesRoutingTargets,
+        // Read rather than subscribed: what the boards hold matters at the
+        // moment the prompt is written, and a composer has no business
+        // re-rendering every time an issue moves.
+        ...buildIssueDecompositionBoardContext({
+          issues: readEnvironmentIssues(generateStoriesProjectRef.environmentId),
+          projectId: generateStoriesProjectRef.projectId,
+          linkedProjects: generateStoriesRoutingTargets,
+        }),
       }),
     );
   }, [
     generateStoriesAvailableModels,
     generateStoriesProject,
+    generateStoriesProjectRef,
     generateStoriesRoutingTargets,
     promptRef,
     setPromptFromTraits,

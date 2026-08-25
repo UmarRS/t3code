@@ -53,6 +53,23 @@ export interface IssueReviewStartInput {
   readonly createdAt: string;
 }
 
+export interface IssueReviewResumeInput {
+  readonly issueId: IssueId;
+  /** The reviewer thread a previous attempt already opened. */
+  readonly threadId: ThreadId;
+  readonly messageId: MessageId;
+  readonly modelSelection: ModelSelection;
+  readonly runtimeMode: RuntimeMode;
+  readonly interactionMode: ProviderInteractionMode;
+  /** Which attempt this is, counting the one the provider killed. */
+  readonly attempt: number;
+  /** How many attempts the review gets in total. */
+  readonly attempts: number;
+  /** The provider error the previous attempt died on. */
+  readonly detail: string;
+  readonly createdAt: string;
+}
+
 export interface IssueStartCoordinatorShape {
   /**
    * Gate, create the worktree and thread, and seed the first turn. Rejections
@@ -72,6 +89,16 @@ export interface IssueStartCoordinatorShape {
    */
   readonly startIssueReview: (
     input: IssueReviewStartInput,
+  ) => Effect.Effect<{ readonly sequence: number }, OrchestrationDispatchCommandError>;
+
+  /**
+   * Ask an existing reviewer thread to finish a review its provider killed
+   * mid-turn. Deliberately not a new review: the thread, its worktree, its
+   * branch and its pull request are all still the ones under review, and the
+   * only thing that was lost is the turn.
+   */
+  readonly resumeIssueReview: (
+    input: IssueReviewResumeInput,
   ) => Effect.Effect<{ readonly sequence: number }, OrchestrationDispatchCommandError>;
 }
 

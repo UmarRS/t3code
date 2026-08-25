@@ -87,6 +87,7 @@ function commandToAggregateRef(command: OrchestrationCommand): {
     case "issue.attention.clear":
     case "issue.review.start":
     case "issue.review.record":
+    case "issue.review.reset":
       return {
         aggregateKind: "issue",
         aggregateId: command.issueId,

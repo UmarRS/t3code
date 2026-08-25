@@ -1,11 +1,13 @@
 import type { EnvironmentId, OrchestrationIssue, ThreadId } from "@t3tools/contracts";
 import {
+  BotIcon,
   ChevronDownIcon,
   CircleCheckIcon,
   ExternalLinkIcon,
   MessageSquareIcon,
   RotateCcwIcon,
   TriangleAlertIcon,
+  UnplugIcon,
 } from "lucide-react";
 import { useMemo, useState } from "react";
 
@@ -21,11 +23,14 @@ import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from "../ui/empty";
 import { Spinner } from "../ui/spinner";
 import {
   buildReviewSections,
+  formatBoardTitles,
   issueAttentionRetryKind,
+  issueRetryDiscardsReview,
   issueRetryRestartsWork,
   resolveIssueAttentionPresentation,
+  type AutonomousPlanBoards,
 } from "./autonomousRun.logic";
-import { useIssueAttentionActions } from "./useIssueAttentionActions";
+import { useIssueAttentionActions, useStalledDependencyBoards } from "./useIssueAttentionActions";
 
 /**
  * What autonomous mode produced: work it merged, and work it parked. Reviewer
@@ -46,6 +51,7 @@ export function IssuesReviewTab({
 }) {
   const sections = useMemo(() => buildReviewSections(issues), [issues]);
   const attention = useIssueAttentionActions(environmentId);
+  const stalledDependencyBoards = useStalledDependencyBoards(environmentId);
 
   if (sections.completed.length === 0 && sections.needsAttention.length === 0) {
     return (
@@ -76,8 +82,10 @@ export function IssuesReviewTab({
                   workspaceRoot={workspaceRoot}
                   onOpenThread={onOpenThread}
                   pending={attention.pendingIssueId === issue.id}
+                  stalledBoards={stalledDependencyBoards(issue)}
                   onClearFlag={() => void attention.clearFlag(issue)}
                   onRetry={() => void attention.retry(issue)}
+                  onStartStalledBoards={(plan) => void attention.startBlockingBoards(issue, plan)}
                 />
               </li>
             ))}
@@ -115,21 +123,29 @@ function ReviewCard({
   workspaceRoot,
   onOpenThread,
   pending,
+  stalledBoards = null,
   onClearFlag,
   onRetry,
+  onStartStalledBoards,
 }: {
   readonly environmentId: EnvironmentId;
   readonly issue: OrchestrationIssue;
   readonly workspaceRoot: string | undefined;
   readonly onOpenThread: (threadId: ThreadId) => void;
   readonly pending: boolean;
+  /** The idle boards holding this issue's blocker, when that is why it is flagged. */
+  readonly stalledBoards?: AutonomousPlanBoards | null;
   readonly onClearFlag?: () => void;
   readonly onRetry?: () => void;
+  readonly onStartStalledBoards?: (plan: AutonomousPlanBoards) => void;
 }) {
   const [expanded, setExpanded] = useState(false);
   const openPrLink = useOpenPrLink();
   const attentionPresentation = resolveIssueAttentionPresentation(issue);
   const flagged = attentionPresentation !== null;
+  // Retrying reviewed work throws the verdict away with it, and that is the
+  // whole difference between the two buttons — so the card says it.
+  const discardsReview = flagged && issueRetryDiscardsReview(issue);
 
   // One detail read per expanded card, never for the collapsed list.
   const detail = useEnvironmentQuery(
@@ -150,9 +166,15 @@ function ReviewCard({
           <p className="text-sm text-foreground">{issue.title}</p>
           <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
             {flagged ? (
+              // An outage and a verdict are drawn apart on purpose: a plug is
+              // the machinery failing, a triangle is a call on the code.
               <Badge variant="warning" size="sm" className="gap-1">
-                <TriangleAlertIcon className="size-3" />
-                {attentionPresentation.fromReview ? "Review needs attention" : "Needs you"}
+                {attentionPresentation.infrastructure ? (
+                  <UnplugIcon className="size-3" />
+                ) : (
+                  <TriangleAlertIcon className="size-3" />
+                )}
+                {attentionPresentation.label}
               </Badge>
             ) : (
               <Badge variant="success" size="sm" className="gap-1">
@@ -204,26 +226,74 @@ function ReviewCard({
                 want after taking the thread over yourself. Retry is only a
                 distinct action once there is a thread or a status to reset. */}
             {issueRetryRestartsWork(issue) ? (
-              <Button size="sm" variant="ghost" disabled={pending} onClick={onClearFlag}>
+              <Button
+                size="sm"
+                variant="ghost"
+                disabled={pending}
+                title={
+                  discardsReview
+                    ? "Unflag this issue and keep the reviewer's verdict."
+                    : "Unflag this issue and leave the work where it is."
+                }
+                onClick={onClearFlag}
+              >
                 Clear flag
               </Button>
             ) : null}
-            <Button size="sm" variant="outline" disabled={pending} onClick={onRetry}>
+            <Button
+              size="sm"
+              variant="outline"
+              disabled={pending}
+              title={
+                discardsReview
+                  ? "Discard this review and start the work again from the backlog."
+                  : undefined
+              }
+              onClick={onRetry}
+            >
               {pending ? <Spinner className="size-3.5" /> : <RotateCcwIcon className="size-3.5" />}
               {issueAttentionRetryKind(issue) === "pull-request"
                 ? "Retry pull request"
-                : issueRetryRestartsWork(issue)
-                  ? "Clear & retry"
-                  : "Clear flag"}
+                : discardsReview
+                  ? "Discard review & retry"
+                  : issueRetryRestartsWork(issue)
+                    ? "Clear & retry"
+                    : "Clear flag"}
             </Button>
           </div>
         ) : null}
       </div>
 
       {attentionPresentation ? (
-        <p className="mt-2 rounded-md bg-warning/8 px-2 py-1.5 text-xs text-warning-foreground">
-          {attentionPresentation.reason}
-        </p>
+        <div className="mt-2 rounded-md bg-warning/8 px-2 py-1.5 text-xs text-warning-foreground">
+          {/* The headline names what happened; the reactor's own reason stays
+              underneath it, because that is the part with the detail in it. */}
+          <p className="font-medium">{attentionPresentation.headline}</p>
+          <p className="mt-0.5 opacity-90">{attentionPresentation.reason}</p>
+          {discardsReview && onClearFlag && onRetry ? (
+            <p className="mt-1 opacity-90">
+              Retry discards this review and starts the work over from the backlog. Clear flag keeps
+              the review as it stands.
+            </p>
+          ) : null}
+          {/* The stall says "start a run there". This is that run: the boards
+              holding the blocker, plus whatever their own plans depend on,
+              started together with this one. */}
+          {stalledBoards === null || onStartStalledBoards === undefined ? null : (
+            <Button
+              size="sm"
+              variant="outline"
+              className="mt-1.5"
+              disabled={pending}
+              onClick={() => onStartStalledBoards(stalledBoards)}
+            >
+              {pending ? <Spinner className="size-3.5" /> : <BotIcon className="size-3.5" />}
+              {stalledBoards.boards.length <= 2
+                ? `Start ${formatBoardTitles(stalledBoards.boards)} too`
+                : `Start ${stalledBoards.boards.length} other boards too`}
+            </Button>
+          )}
+        </div>
       ) : null}
 
       <div className="mt-2">

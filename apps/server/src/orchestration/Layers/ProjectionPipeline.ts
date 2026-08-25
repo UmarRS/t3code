@@ -673,6 +673,7 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
               pullRequestUrl: null,
               needsAttentionAt: null,
               needsAttentionReason: null,
+              needsAttentionKind: null,
               reviewVerdict: null,
               reviewerThreadId: null,
               reviewedAt: null,
@@ -744,6 +745,9 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
             yield* patchIssueRow(event.payload.issueId, {
               needsAttentionAt: event.payload.needsAttentionAt,
               needsAttentionReason: event.payload.reason,
+              // Null, not `other`, when the event predates kinds — see the
+              // projector: unclassified is what the UI fallback keys on.
+              needsAttentionKind: event.payload.kind ?? null,
               updatedAt: event.payload.updatedAt,
             });
             return;
@@ -752,6 +756,7 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
             yield* patchIssueRow(event.payload.issueId, {
               needsAttentionAt: null,
               needsAttentionReason: null,
+              needsAttentionKind: null,
               updatedAt: event.payload.updatedAt,
             });
             return;
@@ -772,6 +777,20 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
               reviewedAt: event.payload.reviewedAt,
               reviewNotes: event.payload.notes,
               ...(event.payload.status !== undefined ? { status: event.payload.status } : {}),
+              updatedAt: event.payload.updatedAt,
+            });
+            return;
+
+          case "issue.review-reset":
+            // The mirror of the record above, notes included: an issue whose
+            // review was thrown away must not keep showing the old reviewer's
+            // write-up. `reviewNotes` is a defaulted column rather than a
+            // nullable one, so empty is its null.
+            yield* patchIssueRow(event.payload.issueId, {
+              reviewVerdict: null,
+              reviewerThreadId: null,
+              reviewedAt: null,
+              reviewNotes: "",
               updatedAt: event.payload.updatedAt,
             });
             return;

@@ -22,6 +22,7 @@ import {
   TurnId,
 } from "./baseSchemas.ts";
 import {
+  IssueAttentionKind,
   IssueAttentionReason,
   IssueDependsOn,
   IssueDescription,
@@ -1039,11 +1040,20 @@ const ThreadTurnResumeCommand = Schema.Struct({
  * Turn on autonomous mode for a project: from here the server starts every
  * startable issue in parallel and merges them one at a time, until the backlog
  * has nothing left it can advance.
+ *
+ * `additionalProjectIds` starts the other boards this board's plan depends on
+ * in the same command, which is what stops one of them ticking, finding its
+ * work blocked by a board that is still off, and flagging it. One command is
+ * one transaction, so every board named here is live before any of them
+ * evaluates. Boards already running are left out of the emitted events rather
+ * than restarted. See `reachableAutonomousProjectIds` for who belongs in the
+ * set.
  */
 const ProjectAutonomousEnableCommand = Schema.Struct({
   type: Schema.Literal("project.autonomous.enable"),
   commandId: CommandId,
   projectId: ProjectId,
+  additionalProjectIds: Schema.optional(Schema.Array(ProjectId)),
   createdAt: IsoDateTime,
 });
 
@@ -1057,6 +1067,12 @@ const ProjectAutonomousDisableCommand = Schema.Struct({
   type: Schema.Literal("project.autonomous.disable"),
   commandId: CommandId,
   projectId: ProjectId,
+  /**
+   * The other boards started with this one, stopped in the same command so the
+   * switch is not a one-way door. Boards that are already stopped are left out
+   * of the emitted events, so a board that finished on its own keeps saying so.
+   */
+  additionalProjectIds: Schema.optional(Schema.Array(ProjectId)),
   reason: Schema.Literals(["user", "completed"]).pipe(
     Schema.withDecodingDefault(Effect.succeed("user" as const)),
   ),
@@ -1210,6 +1226,21 @@ const IssueAttentionClearCommand = Schema.Struct({
   issueId: IssueId,
 });
 
+/**
+ * Throw away a recorded review so the issue can be reviewed again.
+ *
+ * The counterpart of `issue.attention.clear`, and deliberately not the same
+ * command: clearing a flag accepts the reviewer's judgement, while this
+ * discards it. A verdict is what holds an issue out of the merge queue, so
+ * work that is redone from scratch has to lose the old one or it reaches
+ * `in_review` a second time and is never picked up again.
+ */
+const IssueReviewResetCommand = Schema.Struct({
+  type: Schema.Literal("issue.review.reset"),
+  commandId: CommandId,
+  issueId: IssueId,
+});
+
 const DispatchableClientOrchestrationCommand = Schema.Union([
   ProjectCreateCommand,
   ProjectMetaUpdateCommand,
@@ -1245,6 +1276,7 @@ const DispatchableClientOrchestrationCommand = Schema.Union([
   IssueStartCommand,
   IssuePullRequestLinkCommand,
   IssueAttentionClearCommand,
+  IssueReviewResetCommand,
   ProjectAutonomousEnableCommand,
   ProjectAutonomousDisableCommand,
   ProjectAutonomousScheduleSetCommand,
@@ -1287,6 +1319,7 @@ export const ClientOrchestrationCommand = Schema.Union([
   IssueStartCommand,
   IssuePullRequestLinkCommand,
   IssueAttentionClearCommand,
+  IssueReviewResetCommand,
   ProjectAutonomousEnableCommand,
   ProjectAutonomousDisableCommand,
   ProjectAutonomousScheduleSetCommand,
@@ -1390,6 +1423,11 @@ const IssueAttentionFlagCommand = Schema.Struct({
   commandId: CommandId,
   issueId: IssueId,
   reason: IssueAttentionReason,
+  /**
+   * What sort of park this is, for the UI to branch on. Optional so a caller
+   * that has nothing better to say can leave it off; absent means `other`.
+   */
+  kind: Schema.optional(IssueAttentionKind),
 });
 
 /**
@@ -1484,6 +1522,7 @@ export const OrchestrationEventType = Schema.Literals([
   "issue.attention-cleared",
   "issue.review-started",
   "issue.review-recorded",
+  "issue.review-reset",
   "project.autonomous-enabled",
   "project.autonomous-disabled",
   "project.autonomous-schedule-set",
@@ -1821,6 +1860,12 @@ export const IssuePullRequestLinkedPayload = Schema.Struct({
 export const IssueAttentionFlaggedPayload = Schema.Struct({
   issueId: IssueId,
   reason: IssueAttentionReason,
+  /**
+   * Optional so every event written before kinds existed still decodes. Absent
+   * means `other`, and is projected as null rather than as `other` — an
+   * unclassified park is what licenses the reason-text fallback in the UI.
+   */
+  kind: Schema.optional(IssueAttentionKind),
   needsAttentionAt: IsoDateTime,
   updatedAt: IsoDateTime,
 });
@@ -1846,6 +1891,16 @@ export const IssueReviewRecordedPayload = Schema.Struct({
   /** `done` on a merge; absent when the verdict parks the issue instead. */
   status: Schema.optional(IssueStatus),
   reviewedAt: IsoDateTime,
+  updatedAt: IsoDateTime,
+});
+
+/**
+ * A recorded review thrown away. Carries nothing but the issue: every review
+ * field goes back to its pre-review value, so there is nothing to say beyond
+ * which issue it happened to.
+ */
+export const IssueReviewResetPayload = Schema.Struct({
+  issueId: IssueId,
   updatedAt: IsoDateTime,
 });
 
@@ -2106,6 +2161,11 @@ export const OrchestrationEvent = Schema.Union([
     ...EventBaseFields,
     type: Schema.Literal("issue.review-recorded"),
     payload: IssueReviewRecordedPayload,
+  }),
+  Schema.Struct({
+    ...EventBaseFields,
+    type: Schema.Literal("issue.review-reset"),
+    payload: IssueReviewResetPayload,
   }),
   Schema.Struct({
     ...EventBaseFields,

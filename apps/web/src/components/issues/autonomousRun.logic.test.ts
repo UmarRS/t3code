@@ -1,7 +1,9 @@
 import {
+  EnvironmentId,
   IssueId,
   ProjectId,
   ThreadId,
+  type IssueAttentionKind,
   type IssueReviewVerdict,
   type IssueStatus,
   type ServerProvider,
@@ -9,17 +11,25 @@ import {
 import { describe, expect, it } from "vite-plus/test";
 
 import {
+  autonomousFinishedRunReviewKey,
   autonomousRunActionLabel,
   autonomousRunCompactActionLabel,
   buildReviewSections,
+  describeAutonomousPlanBoards,
   describeAutonomousRunStatus,
   formatAutonomousProgressLabel,
   hasAutonomousReviewerProvider,
+  issueAttentionRetryKind,
+  issueRetryDiscardsReview,
   issueRetryRestartsWork,
   planIssueAttentionClear,
   planIssueAttentionRetry,
+  resolveAutonomousPlanBoards,
   resolveAutonomousRunState,
+  resolveIssueAttentionKind,
   resolveIssueAttentionPresentation,
+  resolveStalledDependencyBoards,
+  shouldShowFinishedRunReviewButton,
   summarizeAutonomousProgress,
   type ReviewIssueView,
 } from "./autonomousRun.logic";
@@ -27,6 +37,9 @@ import {
 /** The board under test, and the linked board a plan may reach into. */
 const BOARD = ProjectId.make("board");
 const OTHER_BOARD = ProjectId.make("other-board");
+/** A third board, reachable only through the second. */
+const THIRD_BOARD = ProjectId.make("third-board");
+const ENVIRONMENT = EnvironmentId.make("environment-1");
 
 describe("autonomousRunActionLabel", () => {
   it("only calls a user-stopped run resumable", () => {
@@ -44,6 +57,118 @@ describe("autonomousRunCompactActionLabel", () => {
   });
 });
 
+describe("autonomousFinishedRunReviewKey", () => {
+  it("combines the project and the run's finishedAt", () => {
+    expect(
+      autonomousFinishedRunReviewKey({
+        environmentId: ENVIRONMENT,
+        projectId: BOARD,
+        finishedAt: "2026-08-24T00:00:00.000Z",
+      }),
+    ).toBe("environment-1:board:2026-08-24T00:00:00.000Z");
+  });
+
+  it("returns null without a finishedAt to key on", () => {
+    expect(
+      autonomousFinishedRunReviewKey({
+        environmentId: ENVIRONMENT,
+        projectId: BOARD,
+        finishedAt: null,
+      }),
+    ).toBeNull();
+  });
+
+  it("gives two projects distinct keys for the same finish time", () => {
+    const shared = "2026-08-24T00:00:00.000Z";
+    expect(
+      autonomousFinishedRunReviewKey({
+        environmentId: ENVIRONMENT,
+        projectId: BOARD,
+        finishedAt: shared,
+      }),
+    ).not.toBe(
+      autonomousFinishedRunReviewKey({
+        environmentId: ENVIRONMENT,
+        projectId: OTHER_BOARD,
+        finishedAt: shared,
+      }),
+    );
+  });
+});
+
+describe("shouldShowFinishedRunReviewButton", () => {
+  const reviewKey = autonomousFinishedRunReviewKey({
+    environmentId: ENVIRONMENT,
+    projectId: BOARD,
+    finishedAt: "2026-08-24T00:00:00.000Z",
+  });
+
+  it("hides the button for any state but a finished run", () => {
+    expect(
+      shouldShowFinishedRunReviewButton({
+        runState: { kind: "running", startedAt: null },
+        reviewKey,
+        dismissedKeys: new Set(),
+      }),
+    ).toBe(false);
+    expect(
+      shouldShowFinishedRunReviewButton({
+        runState: { kind: "idle" },
+        reviewKey,
+        dismissedKeys: new Set(),
+      }),
+    ).toBe(false);
+  });
+
+  it("shows a finished run's button until its key is dismissed", () => {
+    expect(
+      shouldShowFinishedRunReviewButton({
+        runState: { kind: "finished", finishedAt: "2026-08-24T00:00:00.000Z" },
+        reviewKey,
+        dismissedKeys: new Set(),
+      }),
+    ).toBe(true);
+    expect(
+      shouldShowFinishedRunReviewButton({
+        runState: { kind: "finished", finishedAt: "2026-08-24T00:00:00.000Z" },
+        reviewKey,
+        dismissedKeys: new Set(reviewKey === null ? [] : [reviewKey]),
+      }),
+    ).toBe(false);
+  });
+
+  it("keeps showing a finished run with no finishedAt to key on, dismissed or not", () => {
+    expect(
+      shouldShowFinishedRunReviewButton({
+        runState: { kind: "finished", finishedAt: null },
+        reviewKey: null,
+        dismissedKeys: new Set(["some-other-key"]),
+      }),
+    ).toBe(true);
+  });
+
+  it("brings the button back for a later run that finishes after a dismissal", () => {
+    const firstKey = autonomousFinishedRunReviewKey({
+      environmentId: ENVIRONMENT,
+      projectId: BOARD,
+      finishedAt: "2026-08-24T00:00:00.000Z",
+    });
+    const secondKey = autonomousFinishedRunReviewKey({
+      environmentId: ENVIRONMENT,
+      projectId: BOARD,
+      finishedAt: "2026-08-25T00:00:00.000Z",
+    });
+    const dismissedKeys = new Set(firstKey === null ? [] : [firstKey]);
+    expect(
+      shouldShowFinishedRunReviewButton({
+        runState: { kind: "finished", finishedAt: "2026-08-25T00:00:00.000Z" },
+        reviewKey: secondKey,
+        dismissedKeys,
+      }),
+    ).toBe(true);
+  });
+});
+
 function issue(
   id: string,
   overrides: {
@@ -53,6 +178,7 @@ function issue(
     threadId?: string | null;
     needsAttentionAt?: string | null;
     needsAttentionReason?: string | null;
+    needsAttentionKind?: IssueAttentionKind | null;
     reviewVerdict?: IssueReviewVerdict | null;
     reviewedAt?: string | null;
     updatedAt?: string;
@@ -71,6 +197,7 @@ function issue(
     pullRequestUrl: null,
     needsAttentionAt: overrides.needsAttentionAt ?? null,
     needsAttentionReason: overrides.needsAttentionReason ?? null,
+    needsAttentionKind: overrides.needsAttentionKind ?? null,
     reviewVerdict: overrides.reviewVerdict ?? null,
     reviewerThreadId: null,
     reviewedAt: overrides.reviewedAt ?? null,
@@ -397,10 +524,52 @@ describe("resolveIssueAttentionPresentation", () => {
         issue("parked", {
           needsAttentionAt: "2026-08-01T00:00:00.000Z",
           needsAttentionReason: "The tests fail on main.",
+          needsAttentionKind: "review_needs_attention",
           reviewVerdict: "needs_attention",
         }),
       ),
-    ).toEqual({ reason: "The tests fail on main.", fromReview: true });
+    ).toEqual({
+      reason: "The tests fail on main.",
+      kind: "review_needs_attention",
+      label: "Review needs attention",
+      headline: "The reviewer read this change and left it unmerged.",
+      infrastructure: false,
+    });
+  });
+
+  // The whole point of the kind: a reviewer that never ran must not read as a
+  // reviewer that read the code and said no.
+  it("says outright that an unreviewable issue was never reviewed", () => {
+    const presentation = resolveIssueAttentionPresentation(
+      issue("parked", {
+        needsAttentionAt: "2026-08-01T00:00:00.000Z",
+        needsAttentionReason: "The reviewer could not run: the provider failed 3 times.",
+        needsAttentionKind: "review_unavailable",
+      }),
+    );
+    expect(presentation?.kind).toBe("review_unavailable");
+    expect(presentation?.infrastructure).toBe(true);
+    expect(presentation?.headline).toMatch(/never reviewed/);
+    expect(presentation?.label).not.toBe("Review needs attention");
+  });
+
+  it("gives a refusal and an outage different wording and iconography", () => {
+    const refused = resolveIssueAttentionPresentation(
+      issue("refused", {
+        needsAttentionAt: "2026-08-01T00:00:00.000Z",
+        needsAttentionKind: "review_needs_attention",
+      }),
+    );
+    const unavailable = resolveIssueAttentionPresentation(
+      issue("unavailable", {
+        needsAttentionAt: "2026-08-01T00:00:00.000Z",
+        needsAttentionKind: "review_unavailable",
+      }),
+    );
+    expect(refused?.label).not.toBe(unavailable?.label);
+    expect(refused?.headline).not.toBe(unavailable?.headline);
+    expect(refused?.infrastructure).toBe(false);
+    expect(unavailable?.infrastructure).toBe(true);
   });
 
   it("falls back to a generic reason when none was recorded", () => {
@@ -408,7 +577,65 @@ describe("resolveIssueAttentionPresentation", () => {
       issue("parked", { needsAttentionAt: "2026-08-01T00:00:00.000Z" }),
     );
     expect(presentation?.reason).toMatch(/could not finish/);
-    expect(presentation?.fromReview).toBe(false);
+    expect(presentation?.kind).toBe("other");
+  });
+});
+
+describe("resolveIssueAttentionKind", () => {
+  it("prefers the recorded kind over anything the reason says", () => {
+    expect(
+      resolveIssueAttentionKind(
+        issue("parked", {
+          needsAttentionAt: "2026-08-01T00:00:00.000Z",
+          needsAttentionReason: "Could not open a pull request: GitHub CLI command failed.",
+          needsAttentionKind: "other",
+        }),
+      ),
+    ).toBe("other");
+  });
+
+  // Rows flagged before kinds existed carry null, and the reason text is the
+  // only evidence left. These are the exact sentences the reactor wrote.
+  it.each([
+    ["Could not open a pull request: GitHub CLI command failed.", "pull_request_failed"],
+    ["The commit/push/PR run finished without producing a pull request.", "pull_request_failed"],
+    ["No Claude provider is available to review this issue.", "review_unavailable"],
+    [
+      "The reviewer could not run: the provider failed 3 times (last error: boom). The code has not been reviewed.",
+      "review_unavailable",
+    ],
+    ["Could not start work: worktree bootstrap failed.", "start_failed"],
+    ["No provider is configured to do this work.", "start_failed"],
+    [
+      "Delegated from another project, but the work could not be started: the worktree is wedged.",
+      "start_failed",
+    ],
+    ["Blocked by 'Groundwork' on the Acme API board, which nothing is working.", "blocked"],
+    // A missing worktree is deliberately not `pull_request_failed`: retrying
+    // the pull request over a worktree that is gone can only re-fail.
+    ["The worker thread has no worktree, so no pull request could be opened.", "other"],
+    ["Something nobody ever wrote a branch for.", "other"],
+  ])("infers %s from an unclassified row", (reason, expected) => {
+    expect(
+      resolveIssueAttentionKind(
+        issue("legacy", {
+          needsAttentionAt: "2026-08-01T00:00:00.000Z",
+          needsAttentionReason: reason,
+        }),
+      ),
+    ).toBe(expected);
+  });
+
+  it("reads a recorded verdict as a refusal when the row has no kind", () => {
+    expect(
+      resolveIssueAttentionKind(
+        issue("legacy", {
+          needsAttentionAt: "2026-08-01T00:00:00.000Z",
+          needsAttentionReason: "Reviewer left this unmerged. See the review notes.",
+          reviewVerdict: "needs_attention",
+        }),
+      ),
+    ).toBe("review_needs_attention");
   });
 });
 
@@ -439,13 +666,122 @@ describe("planIssueAttentionRetry", () => {
       threadId: "thread-1",
       needsAttentionAt: "2026-08-01T00:00:00.000Z",
       needsAttentionReason: "Could not open a pull request: GitHub CLI command failed.",
+      needsAttentionKind: "pull_request_failed",
     });
+    expect(issueAttentionRetryKind(target)).toBe("pull-request");
     expect(planIssueAttentionRetry(target)).toEqual([{ kind: "clear-attention" }]);
+    expect(issueRetryRestartsWork(target)).toBe(false);
+  });
+
+  // The kind decides, so a reason that happens to mention pull requests no
+  // longer buys the pull-request affordance on a row that was classified.
+  it("ignores pull-request wording once a row carries a different kind", () => {
+    const target = issue("parked", {
+      status: "in_progress",
+      threadId: "thread-1",
+      needsAttentionAt: "2026-08-01T00:00:00.000Z",
+      needsAttentionReason:
+        "The reviewer could not run, so nobody looked at the pull request. The code has not been reviewed.",
+      needsAttentionKind: "review_unavailable",
+    });
+    expect(issueAttentionRetryKind(target)).toBe("restart-work");
+    expect(issueRetryRestartsWork(target)).toBe(true);
+  });
+
+  // A row flagged before kinds existed still has to behave exactly as it did.
+  it("keeps the pull-request affordance for an unclassified legacy row", () => {
+    const target = issue("legacy", {
+      status: "in_progress",
+      threadId: "thread-1",
+      needsAttentionAt: "2026-08-01T00:00:00.000Z",
+      needsAttentionReason: "Could not open a pull request: GitHub CLI command failed.",
+    });
+    expect(issueAttentionRetryKind(target)).toBe("pull-request");
+    expect(planIssueAttentionRetry(target)).toEqual([{ kind: "clear-attention" }]);
+    expect(issueRetryRestartsWork(target)).toBe(false);
+  });
+
+  it("still offers Clear on an unclassified legacy backlog row", () => {
+    const target = issue("legacy", {
+      needsAttentionAt: "2026-08-01T00:00:00.000Z",
+      needsAttentionReason: "Blocked by 'Groundwork', which is not going to finish on its own.",
+    });
+    expect(issueAttentionRetryKind(target)).toBe("clear");
     expect(issueRetryRestartsWork(target)).toBe(false);
   });
 
   it("clearing alone never touches the thread or the status", () => {
     expect(planIssueAttentionClear()).toEqual([{ kind: "clear-attention" }]);
+  });
+
+  // The verdict is what holds the merge queue off an issue, so work that is
+  // redone from scratch has to lose it — otherwise the fresh pull request
+  // reaches `in_review` and is never picked up again.
+  it("discards the verdict when reviewed work is redone", () => {
+    const target = issue("reviewed", {
+      status: "in_review",
+      threadId: "thread-1",
+      needsAttentionAt: "2026-08-01T00:00:00.000Z",
+      needsAttentionReason: "Reviewer left this unmerged. See the review notes.",
+      needsAttentionKind: "review_needs_attention",
+      reviewVerdict: "needs_attention",
+    });
+    // Last, so the issue is out of the review queue's reach (backlog, not
+    // `in_review`) at the moment the verdict goes away.
+    expect(planIssueAttentionRetry(target)).toEqual([
+      { kind: "clear-attention" },
+      { kind: "unlink-thread" },
+      { kind: "reset-to-backlog" },
+      { kind: "reset-review" },
+    ]);
+    expect(issueRetryDiscardsReview(target)).toBe(true);
+  });
+
+  it("still resets a verdict carried by an issue already in the backlog", () => {
+    const target = issue("reviewed-backlog", {
+      needsAttentionAt: "2026-08-01T00:00:00.000Z",
+      needsAttentionKind: "review_needs_attention",
+      reviewVerdict: "needs_attention",
+    });
+    expect(planIssueAttentionRetry(target)).toEqual([
+      { kind: "clear-attention" },
+      { kind: "reset-review" },
+    ]);
+  });
+
+  it("leaves the verdict alone on an issue nobody reviewed", () => {
+    const target = issue("parked", {
+      status: "in_progress",
+      threadId: "thread-1",
+      needsAttentionAt: "2026-08-01T00:00:00.000Z",
+      needsAttentionKind: "start_failed",
+    });
+    expect(planIssueAttentionRetry(target)).toEqual([
+      { kind: "clear-attention" },
+      { kind: "unlink-thread" },
+      { kind: "reset-to-backlog" },
+    ]);
+    expect(issueRetryDiscardsReview(target)).toBe(false);
+  });
+
+  // Clearing accepts the reviewer's judgement; only retry throws it away.
+  it("never resets a verdict when the flag is only cleared", () => {
+    expect(planIssueAttentionClear()).not.toContainEqual({ kind: "reset-review" });
+  });
+
+  // The pull-request retry re-runs the idempotent PR workflow over work that
+  // is still good. There is nothing to discard, and a verdict it happened to
+  // carry is not this affordance's business.
+  it("keeps the pull-request retry to clearing the flag, verdict or not", () => {
+    const target = issue("pr-failed", {
+      status: "in_progress",
+      threadId: "thread-1",
+      needsAttentionAt: "2026-08-01T00:00:00.000Z",
+      needsAttentionKind: "pull_request_failed",
+      reviewVerdict: "needs_attention",
+    });
+    expect(planIssueAttentionRetry(target)).toEqual([{ kind: "clear-attention" }]);
+    expect(issueRetryDiscardsReview(target)).toBe(false);
   });
 });
 
@@ -481,5 +817,162 @@ describe("hasAutonomousReviewerProvider", () => {
     expect(hasAutonomousReviewerProvider([{ ...claude, driver: "codex" } as ServerProvider])).toBe(
       false,
     );
+  });
+});
+
+describe("resolveAutonomousPlanBoards", () => {
+  const board = (id: ProjectId, title: string, startedAt: string | null = null) => ({
+    id,
+    title,
+    autonomousStartedAt: startedAt,
+  });
+  const PROJECTS = [
+    board(BOARD, "Acme"),
+    board(OTHER_BOARD, "Acme API"),
+    board(THIRD_BOARD, "Acme Infra"),
+  ];
+
+  // The dialog for an ordinary single-board plan must not change at all.
+  it("names nothing when the plan does not leave this board", () => {
+    const plan = resolveAutonomousPlanBoards({
+      issues: [issue("a"), issue("b", { dependsOn: ["a"] })],
+      projects: PROJECTS,
+      projectId: BOARD,
+      action: "enable",
+    });
+    expect(plan.boards).toEqual([]);
+    expect(plan.additionalProjectIds).toEqual([]);
+    expect(describeAutonomousPlanBoards(plan, "enable")).toBeNull();
+  });
+
+  it("names every board a start would switch on, transitively", () => {
+    const plan = resolveAutonomousPlanBoards({
+      issues: [
+        issue("infra", { projectId: THIRD_BOARD }),
+        issue("api", { projectId: OTHER_BOARD, dependsOn: ["infra"] }),
+        issue("ui", { dependsOn: ["api"] }),
+      ],
+      projects: PROJECTS,
+      projectId: BOARD,
+      action: "enable",
+    });
+    expect(plan.boards.map((entry) => entry.title)).toEqual(["Acme API", "Acme Infra"]);
+    expect(plan.additionalProjectIds.toSorted()).toEqual([OTHER_BOARD, THIRD_BOARD].toSorted());
+    expect(describeAutonomousPlanBoards(plan, "enable")).toBe(
+      "Also starts Acme API and Acme Infra, which this plan depends on.",
+    );
+  });
+
+  it("leaves a board that is already running out of the start summary", () => {
+    const plan = resolveAutonomousPlanBoards({
+      issues: [issue("api", { projectId: OTHER_BOARD }), issue("ui", { dependsOn: ["api"] })],
+      projects: [PROJECTS[0]!, board(OTHER_BOARD, "Acme API", "2026-01-01T00:00:00.000Z")],
+      projectId: BOARD,
+      action: "enable",
+    });
+    expect(plan.boards).toEqual([]);
+    // Still sent: the server decides what a live board needs, and re-sending it
+    // is a no-op there rather than a start time this client raced to read.
+    expect(plan.additionalProjectIds).toEqual([OTHER_BOARD]);
+  });
+
+  it("offers back only the live boards this plan reaches when stopping", () => {
+    const plan = resolveAutonomousPlanBoards({
+      issues: [
+        issue("infra", { projectId: THIRD_BOARD }),
+        issue("api", { projectId: OTHER_BOARD }),
+        issue("ui", { dependsOn: ["api", "infra"] }),
+      ],
+      projects: [
+        PROJECTS[0]!,
+        board(OTHER_BOARD, "Acme API", "2026-01-01T00:00:00.000Z"),
+        board(THIRD_BOARD, "Acme Infra"),
+      ],
+      projectId: BOARD,
+      action: "stop",
+    });
+    expect(plan.boards.map((entry) => entry.title)).toEqual(["Acme API"]);
+    expect(describeAutonomousPlanBoards(plan, "stop")).toBe(
+      "Also stops Acme API, started with this run.",
+    );
+  });
+
+  // A board the user started on its own is not part of this plan, so stopping
+  // this run must not reach it.
+  it("never offers a live board this plan does not reach", () => {
+    const plan = resolveAutonomousPlanBoards({
+      issues: [issue("api", { projectId: OTHER_BOARD }), issue("ui")],
+      projects: [PROJECTS[0]!, board(OTHER_BOARD, "Acme API", "2026-01-01T00:00:00.000Z")],
+      projectId: BOARD,
+      action: "stop",
+    });
+    expect(plan.boards).toEqual([]);
+    expect(plan.additionalProjectIds).toEqual([]);
+  });
+});
+
+describe("resolveStalledDependencyBoards", () => {
+  const projects = (otherStartedAt: string | null) => [
+    { id: BOARD, title: "Acme", autonomousStartedAt: null },
+    { id: OTHER_BOARD, title: "Acme API", autonomousStartedAt: otherStartedAt },
+    { id: THIRD_BOARD, title: "Acme Infra", autonomousStartedAt: null },
+  ];
+
+  it("offers the idle board holding the blocker, and its own plan with it", () => {
+    const issues = [
+      issue("infra", { projectId: THIRD_BOARD }),
+      issue("api", { projectId: OTHER_BOARD, dependsOn: ["infra"] }),
+      issue("ui", { dependsOn: ["api"], needsAttentionAt: "2026-01-02T00:00:00.000Z" }),
+    ];
+    const plan = resolveStalledDependencyBoards({
+      issue: issues[2]!,
+      issues,
+      projects: projects(null),
+    });
+    expect(plan?.boards.map((entry) => entry.title)).toEqual(["Acme API"]);
+    expect(plan?.additionalProjectIds.toSorted()).toEqual([OTHER_BOARD, THIRD_BOARD].toSorted());
+  });
+
+  it("offers nothing when the blocker's board is already running", () => {
+    const issues = [
+      issue("api", { projectId: OTHER_BOARD }),
+      issue("ui", { dependsOn: ["api"], needsAttentionAt: "2026-01-02T00:00:00.000Z" }),
+    ];
+    expect(
+      resolveStalledDependencyBoards({
+        issue: issues[1]!,
+        issues,
+        projects: projects("2026-01-01T00:00:00.000Z"),
+      }),
+    ).toBeNull();
+  });
+
+  // Every other reason an issue is flagged: a failed start, a review that left
+  // it alone, a blocker on this very board. None of them is a board to start.
+  it("offers nothing for a flag that is not about another board", () => {
+    const issues = [
+      issue("a"),
+      issue("b", { dependsOn: ["a"], needsAttentionAt: "2026-01-02T00:00:00.000Z" }),
+    ];
+    expect(
+      resolveStalledDependencyBoards({ issue: issues[1]!, issues, projects: projects(null) }),
+    ).toBeNull();
+  });
+
+  // Switching the board on is only an answer when liveness is what the blocker
+  // is missing. These blockers stay put whoever is running their board, so
+  // offering to start it would clear the flag for a run that gives up again.
+  it.each([
+    { label: "canceled", overrides: { status: "canceled" as IssueStatus } },
+    { label: "flagged", overrides: { needsAttentionAt: "2026-01-02T00:00:00.000Z" } },
+    { label: "already carried by a thread", overrides: { threadId: "thread-1" } },
+  ])("offers nothing for a blocker that is $label", ({ overrides }) => {
+    const issues = [
+      issue("api", { projectId: OTHER_BOARD, ...overrides }),
+      issue("ui", { dependsOn: ["api"], needsAttentionAt: "2026-01-02T00:00:00.000Z" }),
+    ];
+    expect(
+      resolveStalledDependencyBoards({ issue: issues[1]!, issues, projects: projects(null) }),
+    ).toBeNull();
   });
 });

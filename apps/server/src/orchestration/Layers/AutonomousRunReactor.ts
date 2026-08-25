@@ -5,8 +5,12 @@ import {
   isSessionParkedForResume,
   IssueId,
   MessageId,
+  NonNegativeInt,
+  reachableAutonomousProjectIds,
+  type IssueAttentionKind,
   type OrchestrationEvent,
   type OrchestrationIssue,
+  type OrchestrationSession,
   type ProjectId,
   ThreadId,
 } from "@t3tools/contracts";
@@ -24,6 +28,7 @@ import * as Schedule from "effect/Schedule";
 import * as Stream from "effect/Stream";
 
 import { GitWorkflowService } from "../../git/GitWorkflowService.ts";
+import { classifyProviderExhaustion } from "../../provider/providerExhaustion.ts";
 import { ProviderRegistry } from "../../provider/Services/ProviderRegistry.ts";
 import { forkParked } from "../../serverActivation.ts";
 import { OrchestrationEngineService } from "../Services/OrchestrationEngine.ts";
@@ -74,8 +79,51 @@ const AUTONOMOUS_BASE_BRANCH = "main";
 /** External merges do not emit orchestration events, so active runs reconcile their one in-flight review periodically. */
 const EXTERNAL_MERGE_RECONCILE_INTERVAL = Duration.minutes(1);
 
+/**
+ * How many turns a review gets when the provider — not the reviewer — is what
+ * failed. Three, counting the original: a provider that is still failing after
+ * two waits is having a bad hour, not a bad second, and a human should hear
+ * about it rather than watch the run retry all afternoon.
+ */
+export const REVIEW_PROVIDER_FAILURE_ATTEMPTS = 3;
+
+/**
+ * The wait between those attempts: 1m, then 4m, capped at 15m if the attempt
+ * count is ever raised. Long enough for an overloaded provider to come back,
+ * short enough that a run does not sit idle over a blip.
+ */
+export const REVIEW_PROVIDER_FAILURE_BACKOFF = Schedule.min([
+  Schedule.exponential(Duration.minutes(1), 4),
+  Schedule.spaced(Duration.minutes(15)),
+]);
+
 type EvaluateItem = { readonly projectId: ProjectId };
-type MergeItem = { readonly issueId: IssueId };
+
+type MergeItem = {
+  readonly issueId: IssueId;
+  /**
+   * Set only on a retry after a provider failure: the reviewer thread that
+   * attempt already opened, to be resumed rather than replaced. The worktree,
+   * the branch and the pull request are all still the right ones — only the
+   * turn was lost.
+   */
+  readonly resumeReviewerThreadId?: ThreadId;
+  /** Which attempt this is. The first review of an issue is attempt 1. */
+  readonly attempt?: number;
+  /** The provider error the previous attempt died on, for the reviewer's nudge. */
+  readonly previousFailure?: string;
+};
+
+/**
+ * How a reviewer attempt ended, as far as the merge queue is concerned.
+ *
+ * The distinction is the whole point: a reviewer that reported anything at all
+ * has settled the issue, while a provider failure means nobody reviewed
+ * anything and the attempt has to happen again.
+ */
+type ReviewOutcome =
+  | { readonly kind: "settled" }
+  | { readonly kind: "provider-failed"; readonly detail: string };
 
 const make = Effect.gen(function* () {
   const crypto = yield* Crypto.Crypto;
@@ -100,11 +148,37 @@ const make = Effect.gen(function* () {
   const pullRequestsInFlight = new Set<string>();
   /** Issues already handed to the merge queue in this process. */
   const queuedForMerge = new Set<string>();
-  /** Reviews the merge queue is waiting on, completed when their verdict lands. */
-  const pendingReviews = new Map<string, Deferred.Deferred<void>>();
+  /** Reviews the merge queue is waiting on, settled when their outcome lands. */
+  const pendingReviews = new Map<string, Deferred.Deferred<ReviewOutcome>>();
+  /**
+   * Issues waiting out a provider-failure backoff before their reviewer runs
+   * again. They are out of the merge queue — a review waiting on a provider
+   * must not hold up every other issue — so this is what stops an evaluation
+   * tick from mistaking one for an unclaimed review and starting a second
+   * reviewer on it. Lost on restart, which only costs the retry: the sweep
+   * re-derives the issue as ready for review and it is reviewed afresh.
+   */
+  const reviewRetriesPending = new Set<string>();
 
+  /**
+   * Put a review back in the merge queue. Bound to the queue's own `enqueue`
+   * once it exists, and declared here because the retry closes a cycle
+   * TypeScript cannot infer through: `processMergeItem` hands a provider
+   * failure to the retry, the retry re-queues, and the queue is built out of
+   * `processMergeItem`. This is the one link in it that is declared rather
+   * than inferred.
+   */
+  let enqueueMergeItem: (item: MergeItem) => Effect.Effect<void> = () => Effect.void;
+
+  /**
+   * Park an issue for a human. The kind is required rather than optional on
+   * purpose: it is what the board card and the Review tab branch on, and the
+   * one thing a caller must not leave to a substring match on `reason` is
+   * whether a reviewer judged this code or never got to read it at all.
+   */
   const flagNeedsAttention = Effect.fn("flagNeedsAttention")(function* (
     issueId: IssueId,
+    kind: IssueAttentionKind,
     reason: string,
   ) {
     yield* orchestrationEngine
@@ -113,6 +187,7 @@ const make = Effect.gen(function* () {
         commandId: yield* serverCommandId("attention-flag"),
         issueId,
         reason: reason.slice(0, 2_000),
+        kind,
       })
       .pipe(Effect.ignoreCause({ log: true }));
     yield* receipts.publish({
@@ -157,7 +232,11 @@ const make = Effect.gen(function* () {
     const modelSelection =
       issue.modelSelection ?? (yield* resolveWorkerModelSelection(issue.projectId));
     if (modelSelection === null) {
-      yield* flagNeedsAttention(issue.id, "No provider is configured to do this work.");
+      yield* flagNeedsAttention(
+        issue.id,
+        "start_failed",
+        "No provider is configured to do this work.",
+      );
       return;
     }
     const threadId = ThreadId.make(yield* crypto.randomUUIDv4);
@@ -185,9 +264,11 @@ const make = Effect.gen(function* () {
         // A start that fails after the gate is a real problem and parks the
         // issue so the run does not spin on it.
         Effect.catch((error) =>
-          flagNeedsAttention(issue.id, `Could not start work: ${error.message}`).pipe(
-            Effect.as(false),
-          ),
+          flagNeedsAttention(
+            issue.id,
+            "start_failed",
+            `Could not start work: ${error.message}`,
+          ).pipe(Effect.as(false)),
         ),
       );
     if (!started) return;
@@ -271,31 +352,6 @@ const make = Effect.gen(function* () {
     return true;
   });
 
-  /**
-   * The boards a dependency chain out of `issues` can reach, this one included.
-   * Only these need a liveness read: whether a board nobody is running holds a
-   * blocker is what separates a run that is waiting from one that is stuck.
-   */
-  const reachableProjectIds = (
-    issues: ReadonlyArray<OrchestrationIssue>,
-    byId: ReadonlyMap<IssueId, OrchestrationIssue>,
-    projectId: ProjectId,
-  ) => {
-    const projectIds = new Set<ProjectId>([projectId]);
-    const visited = new Set<IssueId>();
-    const walk = (issue: OrchestrationIssue) => {
-      for (const dependencyId of issue.dependsOn) {
-        const dependency = byId.get(dependencyId);
-        if (dependency === undefined || visited.has(dependency.id)) continue;
-        visited.add(dependency.id);
-        projectIds.add(dependency.projectId);
-        walk(dependency);
-      }
-    };
-    for (const issue of issues) walk(issue);
-    return projectIds;
-  };
-
   /** Why a blocked issue is never going to start, in the words a human reads on the card. */
   const describeStall = Effect.fn("describeStall")(function* (
     issue: OrchestrationIssue,
@@ -351,9 +407,13 @@ const make = Effect.gen(function* () {
       }
       issues = yield* projectionSnapshotQuery.listIssues();
 
-      const byId = new Map(issues.map((issue) => [issue.id, issue] as const));
+      // Only the boards this board's plan reaches need a liveness read:
+      // whether a board nobody is running holds a blocker is what separates a
+      // run that is waiting from one that is stuck. The same set is what the
+      // run switch starts, so the two cannot disagree about which boards a
+      // plan spans.
       const advancing = new Set<ProjectId>();
-      for (const candidate of reachableProjectIds(boardIssues(), byId, projectId)) {
+      for (const candidate of reachableAutonomousProjectIds(issues, projectId)) {
         if (yield* projectRunIsLive(candidate)) advancing.add(candidate);
       }
       const evaluation = evaluateAutonomousRun({
@@ -372,6 +432,7 @@ const make = Effect.gen(function* () {
         for (const stalled of evaluation.stalled) {
           yield* flagNeedsAttention(
             stalled.issue.id,
+            "blocked",
             yield* describeStall(stalled.issue, stalled.blocker),
           );
         }
@@ -421,7 +482,8 @@ const make = Effect.gen(function* () {
         issue.status === "in_review" &&
         issue.needsAttentionAt == null &&
         issue.reviewVerdict == null &&
-        !queuedForMerge.has(issue.id);
+        !queuedForMerge.has(issue.id) &&
+        !reviewRetriesPending.has(issue.id);
       if (!readyForReview) continue;
       queuedForMerge.add(issue.id);
       yield* mergeQueue.enqueue({ issueId: issue.id });
@@ -449,6 +511,7 @@ const make = Effect.gen(function* () {
     if (sessionStatus === "error") {
       yield* flagNeedsAttention(
         issue.id,
+        "other",
         "The worker session ended in an error before the work could be reviewed.",
       );
       return;
@@ -485,8 +548,14 @@ const make = Effect.gen(function* () {
     const thread = yield* projectionSnapshotQuery.getThreadShellById(threadId);
     const cwd = Option.isSome(thread) ? thread.value.worktreePath : null;
     if (cwd === null) {
+      // Not `pull_request_failed`: that kind promises the worker's output is
+      // still there and only the pull request has to be retried. With the
+      // worktree gone there is nothing to open a pull request over, and the
+      // only recovery is starting the work again — which is what the
+      // catch-all's Clear & retry does.
       yield* flagNeedsAttention(
         issue.id,
+        "other",
         "The worker thread has no worktree, so no pull request could be opened.",
       );
       return;
@@ -570,7 +639,11 @@ const make = Effect.gen(function* () {
       );
 
     if (!result.ok) {
-      yield* flagNeedsAttention(issue.id, `Could not open a pull request: ${result.message}`);
+      yield* flagNeedsAttention(
+        issue.id,
+        "pull_request_failed",
+        `Could not open a pull request: ${result.message}`,
+      );
       return;
     }
 
@@ -578,6 +651,7 @@ const make = Effect.gen(function* () {
     if (result.value.pr.status === "skipped_not_requested" || pullRequestUrl === null) {
       yield* flagNeedsAttention(
         issue.id,
+        "pull_request_failed",
         "The commit/push/PR run finished without producing a pull request.",
       );
       return;
@@ -720,18 +794,14 @@ const make = Effect.gen(function* () {
 
   // --------------------------------------------------------------- reviewing
 
-  const processMergeItem = Effect.fn("processMergeItem")(function* (item: MergeItem) {
-    const issueOption = yield* projectionSnapshotQuery.getIssueSummaryById(item.issueId);
-    if (Option.isNone(issueOption)) return;
-    const issue = issueOption.value;
-    // Re-check against current state: the item may have been queued before a
-    // user canceled the issue, flagged it, or stopped the run.
-    if (issue.status !== "in_review" || issue.needsAttentionAt != null) return;
-    if (issue.reviewVerdict != null) return;
-    // An explicit PR retry owns the review handoff even if the project run was
-    // paused after the original failure.
-    if (!(yield* issueIsAutonomouslyWorked(issue)) && issue.pullRequestUrl === null) return;
-
+  /**
+   * Open a reviewer thread on an issue and seed it with the review prompt.
+   * Returns the thread that is now reviewing, or null when nothing could be
+   * started — in which case the issue has already been parked with the reason.
+   */
+  const startReviewForIssue = Effect.fn("startReviewForIssue")(function* (
+    issue: OrchestrationIssue,
+  ) {
     const workerThread =
       issue.threadId === null
         ? Option.none()
@@ -739,9 +809,10 @@ const make = Effect.gen(function* () {
     if (Option.isNone(workerThread) || workerThread.value.worktreePath === null) {
       yield* flagNeedsAttention(
         issue.id,
+        "review_unavailable",
         "The issue has no worktree to review, so it cannot be merged automatically.",
       );
-      return;
+      return null;
     }
 
     // Size the review with a cheap classifier pass, then pick the reviewer's
@@ -762,8 +833,12 @@ const make = Effect.gen(function* () {
       complexityTier,
     );
     if (modelSelection === null) {
-      yield* flagNeedsAttention(issue.id, "No Claude provider is available to review this issue.");
-      return;
+      yield* flagNeedsAttention(
+        issue.id,
+        "review_unavailable",
+        "No Claude provider is available to review this issue.",
+      );
+      return null;
     }
 
     const reviewerThreadId = ThreadId.make(yield* crypto.randomUUIDv4);
@@ -782,9 +857,6 @@ const make = Effect.gen(function* () {
       })
       .pipe(Effect.ignoreCause({ log: true }));
 
-    const completion = yield* Deferred.make<void>();
-    pendingReviews.set(issue.id, completion);
-
     const started = yield* issueStartCoordinator
       .startIssueReview({
         issueId: issue.id,
@@ -801,16 +873,14 @@ const make = Effect.gen(function* () {
       .pipe(
         Effect.as(true),
         Effect.catch((error) =>
-          flagNeedsAttention(issue.id, `Could not start the review: ${error.message}`).pipe(
-            Effect.as(false),
-          ),
+          flagNeedsAttention(
+            issue.id,
+            "review_unavailable",
+            `Could not start the review: ${error.message}`,
+          ).pipe(Effect.as(false)),
         ),
       );
-
-    if (!started) {
-      pendingReviews.delete(issue.id);
-      return;
-    }
+    if (!started) return null;
 
     yield* receipts.publish({
       type: "autonomous.review.started",
@@ -820,22 +890,204 @@ const make = Effect.gen(function* () {
       modelSelection,
       createdAt,
     });
+    return reviewerThreadId;
+  });
 
-    // This is the serialization point: the queue holds here until the reviewer
-    // reports a verdict, so the next issue rebases onto a main that already
-    // contains this one.
-    yield* Deferred.await(completion).pipe(
-      Effect.ensuring(Effect.sync(() => pendingReviews.delete(issue.id))),
+  /**
+   * Ask the reviewer thread a provider failure interrupted to finish the job.
+   *
+   * Nothing is re-created: same thread, same worktree, same branch, same pull
+   * request — only the turn was lost, and starting a second reviewer would
+   * throw away everything the first one had already fixed and pushed. A
+   * reviewer thread that has since disappeared falls back to a fresh review,
+   * because a review that cannot resume is still a review that has to happen.
+   */
+  const resumeReviewForIssue = Effect.fn("resumeReviewForIssue")(function* (
+    issue: OrchestrationIssue,
+    reviewerThreadId: ThreadId,
+    attempt: number,
+    previousFailure: string,
+  ) {
+    const reviewerThread = yield* projectionSnapshotQuery.getThreadShellById(reviewerThreadId);
+    if (Option.isNone(reviewerThread)) {
+      return yield* startReviewForIssue(issue);
+    }
+
+    const messageId = MessageId.make(yield* crypto.randomUUIDv4);
+    const createdAt = yield* nowIso;
+    const resumed = yield* issueStartCoordinator
+      .resumeIssueReview({
+        issueId: issue.id,
+        threadId: reviewerThreadId,
+        messageId,
+        modelSelection: reviewerThread.value.modelSelection,
+        runtimeMode: AUTONOMOUS_RUNTIME_MODE,
+        interactionMode: AUTONOMOUS_INTERACTION_MODE,
+        attempt,
+        attempts: REVIEW_PROVIDER_FAILURE_ATTEMPTS,
+        detail: previousFailure,
+        createdAt,
+      })
+      .pipe(
+        Effect.as(true),
+        Effect.catch((error) =>
+          flagNeedsAttention(
+            issue.id,
+            "review_unavailable",
+            `Could not restart the review: ${error.message}`,
+          ).pipe(Effect.as(false)),
+        ),
+      );
+    if (!resumed) return null;
+
+    yield* receipts.publish({
+      type: "autonomous.review.resumed",
+      issueId: issue.id,
+      reviewerThreadId,
+      attempt: NonNegativeInt.make(attempt),
+      createdAt,
+    });
+    return reviewerThreadId;
+  });
+
+  const processMergeItem = Effect.fn("processMergeItem")(function* (item: MergeItem) {
+    const issueOption = yield* projectionSnapshotQuery.getIssueSummaryById(item.issueId);
+    if (Option.isNone(issueOption)) return;
+    const issue = issueOption.value;
+    // Re-check against current state: the item may have been queued before a
+    // user canceled the issue, flagged it, or stopped the run. These guards are
+    // also what keeps a retry honest across a restart, where the in-memory
+    // attempt count is gone but the projected state is not.
+    if (issue.status !== "in_review" || issue.needsAttentionAt != null) return;
+    if (issue.reviewVerdict != null) return;
+    // An explicit PR retry owns the review handoff even if the project run was
+    // paused after the original failure.
+    if (!(yield* issueIsAutonomouslyWorked(issue)) && issue.pullRequestUrl === null) return;
+
+    const attempt = item.attempt ?? 1;
+    // A retry resumes the thread its failed attempt opened. If the issue has
+    // moved to some other reviewer since, the retry is stale and this is a
+    // fresh review of whatever is there now.
+    const resumeReviewerThreadId =
+      item.resumeReviewerThreadId !== undefined &&
+      item.resumeReviewerThreadId === issue.reviewerThreadId
+        ? item.resumeReviewerThreadId
+        : null;
+
+    // Registered before the reviewer runs: a turn that dies in its first second
+    // still has to find something to settle.
+    const completion = yield* Deferred.make<ReviewOutcome>();
+    pendingReviews.set(issue.id, completion);
+
+    yield* Effect.gen(function* () {
+      const reviewerThreadId =
+        resumeReviewerThreadId === null
+          ? yield* startReviewForIssue(issue)
+          : yield* resumeReviewForIssue(
+              issue,
+              resumeReviewerThreadId,
+              attempt,
+              item.previousFailure ?? "",
+            );
+      if (reviewerThreadId === null) return;
+
+      // This is the serialization point: the queue holds here until the
+      // reviewer settles the issue, so the next issue rebases onto a main that
+      // already contains this one.
+      const outcome = yield* Deferred.await(completion);
+      if (outcome.kind === "provider-failed") {
+        yield* handleReviewProviderFailure(issue.id, reviewerThreadId, attempt, outcome.detail);
+      }
+    }).pipe(Effect.ensuring(Effect.sync(() => pendingReviews.delete(issue.id))));
+  });
+
+  /**
+   * The wait before `attempt`, read off {@link REVIEW_PROVIDER_FAILURE_BACKOFF}.
+   *
+   * Each retry is a fiber of its own, so the schedule is stepped from the start
+   * and the earlier delays are skipped over rather than carried: attempt 2 gets
+   * the schedule's first delay, attempt 3 its second.
+   */
+  const reviewBackoffDelay = Effect.fn("reviewBackoffDelay")(function* (attempt: number) {
+    const step = yield* Schedule.toStep(REVIEW_PROVIDER_FAILURE_BACKOFF);
+    let delay = Duration.zero;
+    for (let recurrence = 1; recurrence < attempt; recurrence += 1) {
+      // The schedule recurs forever, so the pull never halts; a halt here would
+      // be a bug in the constant above rather than a case to handle.
+      [, delay] = yield* step(0, undefined).pipe(Effect.orDie);
+    }
+    return delay;
+  });
+
+  /**
+   * A reviewer attempt the provider killed. The issue keeps a null verdict —
+   * that is what leaves it eligible to be reviewed again — and the review is
+   * simply run once more, until the attempts run out and a human is told that
+   * the *infrastructure*, not the code, is what went wrong.
+   */
+  const handleReviewProviderFailure = Effect.fn("handleReviewProviderFailure")(function* (
+    issueId: IssueId,
+    reviewerThreadId: ThreadId,
+    attempt: number,
+    detail: string,
+  ) {
+    if (attempt >= REVIEW_PROVIDER_FAILURE_ATTEMPTS) {
+      yield* flagNeedsAttention(
+        issueId,
+        "review_unavailable",
+        `The reviewer could not run: the provider failed ${attempt} times (last error: ${detail}). The code has not been reviewed.`,
+      );
+      return;
+    }
+
+    const nextAttempt = attempt + 1;
+    const delay = yield* reviewBackoffDelay(nextAttempt);
+    reviewRetriesPending.add(issueId);
+    yield* receipts.publish({
+      type: "autonomous.review.retry-scheduled",
+      issueId,
+      reviewerThreadId,
+      attempt: NonNegativeInt.make(nextAttempt),
+      delayMs: NonNegativeInt.make(Math.round(Duration.toMillis(delay))),
+      detail,
+      createdAt: yield* nowIso,
+    });
+
+    // Waited out in a fiber of its own, off the merge queue: one flaky reviewer
+    // must not stop every other issue from being reviewed. The retry rejoins
+    // the queue when it fires, so reviews that are actually running are still
+    // one at a time.
+    yield* Effect.sleep(delay).pipe(
+      Effect.andThen(
+        Effect.sync(() => {
+          reviewRetriesPending.delete(issueId);
+          queuedForMerge.add(issueId);
+        }),
+      ),
+      Effect.andThen(
+        Effect.suspend(() =>
+          enqueueMergeItem({
+            issueId,
+            resumeReviewerThreadId: reviewerThreadId,
+            attempt: nextAttempt,
+            previousFailure: detail,
+          }),
+        ),
+      ),
+      Effect.forkScoped,
     );
   });
 
-  const completePendingReview = (issueId: IssueId) =>
+  const settlePendingReview = (issueId: IssueId, outcome: ReviewOutcome) =>
     Effect.suspend(() => {
       const pending = pendingReviews.get(issueId);
       return pending === undefined
         ? Effect.void
-        : Deferred.succeed(pending, undefined).pipe(Effect.asVoid);
+        : Deferred.succeed(pending, outcome).pipe(Effect.asVoid);
     });
+
+  const completePendingReview = (issueId: IssueId) =>
+    settlePendingReview(issueId, { kind: "settled" });
 
   /**
    * A merged verdict is the end of an issue's threads, both of them.
@@ -861,29 +1113,31 @@ const make = Effect.gen(function* () {
   });
 
   /**
-   * A reviewer thread whose session died without reporting a verdict would
-   * otherwise hold the merge queue forever. Record the failure as the verdict
-   * so the queue advances and the issue is parked for a human.
+   * A reviewer thread whose session ended in an error reported no verdict, and
+   * a session error is the provider failing rather than the reviewer judging.
+   * Recording "needs attention" for it — which is what this used to do — is a
+   * verdict on code nobody read, and since nothing ever resets a verdict it is
+   * also the issue's last word: never reviewed, never merged, never re-queued.
+   * Release the queue with a failure instead, and let the retry own it.
    */
   const handleReviewerTurnEnd = Effect.fn("handleReviewerTurnEnd")(function* (
     threadId: ThreadId,
-    sessionStatus: string,
+    session: OrchestrationSession,
   ) {
-    if (sessionStatus !== "error") return;
+    if (session.status !== "error") return;
+    // An exhausted account is `ModelFailover`'s to recover: it parks the thread
+    // until the limit lifts or fails over to a backup model, and pulling it
+    // into a three-strikes retry here would spend those strikes on a wait that
+    // was always going to end by itself.
+    if (classifyProviderExhaustion(session.lastError) !== null) return;
     const issueOption = yield* projectionSnapshotQuery.getIssueByReviewerThreadId(threadId);
     if (Option.isNone(issueOption)) return;
     const issue = issueOption.value;
     if (issue.reviewVerdict != null) return;
-    yield* orchestrationEngine
-      .dispatch({
-        type: "issue.review.record",
-        commandId: yield* serverCommandId(`review-session-error:${issue.id}`),
-        issueId: issue.id,
-        reviewerThreadId: threadId,
-        verdict: "needs_attention",
-        notes: "The reviewer session ended in an error before it reported a verdict.",
-      })
-      .pipe(Effect.ignoreCause({ log: true }));
+    yield* settlePendingReview(issue.id, {
+      kind: "provider-failed",
+      detail: session.lastError ?? "The reviewer session ended in an error.",
+    });
   });
 
   // ------------------------------------------------------------------ queues
@@ -912,6 +1166,7 @@ const make = Effect.gen(function* () {
       }),
     ),
   );
+  enqueueMergeItem = mergeQueue.enqueue;
 
   /**
    * The boards an event should re-evaluate.
@@ -936,6 +1191,7 @@ const make = Effect.gen(function* () {
       case "issue.attention-flagged":
       case "issue.attention-cleared":
       case "issue.review-recorded":
+      case "issue.review-reset":
       case "issue.pull-request-linked": {
         const issueId = event.payload.issueId;
         const issues = yield* projectionSnapshotQuery
@@ -956,12 +1212,17 @@ const make = Effect.gen(function* () {
 
   const processEvent = Effect.fn("processEvent")(function* (event: OrchestrationEvent) {
     // A recorded verdict releases the merge queue before anything else, so the
-    // next review starts even if the re-evaluation below fails.
-    if (event.type === "issue.review-recorded") {
+    // next review starts even if the re-evaluation below fails. A reset does
+    // the same: the decider lets a claimed-but-unrecorded review be thrown
+    // away, and the queue would otherwise hold on a deferred no verdict is
+    // ever coming for.
+    if (event.type === "issue.review-recorded" || event.type === "issue.review-reset") {
       yield* completePendingReview(event.payload.issueId);
-      if (event.payload.verdict === "merged") {
-        yield* settleMergedIssueThreads(event.payload.issueId, event.payload.reviewerThreadId);
-      }
+    }
+    // Only a recorded verdict can be a merge: a reset throws the verdict away
+    // and carries none of its own, so there is nothing to settle behind it.
+    if (event.type === "issue.review-recorded" && event.payload.verdict === "merged") {
+      yield* settleMergedIssueThreads(event.payload.issueId, event.payload.reviewerThreadId);
     }
     if (event.type === "thread.session-set") {
       const status = event.payload.session.status;
@@ -975,7 +1236,7 @@ const make = Effect.gen(function* () {
       // Only a session that has left "running" marks the end of a turn.
       if (status !== "starting" && status !== "running") {
         yield* handleWorkerTurnEnd(event.payload.threadId, status);
-        yield* handleReviewerTurnEnd(event.payload.threadId, status);
+        yield* handleReviewerTurnEnd(event.payload.threadId, event.payload.session);
       }
       return;
     }

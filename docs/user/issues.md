@@ -94,14 +94,22 @@ and adds the story instructions underneath. Every linked project is available to
 turn, so you can ask for a feature spanning the frontend and backend without first opening either
 board.
 
+The planning turn is given the stories already on those boards, so a second pass plans around what
+is there rather than filing it again. It can say that a new story waits on one already tracked, it
+can rewrite a story you have not started yet, and it can retire the ones a new plan replaces. Work
+that has started, is in review, is finished, or is flagged for you is read-only: the plan may
+depend on it and nothing more, and a plan that tries to rewrite it offers no button at all.
+
 The agent thinks through the work and ends its answer with a list of stories, each with a title, a
 description, a priority, a worker model, and the stories it depends on. When the feature spans
 repositories, a story can name a linked project and is created on that project's board — and it can
 depend on a story from another board, so a frontend story that genuinely needs the backend change
-first waits for it. A valid plan has an **Add to board** button beneath it. Ask for changes in the
-same chat until the plan is right, then select that button to create the issues. The action is safe
-to retry and will not duplicate stories from the same response. Nothing is created until you select
-it, and malformed output does not offer the button.
+first waits for it. A valid plan has an **Add to board** button beneath it, above a breakdown of
+what applying it would do: what it creates, what it rewrites — naming the story being rewritten —
+and what it cancels. Ask for changes in the same chat until the plan is right, then select that
+button. The action is safe to retry, will not duplicate stories from the same response, and leaves
+the board where it is if you apply the same plan twice. Nothing changes until you select it, and
+malformed output does not offer the button.
 
 Once the stories are on their boards, **Autonomous mode** appears next to the button and starts a
 run on every board the plan touched, after one confirmation. Each board runs its own backlog; the
@@ -151,6 +159,12 @@ marked **Auto**, so it is always clear what you are looking at.
 - **It parks anything it cannot finish** and keeps going with the rest.
 - **It turns itself off** when nothing is left to start and nothing is still moving.
 
+After an issue is recorded as merged, Atlas removes its checkout in the background as soon as it
+can do so safely. The branch and thread history remain. A dirty, unpushed, locked, pinned,
+still-busy, or cross-project worktree stays in place; the periodic cleanup checks settled
+worktrees every six hours and normally removes eligible checkouts after 24 hours. Advanced users
+can override `worktreeSweepInterval` and `worktreeSweepMinAge` in the server settings file.
+
 The threads a run opens have their permissions auto-approved: nobody is watching to answer a
 prompt, so those agents edit files and run commands without asking. That is what you are agreeing to
 when you turn the run on. Reviews need a Claude provider; without one, work is left for you instead
@@ -163,9 +177,26 @@ merge, the issue is flagged and set aside. So is a story waiting on work nothing
 finish — a blocker that is itself flagged, or one sitting on a board with no run — and the reason
 names the story and the board it is stuck behind. That is the run's dead end: it flags what it
 cannot reach and finishes, rather than staying on forever. Flagged issues keep whatever status they had reached —
-they are not moved backwards, so you can see how far the work got — and they carry a **Needs you**
-badge on the board with the reason. If a later reviewer turn reports a valid merged verdict, Atlas
-replaces that provisional flag and completes the issue.
+they are not moved backwards, so you can see how far the work got — and they carry a badge on the
+board with the reason. If a later reviewer turn reports a valid merged verdict, Atlas replaces that
+provisional flag and completes the issue.
+
+The badge says which kind of dead end it was, because they do not mean the same thing:
+**Review needs attention** is a reviewer that read the change and would not merge it, **Not
+reviewed** is a review that never happened at all, **No pull request** is finished work nobody could
+open a pull request for, **Blocked** is a story waiting on work nothing is doing, and **Could not
+start** is work that never began. Only the first is a call on the code; the rest are the machinery
+failing, and they are drawn with a different icon to say so. Hovering the badge, or opening the
+**Review** tab, spells out what happened above the reason itself. Issues flagged by older versions
+of Atlas have no kind recorded and read as best Atlas can tell from their reason.
+
+A reviewer that never got to run is a different thing from one that read the code and had concerns,
+and Atlas does not read a verdict into that silence. When the provider itself fails mid-review — an
+overloaded model, a server error — the same reviewer is asked to pick the review back up a minute
+later, and again four minutes after that, while every other issue on the board carries on being
+reviewed in the meantime. Only if all three attempts die does the issue get flagged, and the reason
+says plainly that the reviewer could not run and the code has not been reviewed. Clearing that flag
+puts the issue back in line for a real review.
 
 The **Review** tab collects them, newest first, alongside everything the run merged. Each entry links
 to its pull request, its worker thread, and its reviewer thread, and expands to show the reviewer's
@@ -180,6 +211,10 @@ Two ways out, from the card menu or the Review tab:
   as the pull request is linked — even if autonomous mode is paused.
 - **Clear & retry** also unlinks the thread and returns the issue to the backlog, so it is fresh
   work again. A live run picks it up on its next pass; if the run already finished, start it again.
+- **Discard review & retry** is what **Clear & retry** becomes once a reviewer has left a verdict.
+  It does the same thing and throws the review away with it — verdict and notes both — because an
+  issue that keeps an old verdict is never picked up for review again. **Clear flag** is the
+  opposite choice: it keeps the review exactly as the reviewer left it.
 
 ### Runs on a schedule
 

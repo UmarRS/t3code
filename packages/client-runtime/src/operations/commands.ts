@@ -68,6 +68,7 @@ export type DeleteIssueInput = CommandInput<"issue.delete">;
 export type StartIssueInput = CommandInput<"issue.start">;
 export type LinkIssuePullRequestInput = CommandInput<"issue.pull-request.link">;
 export type ClearIssueAttentionInput = CommandInput<"issue.attention.clear">;
+export type ResetIssueReviewInput = CommandInput<"issue.review.reset">;
 
 type DispatchTag = typeof ORCHESTRATION_WS_METHODS.dispatchCommand;
 type CommandEffect = Effect.Effect<
@@ -521,6 +522,21 @@ export const clearIssueAttention: (input: ClearIssueAttentionInput) => CommandEf
   return yield* dispatch({
     ...input,
     type: "issue.attention.clear",
+    commandId: yield* commandId(input),
+  });
+});
+
+/**
+ * Throw away an issue's recorded review. What "retry" dispatches on work a
+ * reviewer already judged: the verdict is what keeps the merge queue off an
+ * issue, so redone work has to lose it to be reviewed again.
+ */
+export const resetIssueReview: (input: ResetIssueReviewInput) => CommandEffect = Effect.fn(
+  "EnvironmentCommands.resetIssueReview",
+)(function* (input) {
+  return yield* dispatch({
+    ...input,
+    type: "issue.review.reset",
     commandId: yield* commandId(input),
   });
 });

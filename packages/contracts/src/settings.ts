@@ -413,6 +413,8 @@ export type SourceControlWritingStyleSettings = typeof SourceControlWritingStyle
 
 export const DEFAULT_AUTOMATIC_GIT_FETCH_INTERVAL = Duration.seconds(30);
 export const DEFAULT_PROVIDER_HEALTH_REFRESH_INTERVAL = Duration.minutes(5);
+export const DEFAULT_WORKTREE_SWEEP_MIN_AGE = Duration.days(1);
+export const DEFAULT_WORKTREE_SWEEP_INTERVAL = Duration.hours(6);
 
 export const BackgroundActivityProfile = Schema.Literals([
   "balanced",
@@ -488,6 +490,12 @@ export const ServerSettings = Schema.Struct({
   // (merged, or clean with nothing unpushed). Turn it off to keep every
   // worktree on disk forever.
   enableWorktreeCleanup: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
+  worktreeSweepMinAge: Schema.DurationFromMillis.pipe(
+    Schema.withDecodingDefault(Effect.succeed(Duration.toMillis(DEFAULT_WORKTREE_SWEEP_MIN_AGE))),
+  ),
+  worktreeSweepInterval: Schema.DurationFromMillis.pipe(
+    Schema.withDecodingDefault(Effect.succeed(Duration.toMillis(DEFAULT_WORKTREE_SWEEP_INTERVAL))),
+  ),
   addProjectBaseDirectory: TrimmedString.pipe(Schema.withDecodingDefault(Effect.succeed(""))),
   textGenerationModelSelection: ModelSelection.pipe(
     Schema.withDecodingDefault(
@@ -619,6 +627,8 @@ export const ServerSettingsPatch = Schema.Struct({
   defaultThreadEnvMode: Schema.optionalKey(ThreadEnvMode),
   newWorktreesStartFromOrigin: Schema.optionalKey(Schema.Boolean),
   enableWorktreeCleanup: Schema.optionalKey(Schema.Boolean),
+  worktreeSweepMinAge: Schema.optionalKey(Schema.DurationFromMillis),
+  worktreeSweepInterval: Schema.optionalKey(Schema.DurationFromMillis),
   addProjectBaseDirectory: Schema.optionalKey(TrimmedString),
   textGenerationModelSelection: Schema.optionalKey(ModelSelectionPatch),
   sourceControlWritingStyle: Schema.optionalKey(

@@ -104,6 +104,15 @@ instruction that tells an agent how to emit the block is exported from the
 contracts as `ISSUE_DECOMPOSITION_PROMPT_INSTRUCTIONS` so the format lives in
 exactly one place.
 
+A block may also revise the board it was planned against: an entry's `updates`
+names an existing issue to rewrite and `supersedes` names ones to cancel. Only
+work nobody has started qualifies (`isIssueOpenToRevision`), and an entry naming
+anything else makes the whole block invalid, exactly as a dependency cycle does.
+The web import derives what applying the block would do —
+`planIssueDecompositionImport` in
+`apps/web/src/components/issues/issueDecompositionImport.logic.ts` — and applying
+stays a user action, because a revised plan must never silently rewrite a board.
+
 ### Autonomous mode
 
 #### Autonomous mode
@@ -202,6 +211,33 @@ reached and is simply excluded from autonomous work. Raised by the server when a
 worker session errors, a pull request cannot be opened, or a reviewer refuses to
 merge. Cleared by the user with `issue.attention.clear`, which makes a backlog
 issue startable again — the way out of every automatic park.
+
+The flag has two halves. `needsAttentionReason` is free text for a human;
+`needsAttentionKind` is an `IssueAttentionKind`
+(`packages/contracts/src/issues.ts`) the UI branches on, so nothing has to
+reverse-engineer intent from a sentence. The distinction it exists for is
+`review_needs_attention` (a reviewer read the change and would not merge it)
+against `review_unavailable` (no reviewer ran at all) — presenting the second as
+a verdict would be a lie about work nobody looked at. Both halves are frozen at
+the first flag: re-flagging keeps the original reason, kind and timestamp so a
+retry loop cannot churn the board. The kind is optional on the wire and nullable
+in the read model, because every issue parked before it existed has none; those
+rows are unclassified rather than deliberately `other`, which is what licenses
+`resolveIssueAttentionKind`'s fallback to reading the reason text
+(`apps/web/src/components/issues/autonomousRun.logic.ts`).
+
+#### Review reset
+
+A recorded verdict is what keeps the merge queue off an issue, so work that is
+redone from scratch has to lose it: `issue.review.reset` clears `reviewVerdict`,
+`reviewerThreadId`, `reviewedAt` and the notes, and the reactor re-evaluates the
+board on `issue.review-reset` so an issue that became reviewable again is
+enqueued without waiting for the next sweep. Retry on a flagged, reviewed issue
+dispatches it last, after the issue is unflagged, unlinked from its thread and
+back in the backlog — an `in_review` issue that loses its verdict any earlier is
+picked straight back up for review of the pull request the retry is throwing
+away. Clearing the flag deliberately does not reset: clearing accepts the
+reviewer's judgement, retrying discards it.
 
 #### Review notes
 

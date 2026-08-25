@@ -4,6 +4,7 @@ import { IssueId, ProjectId } from "./baseSchemas.ts";
 import {
   activeAutonomousIssues,
   evaluateAutonomousRun,
+  reachableAutonomousProjectIds,
   startableAutonomousIssues,
   type AutonomousIssueView,
   type IssueStatus,
@@ -14,6 +15,8 @@ const id = (value: string) => IssueId.make(value);
 /** The board under evaluation, and the linked board a plan may reach into. */
 const BOARD = ProjectId.make("board");
 const OTHER_BOARD = ProjectId.make("other-board");
+/** A third board, for plans that reach one board only through another. */
+const THIRD_BOARD = ProjectId.make("third-board");
 
 const issue = (
   value: string,
@@ -232,5 +235,63 @@ describe("evaluateAutonomousRun", () => {
     ]);
     expect(ids(evaluation.startable)).toEqual([id("ui")]);
     expect(evaluation.complete).toBe(false);
+  });
+});
+
+describe("reachableAutonomousProjectIds", () => {
+  const reachable = (issues: ReadonlyArray<AutonomousIssueView>) =>
+    [...reachableAutonomousProjectIds(issues, BOARD)].toSorted();
+
+  it("is just this board when nothing crosses a boundary", () => {
+    expect(reachable([issue("a"), issue("b", { dependsOn: [id("a")] })])).toEqual([BOARD]);
+  });
+
+  it("reaches the board holding a blocker", () => {
+    const issues = [
+      issue("api", { projectId: OTHER_BOARD }),
+      issue("ui", { dependsOn: [id("api")] }),
+    ];
+    expect(reachable(issues)).toEqual([BOARD, OTHER_BOARD].toSorted());
+  });
+
+  // A → B → C: starting B alone would leave B's own plan stuck behind C.
+  it("is transitive across boards", () => {
+    const issues = [
+      issue("db", { projectId: THIRD_BOARD }),
+      issue("api", { projectId: OTHER_BOARD, dependsOn: [id("db")] }),
+      issue("ui", { dependsOn: [id("api")] }),
+    ];
+    expect(reachable(issues)).toEqual([BOARD, OTHER_BOARD, THIRD_BOARD].toSorted());
+  });
+
+  it("terminates on a cycle in the issue graph", () => {
+    const issues = [
+      issue("api", { projectId: OTHER_BOARD, dependsOn: [id("ui")] }),
+      issue("ui", { dependsOn: [id("api")] }),
+    ];
+    expect(reachable(issues)).toEqual([BOARD, OTHER_BOARD].toSorted());
+  });
+
+  // A finished blocker needs nobody running its board, and neither does a
+  // dependency hanging off work this board has already finished.
+  it("ignores dependencies that are already satisfied", () => {
+    const issues = [
+      issue("api", { projectId: OTHER_BOARD, status: "done" }),
+      issue("ui", { dependsOn: [id("api")] }),
+    ];
+    expect(reachable(issues)).toEqual([BOARD]);
+  });
+
+  it("ignores the dependencies of finished and canceled work", () => {
+    const issues = [
+      issue("api", { projectId: OTHER_BOARD }),
+      issue("shipped", { status: "done", dependsOn: [id("api")] }),
+      issue("dropped", { status: "canceled", dependsOn: [id("api")] }),
+    ];
+    expect(reachable(issues)).toEqual([BOARD]);
+  });
+
+  it("ignores a dependency that no longer exists", () => {
+    expect(reachable([issue("a", { dependsOn: [id("gone")] })])).toEqual([BOARD]);
   });
 });
