@@ -6,7 +6,7 @@ import { releaseNotesForVersion, shouldShowReleaseNotes } from "./releaseNotes";
 describe("release notes", () => {
   it("ships notes for the running application version", () => {
     const release = releaseNotesForVersion(packageJson.version);
-    expect(release?.version).toBe("0.0.34");
+    expect(release?.version).toBe("0.0.35");
     expect(release?.changes.length).toBeGreaterThan(0);
   });
 
